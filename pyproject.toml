@@ -1,0 +1,89 @@
+[project]
+name = "marqov"
+version = "0.5.0"
+description = "Open-source Python SDK for running quantum circuits across multiple hardware backends"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+dependencies = [
+    # Workflow engine
+    "temporalio>=1.7.0",
+    # Circuit transpilation
+    # Pinned to v1.4.0 for reproducibility
+    "quantumflow @ git+https://github.com/gecrooks/quantumflow.git@v1.4.0",
+    # AWS Braket
+    "amazon-braket-sdk>=1.80.0",
+    # Azure Quantum
+    "azure-quantum>=1.0.0",
+    # CLI
+    "click>=8.0.0",
+    # Configuration
+    "pydantic>=2.0.0",
+    # Logging
+    "structlog>=24.0.0",
+    # Core
+    "numpy>=1.26.0,<2.4",
+    "scipy>=1.11.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.1.0",
+    "mypy>=1.8.0",
+]
+qiskit = [
+    "qiskit>=1.0.0",
+    "qiskit-qasm3-import>=0.5.0",
+]
+ibm = [
+    "qiskit>=1.0.0",
+    "qiskit-ibm-runtime>=0.20.0",
+]
+cirq = [
+    "cirq-core>=1.0.0",
+]
+pennylane = [
+    "pennylane>=0.35.0",
+]
+openqasm = [
+    "qiskit>=1.0.0",
+    "qiskit-qasm3-import>=0.5.0",
+]
+azure = [
+    "qiskit>=1.0.0",
+    "cirq>=1.0.0",
+]
+all = [
+    "qiskit>=1.0.0",
+    "qiskit-ibm-runtime>=0.20.0",
+    "qiskit-qasm3-import>=0.5.0",
+    "cirq-core>=1.0.0",
+    "pennylane>=0.35.0",
+]
+
+[project.scripts]
+marqov = "marqov.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["marqov"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
