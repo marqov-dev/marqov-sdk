@@ -222,6 +222,25 @@ class Circuit:
         """
         return qf.transpile(self._qf, output_format="qiskit")
 
+    def to_pytket(self):
+        """Convert to a pytket circuit through the Qiskit bridge.
+
+        Returns:
+            pytket Circuit object.
+
+        Raises:
+            ImportError: If pytket's Qiskit extension is not installed.
+        """
+        try:
+            from pytket.extensions.qiskit import qiskit_to_tk
+        except ImportError:
+            raise ImportError(
+                "pytket-qiskit is required for Circuit.to_pytket(). "
+                "Install with: pip install marqov[pytket]"
+            )
+
+        return qiskit_to_tk(self.to_qiskit())
+
     def to_cirq(self):
         """Convert to Google Cirq circuit.
 

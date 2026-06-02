@@ -1,5 +1,9 @@
 """Tests for marqov.circuits module."""
 
+import sys
+import types
+from unittest.mock import patch
+
 import pytest
 
 from marqov.circuits import Circuit, bell_state, ghz_state
@@ -110,6 +114,29 @@ class TestBackendConversion:
         braket_circuit = original.to_braket()
         imported = Circuit.from_braket(braket_circuit)
         assert imported.num_qubits == original.num_qubits
+
+    def test_to_pytket_uses_qiskit_bridge(self) -> None:
+        """to_pytket delegates to pytket's qiskit_to_tk bridge."""
+        qiskit_module = types.ModuleType("pytket.extensions.qiskit")
+
+        def qiskit_to_tk(qiskit_circuit):
+            return {"converted": qiskit_circuit}
+
+        qiskit_module.qiskit_to_tk = qiskit_to_tk
+        modules = {
+            "pytket": types.ModuleType("pytket"),
+            "pytket.extensions": types.ModuleType("pytket.extensions"),
+            "pytket.extensions.qiskit": qiskit_module,
+        }
+
+        circuit = Circuit().h(0).cnot(0, 1)
+        qiskit_circuit = object()
+
+        with patch.dict(sys.modules, modules):
+            with patch.object(circuit, "to_qiskit", return_value=qiskit_circuit):
+                converted = circuit.to_pytket()
+
+        assert converted == {"converted": qiskit_circuit}
 
 
 class TestFromQiskit:

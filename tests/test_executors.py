@@ -7,16 +7,18 @@ import pytest
 from marqov.circuits import Circuit, bell_state
 from marqov.executors import (
     AzureQuantumExecutor,
-    BaseExecutor,
     BraketExecutor,
     ExecutionResult,
     IBMExecutor,
     LocalExecutor,
+    QuantinuumExecutor,
 )
 from marqov.executors.azure import AzureQuantumExecutorConfig
 from marqov.executors.braket import BraketExecutorConfig, _extract_region_from_arn
+from marqov.executors.factory import ExecutorFactory
 from marqov.executors.ibm import IBMExecutorConfig
 from marqov.executors.local import LocalExecutorConfig
+from marqov.executors.quantinuum import QuantinuumExecutorConfig
 
 
 class TestExecutionResult:
@@ -431,6 +433,96 @@ class TestAzureQuantumExecutor:
     #     result = await executor.execute(circuit, shots=100)
     #     assert "00" in result.counts or "11" in result.counts
     #     assert result.shots == 100
+
+
+class TestQuantinuumExecutor:
+    """Tests for QuantinuumExecutor with mocked pytket backend."""
+
+    def test_config_defaults(self) -> None:
+        """Config has sensible defaults."""
+        config = QuantinuumExecutorConfig(device_name="H1-1E")
+        assert config.device_name == "H1-1E"
+        assert config.username is None
+        assert config.machine_debug is False
+        assert config.optimisation_level == 2
+        assert config.poll_interval_seconds == 1.0
+        assert config.timeout_seconds is None
+        assert config.backend_options == {}
+
+    @pytest.mark.asyncio
+    async def test_execute_returns_normalized_counts(self) -> None:
+        """Execute compiles, submits, polls, and normalizes tuple counts."""
+        mock_backend = MagicMock()
+        mock_backend.get_compiled_circuit.return_value = "compiled-tk-circuit"
+        mock_backend.process_circuit.return_value = "job-handle"
+
+        status = MagicMock()
+        status.status.name = "COMPLETED"
+        mock_backend.circuit_status.return_value = status
+
+        mock_result = MagicMock()
+        mock_result.get_counts.return_value = {(0, 0): 7, (1, 1): 5}
+        mock_backend.get_result.return_value = mock_result
+
+        config = QuantinuumExecutorConfig(device_name="H1-1E")
+        executor = QuantinuumExecutor(config)
+        executor._backend = mock_backend
+
+        circuit = bell_state()
+        with patch.object(circuit, "to_pytket", return_value="tk-circuit"):
+            result = await executor.execute(circuit, shots=12)
+
+        mock_backend.get_compiled_circuit.assert_called_once_with(
+            "tk-circuit",
+            optimisation_level=2,
+        )
+        mock_backend.process_circuit.assert_called_once_with(
+            "compiled-tk-circuit",
+            n_shots=12,
+        )
+        mock_backend.get_result.assert_called_once_with("job-handle")
+        assert isinstance(result, ExecutionResult)
+        assert result.counts == {"00": 7, "11": 5}
+        assert result.backend == "H1-1E"
+        assert result.shots == 12
+        assert result.metadata["handle"] == "job-handle"
+        assert result.metadata["optimisation_level"] == 2
+
+    @pytest.mark.asyncio
+    async def test_get_status_maps_online_state(self) -> None:
+        """Quantinuum device state maps to Marqov DeviceStatus."""
+        mock_backend = MagicMock()
+        state = MagicMock()
+        state.status.name = "ONLINE"
+        mock_backend.device_state.return_value = state
+        mock_backend.queue_depth.return_value = 3
+
+        executor = QuantinuumExecutor(QuantinuumExecutorConfig(device_name="H2-1E"))
+        executor._backend = mock_backend
+
+        status = await executor.get_status()
+
+        assert status.status == "online"
+        assert status.queue_depth == 3
+        assert status.queue_time_seconds is None
+
+    def test_factory_creates_quantinuum_executor(self) -> None:
+        """ExecutorFactory registers provider string 'Quantinuum'."""
+        executor = ExecutorFactory.create_executor(
+            "h1-1e",
+            {
+                "provider": "Quantinuum",
+                "device_name": "H1-1E",
+                "machine_debug": True,
+                "optimisation_level": 1,
+            },
+        )
+
+        assert isinstance(executor, QuantinuumExecutor)
+        assert executor.config.device_name == "H1-1E"
+        assert executor.config.machine_debug is True
+        assert executor.config.optimisation_level == 1
+        assert ExecutorFactory.is_provider_supported("Quantinuum") is True
 
 
 class TestSmartCircuitErrors:
