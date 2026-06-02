@@ -1,21 +1,24 @@
 """Tests for marqov.executors module."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
 from marqov.circuits import Circuit, bell_state
 from marqov.executors import (
     AzureQuantumExecutor,
-    BaseExecutor,
     BraketExecutor,
+    DeviceStatus,
     ExecutionResult,
+    ExecutorFactory,
     IBMExecutor,
+    IonQExecutor,
     LocalExecutor,
 )
 from marqov.executors.azure import AzureQuantumExecutorConfig
 from marqov.executors.braket import BraketExecutorConfig, _extract_region_from_arn
 from marqov.executors.ibm import IBMExecutorConfig
+from marqov.executors.ionq import IonQExecutorConfig
 from marqov.executors.local import LocalExecutorConfig
 
 
@@ -358,6 +361,203 @@ class TestBraketExecutor:
                     with patch.object(circuit, "to_braket", return_value=mock_braket_circuit):
                         with pytest.raises(ValueError, match="non-native gates"):
                             await executor.execute(circuit, shots=100, verbatim=True)
+
+
+class TestIonQExecutorConfig:
+    """Tests for IonQExecutorConfig."""
+
+    def test_defaults(self) -> None:
+        """Config defaults target the IonQ simulator."""
+        config = IonQExecutorConfig()
+        assert config.backend == "simulator"
+        assert config.api_key is None
+        assert config.base_url == "https://api.ionq.co/v0.4"
+        assert config.poll_interval_seconds == 1.0
+        assert config.timeout_seconds == 300.0
+        assert config.sharpen_probabilities is False
+
+
+class TestIonQExecutor:
+    """Tests for IonQExecutor with mocked IonQ services."""
+
+    @staticmethod
+    def _make_circuit(gates: list[dict]) -> Circuit:
+        circuit = Circuit()
+        circuit.to_dict = lambda: {"gates": gates}  # type: ignore[method-assign]
+        return circuit
+
+    def test_build_job_payload_maps_supported_gates(self) -> None:
+        """Marqov gates map to IonQ's QIS gate payload."""
+        pytest.importorskip("ionq_core")
+        executor = IonQExecutor(IonQExecutorConfig(backend="simulator"))
+        circuit = self._make_circuit(
+            [
+                {"gate": "H", "qubits": [0], "params": []},
+                {"gate": "Rx", "qubits": [1], "params": [0.25]},
+                {"gate": "CNot", "qubits": [0, 1], "params": []},
+                {"gate": "CZ", "qubits": [0, 1], "params": []},
+                {"gate": "Swap", "qubits": [0, 1], "params": []},
+            ]
+        )
+
+        with patch.object(Circuit, "num_qubits", new_callable=PropertyMock, return_value=2):
+            payload = executor._build_job_payload(circuit, shots=25)
+
+        assert payload.to_dict() == {
+            "backend": "simulator",
+            "type": "ionq.circuit.v1",
+            "input": {
+                "qubits": 2,
+                "gateset": "qis",
+                "circuit": [
+                    {"gate": "h", "target": 0},
+                    {"gate": "rx", "target": 1, "rotation": 0.25},
+                    {"gate": "cnot", "target": 1, "control": 0},
+                    {"gate": "h", "target": 1},
+                    {"gate": "cnot", "target": 1, "control": 0},
+                    {"gate": "h", "target": 1},
+                    {"gate": "swap", "targets": [0, 1]},
+                ],
+            },
+            "shots": 25,
+        }
+
+    def test_build_job_payload_rejects_unknown_gates(self) -> None:
+        """Unsupported gates fail before submitting to IonQ."""
+        pytest.importorskip("ionq_core")
+        executor = IonQExecutor()
+        circuit = self._make_circuit([{"gate": "CCNot", "qubits": [0, 1, 2], "params": []}])
+
+        with patch.object(Circuit, "num_qubits", new_callable=PropertyMock, return_value=3):
+            with pytest.raises(NotImplementedError, match="CCNot"):
+                executor._build_job_payload(circuit, shots=10)
+
+    def test_probabilities_to_counts_handles_decimal_and_bitstring_keys(self) -> None:
+        """IonQ decimal result keys are normalized to Marqov bitstrings."""
+        executor = IonQExecutor()
+        assert executor._probabilities_to_counts({"0": 0.5, "3": 0.5}, 100, 2) == {
+            "00": 50,
+            "11": 50,
+        }
+        assert executor._probabilities_to_counts({"10": 1.0}, 10, 2) == {"10": 10}
+
+    @pytest.mark.asyncio
+    async def test_execute_returns_normalized_result(self) -> None:
+        """execute() submits a job, waits, and returns normalized counts."""
+        pytest.importorskip("ionq_core")
+        executor = IonQExecutor(IonQExecutorConfig(backend="simulator", api_key="test-key"))
+        circuit = self._make_circuit(
+            [
+                {"gate": "H", "qubits": [0], "params": []},
+                {"gate": "CNot", "qubits": [0, 1], "params": []},
+            ]
+        )
+        mock_client = MagicMock()
+        submitted_job = MagicMock(id="job-123")
+        completed_job = MagicMock(
+            status="completed",
+            execution_duration_ms=42,
+            predicted_wait_time_ms=7,
+        )
+        probabilities = MagicMock(additional_properties={"0": 0.5, "3": 0.5})
+
+        with patch.object(executor, "_get_client", new=AsyncMock(return_value=mock_client)):
+            with patch.object(executor, "_create_job_sync", return_value=submitted_job) as create_job:
+                with patch.object(executor, "_wait_for_job_sync", return_value=completed_job):
+                    with patch.object(executor, "_get_probabilities_sync", return_value=probabilities):
+                        with patch.object(
+                            Circuit,
+                            "num_qubits",
+                            new_callable=PropertyMock,
+                            return_value=2,
+                        ):
+                            result = await executor.execute(circuit, shots=100)
+
+        payload = create_job.call_args.args[1]
+        assert payload.to_dict()["input"]["circuit"] == [
+            {"gate": "h", "target": 0},
+            {"gate": "cnot", "target": 1, "control": 0},
+        ]
+        assert result.counts == {"00": 50, "11": 50}
+        assert result.backend == "simulator"
+        assert result.execution_time_ms == 42
+        assert result.shots == 100
+        assert result.metadata["job_id"] == "job-123"
+        assert result.metadata["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_cancel_returns_true_for_canceled_job(self) -> None:
+        """cancel() delegates to IonQ and reports successful cancellation."""
+        executor = IonQExecutor()
+        mock_client = MagicMock()
+        canceled = MagicMock(status="canceled")
+
+        with patch.object(executor, "_get_client", new=AsyncMock(return_value=mock_client)):
+            with patch.object(executor, "_cancel_job_sync", return_value=canceled) as cancel_job:
+                result = await executor.cancel("job-123")
+
+        assert result is True
+        cancel_job.assert_called_once_with(mock_client, "job-123")
+
+    @pytest.mark.asyncio
+    async def test_simulator_status_is_always_online(self) -> None:
+        """IonQ simulator does not need a status API call."""
+        executor = IonQExecutor(IonQExecutorConfig(backend="simulator"))
+        status = await executor.get_status()
+        assert status == DeviceStatus.always_online()
+
+    @pytest.mark.asyncio
+    async def test_get_status_maps_backend_availability(self) -> None:
+        """Available QPUs map to online status and queue time."""
+        executor = IonQExecutor(IonQExecutorConfig(backend="qpu.aria-1"))
+        backend = MagicMock(status="available", degraded=False, average_queue_time=120_000)
+
+        with patch.object(executor, "_get_client", new=AsyncMock(return_value=MagicMock())):
+            with patch.object(executor, "_get_backend_sync", return_value=backend):
+                status = await executor.get_status()
+
+        assert status.status == "online"
+        assert status.queue_depth is None
+        assert status.queue_time_seconds == 120
+
+    @pytest.mark.asyncio
+    async def test_get_status_maps_degraded_backend_to_maintenance(self) -> None:
+        """Degraded IonQ backends are treated as maintenance."""
+        executor = IonQExecutor(IonQExecutorConfig(backend="qpu.aria-1"))
+        backend = MagicMock(status="available", degraded=True, average_queue_time=None)
+
+        with patch.object(executor, "_get_client", new=AsyncMock(return_value=MagicMock())):
+            with patch.object(executor, "_get_backend_sync", return_value=backend):
+                status = await executor.get_status()
+
+        assert status.status == "maintenance"
+        assert status.queue_time_seconds is None
+
+
+class TestIonQExecutorFactory:
+    """Tests for IonQ Direct factory registration."""
+
+    def test_factory_creates_ionq_executor(self) -> None:
+        """ExecutorFactory builds IonQExecutor from backend config."""
+        executor = ExecutorFactory.create_executor(
+            "qpu.aria-1",
+            {
+                "provider": "IonQ Direct",
+                "api_key": "test-key",
+                "poll_interval_seconds": 0.5,
+                "timeout_seconds": 10.0,
+            },
+        )
+
+        assert isinstance(executor, IonQExecutor)
+        assert executor.config.backend == "qpu.aria-1"
+        assert executor.config.api_key == "test-key"
+        assert executor.config.poll_interval_seconds == 0.5
+        assert executor.config.timeout_seconds == 10.0
+
+    def test_provider_is_supported(self) -> None:
+        """IonQ Direct appears in supported providers."""
+        assert ExecutorFactory.is_provider_supported("IonQ Direct") is True
 
 
 class TestAzureQuantumExecutor:
