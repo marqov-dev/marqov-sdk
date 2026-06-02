@@ -293,6 +293,113 @@ class Circuit:
         circuit._qf = qf.braket_to_circuit(braket_circuit)
         return circuit
 
+    _PYQUIL_SUPPORTED_QF_GATES: set[str] = {
+        "H",
+        "X",
+        "Y",
+        "Z",
+        "S",
+        "T",
+        "Rx",
+        "Ry",
+        "Rz",
+        "CNot",
+        "CZ",
+        "Swap",
+    }
+
+    _PYQUIL_QF_GATE_MAP: dict[str, str] = {
+        "H": "h",
+        "X": "x",
+        "Y": "y",
+        "Z": "z",
+        "S": "s",
+        "T": "t",
+        "Rx": "rx",
+        "Ry": "ry",
+        "Rz": "rz",
+        "CNot": "cnot",
+        "CZ": "cz",
+        "Swap": "swap",
+    }
+
+    _PYQUIL_ROTATION_GATES: set[str] = {"Rx", "Ry", "Rz"}
+
+    @staticmethod
+    def _coerce_real_pyquil_param(value, gate_name: str) -> float:
+        """Convert pyQuil numeric params to real floats."""
+        if isinstance(value, complex):
+            if abs(value.imag) > 1e-12:
+                raise NotImplementedError(
+                    f"Circuit.from_pyquil() does not support complex parameter "
+                    f"{value!r} for gate '{gate_name}'"
+                )
+            return float(value.real)
+        return float(value)
+
+    @classmethod
+    def from_pyquil(cls, program) -> "Circuit":
+        """Import from a PyQuil Program.
+
+        Requires pyQuil to be installed (``pip install marqov[pyquil]``).
+
+        Args:
+            program: A pyQuil ``Program`` instance.
+
+        Returns:
+            New Circuit instance.
+
+        Raises:
+            ImportError: If pyQuil is not installed.
+            TypeError: If the input is not a pyQuil Program.
+            NotImplementedError: If the program contains gates outside the canonical set.
+        """
+        try:
+            from pyquil.quil import Program as PyQuilProgram
+        except ImportError:
+            raise ImportError(
+                "pyQuil is required for Circuit.from_pyquil(). "
+                "Install with: pip install marqov[pyquil]"
+            )
+
+        if not isinstance(program, PyQuilProgram):
+            raise TypeError(f"Expected a pyQuil Program, got {type(program).__name__}")
+
+        try:
+            parsed = qf.pyquil_to_circuit(program)
+        except KeyError as exc:
+            gate_name = exc.args[0]
+            raise NotImplementedError(
+                f"Circuit.from_pyquil() does not support Quil gate '{gate_name}'. "
+                "Supported gates: H, X, Y, Z, S, T, RX, RY, RZ, CNOT, CZ, SWAP"
+            ) from exc
+        except ValueError as exc:
+            raise NotImplementedError(
+                "Circuit.from_pyquil() only supports protoquil programs made from "
+                "canonical gates: H, X, Y, Z, S, T, RX, RY, RZ, CNOT, CZ, SWAP"
+            ) from exc
+
+        circuit = cls()
+        for op in parsed._elements:
+            gate_name = getattr(op, "name", type(op).__name__)
+            if gate_name not in cls._PYQUIL_SUPPORTED_QF_GATES:
+                raise NotImplementedError(
+                    f"Circuit.from_pyquil() does not support Quil gate '{gate_name}'. "
+                    "Supported gates: H, X, Y, Z, S, T, RX, RY, RZ, CNOT, CZ, SWAP"
+                )
+
+            qubits = list(op.qubits)
+            method_name = cls._PYQUIL_QF_GATE_MAP[gate_name]
+            if gate_name in cls._PYQUIL_ROTATION_GATES:
+                angle = cls._coerce_real_pyquil_param(op.params[0], gate_name)
+                getattr(circuit, method_name)(angle, qubits[0])
+            elif len(qubits) == 1:
+                getattr(circuit, method_name)(qubits[0])
+            else:
+                getattr(circuit, method_name)(qubits[0], qubits[1])
+
+        return circuit
+
     # Qiskit gate name -> Circuit fluent method mapping.
     # Used by from_qiskit() to convert decomposed Qiskit circuits.
     _QISKIT_GATE_MAP: dict[str, str] = {
