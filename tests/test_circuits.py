@@ -211,6 +211,126 @@ class TestFromQiskit:
         assert np.isclose(np.abs(amps[3]) ** 2, 0.5, atol=0.01)
 
 
+class TestToPytket:
+    """Tests for Circuit.to_pytket()."""
+
+    @staticmethod
+    def _remove_stubbed_optional_modules() -> None:
+        """Remove conftest stubs so optional real deps can be imported."""
+        import sys
+
+        real_optional_prefixes = ("qiskit", "pydantic")
+        for name, module in list(sys.modules.items()):
+            if name in real_optional_prefixes or name.startswith(
+                tuple(f"{prefix}." for prefix in real_optional_prefixes)
+            ):
+                if getattr(module, "__spec__", None) is None:
+                    del sys.modules[name]
+
+    @staticmethod
+    def _set_pytket_config_home(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+        """Keep pytket config writes inside pytest's temp directory."""
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+    @staticmethod
+    def _stub_qf_elements(circuit: Circuit, names: list[str]) -> None:
+        """Replace QuantumFlow elements with named stubs for converter validation."""
+
+        class _GateStub:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+        circuit._qf._elements = [_GateStub(name) for name in names]
+
+    def test_roundtrip_through_qiskit_bridge(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        """pytket bridge output converts back to an equivalent Qiskit circuit."""
+        import math
+
+        import numpy as np
+
+        self._set_pytket_config_home(monkeypatch, tmp_path)
+        self._remove_stubbed_optional_modules()
+        pytest.importorskip("pytket.extensions.qiskit")
+        pytest.importorskip("qiskit.quantum_info")
+
+        from pytket.extensions.qiskit import tk_to_qiskit
+        from qiskit import QuantumCircuit
+        from qiskit.quantum_info import Operator
+
+        qiskit_circuit = QuantumCircuit(3)
+        qiskit_circuit.h(0)
+        qiskit_circuit.x(1)
+        qiskit_circuit.y(2)
+        qiskit_circuit.z(0)
+        qiskit_circuit.s(1)
+        qiskit_circuit.t(2)
+        qiskit_circuit.rx(math.pi / 3, 0)
+        qiskit_circuit.ry(math.pi / 5, 1)
+        qiskit_circuit.rz(math.pi / 7, 2)
+        qiskit_circuit.cx(0, 1)
+        qiskit_circuit.cz(1, 2)
+        qiskit_circuit.swap(0, 2)
+
+        circuit = Circuit()
+        self._stub_qf_elements(
+            circuit,
+            ["H", "X", "Y", "Z", "S", "T", "Rx", "Ry", "Rz", "CNot", "CZ", "Swap"],
+        )
+        monkeypatch.setattr(circuit, "to_qiskit", lambda: qiskit_circuit)
+
+        converted = circuit.to_pytket()
+        roundtripped = tk_to_qiskit(converted)
+
+        assert np.allclose(
+            Operator(qiskit_circuit).data,
+            Operator(roundtripped).data,
+            atol=1e-10,
+        )
+
+    def test_bell_pair_matches_known_pytket_circuit(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        """Bell pair conversion matches a hand-written pytket circuit."""
+        self._set_pytket_config_home(monkeypatch, tmp_path)
+        self._remove_stubbed_optional_modules()
+        pytest.importorskip("pytket")
+        pytest.importorskip("pytket.extensions.qiskit")
+
+        from pytket.circuit import Circuit as PytketCircuit
+        from qiskit import QuantumCircuit
+
+        qiskit_circuit = QuantumCircuit(2)
+        qiskit_circuit.h(0)
+        qiskit_circuit.cx(0, 1)
+
+        circuit = Circuit()
+        self._stub_qf_elements(circuit, ["H", "CNot"])
+        monkeypatch.setattr(circuit, "to_qiskit", lambda: qiskit_circuit)
+
+        converted = circuit.to_pytket()
+        expected = PytketCircuit(2).H(0).CX(0, 1)
+
+        assert converted.get_commands() == expected.get_commands()
+
+    def test_unsupported_gate_raises_not_implemented(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Noncanonical internal gates fail with a clear NotImplementedError."""
+        circuit = Circuit()
+        self._stub_qf_elements(circuit, ["CCNot"])
+        monkeypatch.setattr(circuit, "to_qiskit", lambda: pytest.fail("guard should run first"))
+
+        with pytest.raises(NotImplementedError, match="CCNot"):
+            circuit.to_pytket()
+
+
 class TestFromCirq:
     """Tests for Circuit.from_cirq()."""
 

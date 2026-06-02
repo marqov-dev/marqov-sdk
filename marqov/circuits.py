@@ -238,6 +238,50 @@ class Circuit:
         """
         return qf.transpile(self._qf, output_format="pyquil")
 
+    _PYTKET_SUPPORTED_QF_GATES: set[str] = {
+        "H",
+        "X",
+        "Y",
+        "Z",
+        "S",
+        "T",
+        "Rx",
+        "Ry",
+        "Rz",
+        "CNot",
+        "CZ",
+        "Swap",
+    }
+
+    def to_pytket(self):
+        """Convert to a pytket circuit.
+
+        Returns:
+            pytket Circuit object.
+
+        Raises:
+            ImportError: If pytket or pytket-qiskit is not installed.
+            NotImplementedError: If the circuit contains a noncanonical gate.
+        """
+        for op in self._qf._elements:
+            gate_name = getattr(op, "name", type(op).__name__)
+            if gate_name not in self._PYTKET_SUPPORTED_QF_GATES:
+                raise NotImplementedError(
+                    f"Circuit.to_pytket() does not support gate '{gate_name}'. "
+                    "Supported gates: "
+                    f"{', '.join(sorted(self._PYTKET_SUPPORTED_QF_GATES))}"
+                )
+
+        try:
+            from pytket.extensions.qiskit import qiskit_to_tk
+        except ImportError:
+            raise ImportError(
+                "pytket and pytket-qiskit are required for Circuit.to_pytket(). "
+                "Install with: pip install marqov[pytket]"
+            )
+
+        return qiskit_to_tk(self.to_qiskit())
+
     def to_openqasm(self, version: int = 2) -> str:
         """Export circuit as an OpenQASM string.
 
