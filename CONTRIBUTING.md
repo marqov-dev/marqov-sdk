@@ -151,6 +151,10 @@ check both containers are running with `docker ps`.
 python benchmarks/suite.py --executor local --shots 1000
 ```
 
+Use `--executor` with a comma-separated executor list and `--config` with a
+JSON object keyed by executor name when running non-local backends. The `local`
+executor works without credentials.
+
 Output format — one row per (backend × circuit) combination:
 
 | backend | circuit   | shots | exec_time_ms | top_3_outcomes         |
