@@ -151,6 +151,8 @@ check both containers are running with `docker ps`.
 python benchmarks/suite.py --executor local --shots 1000
 ```
 
+Pass `--executor` more than once to compare multiple configured executors.
+
 Output format — one row per (backend × circuit) combination:
 
 | backend | circuit   | shots | exec_time_ms | top_3_outcomes         |
