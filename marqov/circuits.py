@@ -18,6 +18,7 @@ import quantumflow as qf
 
 if TYPE_CHECKING:
     from braket.circuits import Circuit as BraketCircuit
+    from pyquil import Program as PyQuilProgram
 
 
 class Circuit:
@@ -291,6 +292,102 @@ class Circuit:
         """
         circuit = cls()
         circuit._qf = qf.braket_to_circuit(braket_circuit)
+        return circuit
+
+    _PYQUIL_GATE_MAP: dict[str, str] = {
+        "H": "h",
+        "X": "x",
+        "Y": "y",
+        "Z": "z",
+        "S": "s",
+        "T": "t",
+        "RX": "rx",
+        "RY": "ry",
+        "RZ": "rz",
+        "CNOT": "cnot",
+        "CZ": "cz",
+        "SWAP": "swap",
+    }
+
+    _PYQUIL_ROTATION_GATES: set[str] = {"RX", "RY", "RZ"}
+
+    @staticmethod
+    def _pyquil_angle(param) -> float:
+        """Convert a pyQuil numeric angle to float."""
+        try:
+            value = complex(param)
+        except (TypeError, ValueError) as exc:
+            raise NotImplementedError(
+                "Circuit.from_pyquil() only supports numeric real-valued "
+                "rotation parameters."
+            ) from exc
+
+        if abs(value.imag) > 1e-12:
+            raise NotImplementedError(
+                "Circuit.from_pyquil() only supports real-valued rotation parameters."
+            )
+        return float(value.real)
+
+    @classmethod
+    def from_pyquil(cls, program: PyQuilProgram) -> "Circuit":
+        """Import from a pyQuil Program.
+
+        Requires pyQuil to be installed (``pip install marqov[pyquil]``).
+
+        Args:
+            program: A pyQuil ``Program`` instance.
+
+        Returns:
+            New Circuit instance.
+
+        Raises:
+            ImportError: If pyQuil is not installed.
+            TypeError: If the input is not a pyQuil Program.
+            NotImplementedError: If a Quil instruction is outside the canonical
+                Marqov gate set.
+        """
+        try:
+            from pyquil import Program
+            from pyquil.quilbase import Declare, Gate, Halt, Measurement, Pragma
+        except ImportError as exc:
+            raise ImportError(
+                "pyQuil is required for Circuit.from_pyquil(). "
+                "Install with: pip install marqov[pyquil]"
+            ) from exc
+
+        if not isinstance(program, Program):
+            raise TypeError(f"Expected a pyQuil Program, got {type(program).__name__}")
+
+        circuit = cls()
+
+        for instruction in program:
+            if isinstance(instruction, (Declare, Halt, Pragma, Measurement)):
+                continue
+
+            if not isinstance(instruction, Gate):
+                raise NotImplementedError(
+                    f"Unsupported pyQuil instruction '{type(instruction).__name__}'."
+                )
+
+            name = instruction.name.upper()
+            if name not in cls._PYQUIL_GATE_MAP:
+                supported = ", ".join(sorted(cls._PYQUIL_GATE_MAP))
+                raise NotImplementedError(
+                    f"Unsupported pyQuil gate '{instruction.name}'. "
+                    f"Supported gates: {supported}"
+                )
+
+            qubits = list(instruction.get_qubit_indices())
+            method_name = cls._PYQUIL_GATE_MAP[name]
+
+            if name in cls._PYQUIL_ROTATION_GATES:
+                angle = cls._pyquil_angle(instruction.params[0])
+                getattr(circuit, method_name)(angle, qubits[0])
+            elif len(qubits) == 1:
+                getattr(circuit, method_name)(qubits[0])
+            else:
+                getattr(circuit, method_name)(qubits[0], qubits[1])
+
         return circuit
 
     # Qiskit gate name -> Circuit fluent method mapping.

@@ -325,6 +325,125 @@ class TestFromCirq:
         assert np.isclose(np.abs(amps[3]) ** 2, 0.5, atol=0.01)
 
 
+class TestFromPyquil:
+    """Tests for Circuit.from_pyquil()."""
+
+    def test_known_pyquil_gates_map_to_circuit_methods(self, monkeypatch) -> None:
+        """Canonical pyQuil gates are mapped to Marqov circuit methods."""
+        from pyquil import Program
+        from pyquil.gates import CNOT, CZ, H, RX, RY, RZ, S, SWAP, T, X, Y, Z
+
+        calls = []
+
+        def record(method):
+            def _inner(self, *args):
+                calls.append((method, args))
+                return self
+
+            return _inner
+
+        for method in ("h", "x", "y", "z", "s", "t", "rx", "ry", "rz", "cnot", "cz", "swap"):
+            monkeypatch.setattr(Circuit, method, record(method))
+
+        program = Program(
+            H(0),
+            X(1),
+            Y(2),
+            Z(3),
+            S(4),
+            T(5),
+            RX(0.1, 6),
+            RY(0.2, 7),
+            RZ(0.3, 8),
+            CNOT(0, 1),
+            CZ(1, 2),
+            SWAP(2, 3),
+        )
+
+        Circuit.from_pyquil(program)
+
+        assert calls == [
+            ("h", (0,)),
+            ("x", (1,)),
+            ("y", (2,)),
+            ("z", (3,)),
+            ("s", (4,)),
+            ("t", (5,)),
+            ("rx", (0.1, 6)),
+            ("ry", (0.2, 7)),
+            ("rz", (0.3, 8)),
+            ("cnot", (0, 1)),
+            ("cz", (1, 2)),
+            ("swap", (2, 3)),
+        ]
+
+    def test_unsupported_pyquil_gate_raises_not_implemented(self) -> None:
+        """Gates outside the canonical set raise a clear error."""
+        from pyquil import Program
+        from pyquil.gates import CCNOT
+
+        with pytest.raises(NotImplementedError, match="Unsupported pyQuil gate 'CCNOT'"):
+            Circuit.from_pyquil(Program(CCNOT(0, 1, 2)))
+
+    def test_type_error_on_wrong_input(self) -> None:
+        """TypeError raised for non-Program input."""
+        with pytest.raises(TypeError, match="Expected a pyQuil Program"):
+            Circuit.from_pyquil("not a program")
+
+    def test_symbolic_rotation_parameter_raises_not_implemented(self) -> None:
+        """Symbolic pyQuil rotation parameters fail with a clear error."""
+        from pyquil import Program
+        from pyquil.gates import RX
+        from pyquil.quilatom import Parameter
+
+        with pytest.raises(NotImplementedError, match="numeric real-valued"):
+            Circuit.from_pyquil(Program(RX(Parameter("theta"), 0)))
+
+    def test_clean_python_pyquil_roundtrip_acceptance(self) -> None:
+        """Real pyQuil programs round-trip in a clean process."""
+        import importlib.metadata
+        import subprocess
+        import sys
+        import textwrap
+
+        try:
+            importlib.metadata.version("pyquil")
+        except importlib.metadata.PackageNotFoundError:
+            pytest.skip("pyQuil optional dependency is not installed")
+
+        script = textwrap.dedent(
+            """
+            import numpy as np
+
+            from marqov.circuits import Circuit, bell_state
+            from pyquil import Program
+            from pyquil.gates import CNOT, H
+
+            imported = Circuit.from_pyquil(Program(H(0), CNOT(0, 1)))
+            expected = bell_state()
+
+            assert np.allclose(
+                np.abs(imported.simulate().tensor.flatten()),
+                np.abs(expected.simulate().tensor.flatten()),
+            )
+
+            original = Circuit().h(0).cnot(0, 1).x(1).swap(0, 1)
+            restored = Circuit.from_pyquil(original.to_pyquil())
+
+            assert np.allclose(
+                np.abs(original.simulate().tensor.flatten()),
+                np.abs(restored.simulate().tensor.flatten()),
+                atol=1e-6,
+            )
+            """
+        )
+
+        subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+        )
+
+
 class TestFromPennylane:
     """Tests for Circuit.from_pennylane()."""
 
