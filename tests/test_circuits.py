@@ -211,6 +211,132 @@ class TestFromQiskit:
         assert np.isclose(np.abs(amps[3]) ** 2, 0.5, atol=0.01)
 
 
+class TestFromPyQuil:
+    """Tests for Circuit.from_pyquil()."""
+
+    def _use_real_quantumflow(self, monkeypatch) -> None:
+        """Use the installed QuantumFlow package for roundtrip tests."""
+        import importlib
+        import sys
+
+        import marqov.circuits as circuits_module
+
+        for module_name in list(sys.modules):
+            if module_name == "quantumflow" or module_name.startswith("quantumflow."):
+                monkeypatch.delitem(sys.modules, module_name, raising=False)
+
+        try:
+            real_quantumflow = importlib.import_module("quantumflow")
+        except Exception as exc:
+            pytest.skip(f"real quantumflow unavailable: {exc}")
+
+        monkeypatch.setattr(circuits_module, "qf", real_quantumflow)
+
+    def _record_gate_calls(self, monkeypatch):
+        """Patch fluent gate methods to record from_pyquil() mappings."""
+        calls = []
+
+        for method_name in ("h", "x", "y", "z", "s", "t", "rx", "ry", "rz", "cnot", "cz", "swap"):
+
+            def recorder(self, *args, method_name=method_name):
+                calls.append((method_name, args))
+                return self
+
+            monkeypatch.setattr(Circuit, method_name, recorder)
+
+        return calls
+
+    def test_bell_state_roundtrip(self, monkeypatch) -> None:
+        """Bell state survives Circuit -> PyQuil -> Circuit roundtrip."""
+        import numpy as np
+        from pyquil import Program
+
+        self._use_real_quantumflow(monkeypatch)
+
+        original = bell_state()
+        pyquil_program = original.to_pyquil()
+        assert isinstance(pyquil_program, Program)
+
+        imported = Circuit.from_pyquil(pyquil_program)
+        orig_amps = original.simulate().tensor.flatten()
+        imported_amps = imported.simulate().tensor.flatten()
+
+        assert imported.num_qubits == original.num_qubits
+        assert np.allclose(np.abs(orig_amps), np.abs(imported_amps))
+
+    def test_canonical_gate_program_import(self, monkeypatch) -> None:
+        """Canonical PyQuil gates map to Marqov Circuit methods."""
+        import math
+        from pyquil import Program
+        from pyquil.gates import CNOT, CZ, H, RX, RY, RZ, S, SWAP, T, X, Y, Z
+
+        calls = self._record_gate_calls(monkeypatch)
+        program = Program(
+            H(0),
+            X(1),
+            Y(2),
+            Z(3),
+            S(4),
+            T(5),
+            RX(math.pi / 3, 0),
+            RY(math.pi / 5, 1),
+            RZ(math.pi / 7, 2),
+            CNOT(0, 1),
+            CZ(1, 2),
+            SWAP(3, 4),
+        )
+
+        Circuit.from_pyquil(program)
+
+        assert calls == [
+            ("h", (0,)),
+            ("x", (1,)),
+            ("y", (2,)),
+            ("z", (3,)),
+            ("s", (4,)),
+            ("t", (5,)),
+            ("rx", (math.pi / 3, 0)),
+            ("ry", (math.pi / 5, 1)),
+            ("rz", (math.pi / 7, 2)),
+            ("cnot", (0, 1)),
+            ("cz", (1, 2)),
+            ("swap", (3, 4)),
+        ]
+
+    def test_native_pyquil_bell_pair(self, monkeypatch) -> None:
+        """A hand-written PyQuil Bell pair maps to H and CNOT."""
+        from pyquil import Program
+        from pyquil.gates import CNOT, H
+
+        calls = self._record_gate_calls(monkeypatch)
+        Circuit.from_pyquil(Program(H(0), CNOT(0, 1)))
+
+        assert calls == [("h", (0,)), ("cnot", (0, 1))]
+
+    def test_native_pyquil_swap(self, monkeypatch) -> None:
+        """Native PyQuil SWAP is supported directly."""
+        from pyquil import Program
+        from pyquil.gates import SWAP, X
+
+        calls = self._record_gate_calls(monkeypatch)
+        Circuit.from_pyquil(Program(X(0), SWAP(0, 1)))
+
+        assert calls == [("x", (0,)), ("swap", (0, 1))]
+
+    def test_unsupported_gate_raises_not_implemented(self) -> None:
+        """Quil-native gates outside the canonical set are rejected clearly."""
+        from pyquil import Program
+        from pyquil.gates import CCNOT
+
+        with pytest.raises(NotImplementedError, match="CCNOT"):
+            Circuit.from_pyquil(Program(CCNOT(0, 1, 2)))
+
+    def test_type_error_on_wrong_input(self) -> None:
+        """TypeError raised for non-Program input."""
+        with pytest.raises(TypeError, match="Expected a PyQuil Program"):
+            Circuit.from_pyquil("not a program")
+
+
 class TestFromCirq:
     """Tests for Circuit.from_cirq()."""
 
