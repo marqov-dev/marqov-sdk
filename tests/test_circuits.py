@@ -112,6 +112,120 @@ class TestBackendConversion:
         assert imported.num_qubits == original.num_qubits
 
 
+class TestToPytket:
+    """Tests for Circuit.to_pytket()."""
+
+    @staticmethod
+    def _install_fake_pytket_bridge(monkeypatch, qiskit_to_tk):
+        """Install a fake pytket converter module for unit tests."""
+        import sys
+        import types
+
+        pytket_module = types.ModuleType("pytket")
+        extensions_module = types.ModuleType("pytket.extensions")
+        qiskit_module = types.ModuleType("pytket.extensions.qiskit")
+        converter_module = types.ModuleType("pytket.extensions.qiskit.qiskit_convert")
+
+        pytket_module.__path__ = []
+        extensions_module.__path__ = []
+        qiskit_module.__path__ = []
+        converter_module.qiskit_to_tk = qiskit_to_tk
+
+        monkeypatch.setitem(sys.modules, "pytket", pytket_module)
+        monkeypatch.setitem(sys.modules, "pytket.extensions", extensions_module)
+        monkeypatch.setitem(sys.modules, "pytket.extensions.qiskit", qiskit_module)
+        monkeypatch.setitem(
+            sys.modules,
+            "pytket.extensions.qiskit.qiskit_convert",
+            converter_module,
+        )
+
+    def test_to_pytket_uses_qiskit_bridge(self, monkeypatch) -> None:
+        """to_pytket delegates the existing Qiskit conversion into pytket."""
+        qiskit_circuit = object()
+        pytket_circuit = object()
+
+        def fake_qiskit_to_tk(arg):
+            assert arg is qiskit_circuit
+            return pytket_circuit
+
+        self._install_fake_pytket_bridge(monkeypatch, fake_qiskit_to_tk)
+        monkeypatch.setattr(Circuit, "to_qiskit", lambda self: qiskit_circuit)
+
+        assert Circuit().h(0).to_pytket() is pytket_circuit
+
+    def test_bridge_failure_raises_clear_not_implemented_error(self, monkeypatch) -> None:
+        """pytket bridge failures are reported as unsupported gate conversions."""
+        monkeypatch.setattr(Circuit, "to_qiskit", lambda self: object())
+
+        def fail_bridge(_qiskit_circuit):
+            raise ValueError("unsupported gate")
+
+        self._install_fake_pytket_bridge(monkeypatch, fail_bridge)
+
+        with pytest.raises(NotImplementedError, match="canonical gate set"):
+            Circuit().h(0).to_pytket()
+
+    def test_clean_python_pytket_bridge_acceptance(self) -> None:
+        """The real pytket bridge round-trips canonical circuits in a clean process."""
+        import importlib.metadata
+        import subprocess
+        import sys
+        import textwrap
+
+        try:
+            importlib.metadata.version("pytket-qiskit")
+        except importlib.metadata.PackageNotFoundError:
+            pytest.skip("pytket-qiskit optional dependency is not installed")
+
+        script = textwrap.dedent(
+            """
+            import math
+            import numpy as np
+
+            from marqov.circuits import Circuit, bell_state
+            from pytket.circuit import Circuit as PytketCircuit
+            from pytket.extensions.qiskit import tk_to_qiskit
+            from qiskit.quantum_info import Statevector
+
+            expected = PytketCircuit(2).H(0).CX(0, 1)
+            actual = bell_state().to_pytket()
+
+            expected_state = Statevector.from_instruction(tk_to_qiskit(expected))
+            actual_state = Statevector.from_instruction(tk_to_qiskit(actual))
+            assert np.allclose(np.abs(actual_state.data), np.abs(expected_state.data))
+
+            original = (
+                Circuit()
+                .h(0)
+                .x(1)
+                .y(2)
+                .z(3)
+                .s(4)
+                .t(5)
+                .rx(math.pi / 3, 6)
+                .ry(math.pi / 5, 7)
+                .rz(math.pi / 7, 8)
+                .cnot(0, 1)
+                .cz(1, 2)
+                .swap(2, 3)
+            )
+
+            restored = Circuit.from_qiskit(tk_to_qiskit(original.to_pytket()))
+            assert np.allclose(
+                np.abs(original.simulate().tensor.flatten()),
+                np.abs(restored.simulate().tensor.flatten()),
+                atol=1e-6,
+            )
+            """
+        )
+
+        subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+        )
+
+
 class TestFromQiskit:
     """Tests for Circuit.from_qiskit()."""
 

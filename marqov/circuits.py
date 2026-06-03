@@ -18,13 +18,14 @@ import quantumflow as qf
 
 if TYPE_CHECKING:
     from braket.circuits import Circuit as BraketCircuit
+    from pytket.circuit import Circuit as PytketCircuit
 
 
 class Circuit:
     """Backend-agnostic quantum circuit.
 
     Provides a fluent API for building circuits that can be converted
-    to any supported backend (Braket, Qiskit, Cirq, PyQuil).
+    to any supported backend (Braket, Qiskit, Cirq, PyQuil, pytket).
 
     Example:
         >>> circuit = Circuit()
@@ -237,6 +238,38 @@ class Circuit:
             PyQuil Program object.
         """
         return qf.transpile(self._qf, output_format="pyquil")
+
+    def to_pytket(self) -> PytketCircuit:
+        """Convert to a pytket circuit.
+
+        Returns:
+            pytket Circuit object.
+
+        Raises:
+            ImportError: If pytket-qiskit is not installed.
+            NotImplementedError: If the circuit contains gates outside the
+                Marqov canonical gate set that pytket cannot convert.
+        """
+        try:
+            # Import the converter submodule directly to avoid initializing pytket backend
+            # providers when only circuit conversion is needed.
+            from pytket.extensions.qiskit.qiskit_convert import qiskit_to_tk
+        except ImportError as exc:
+            raise ImportError(
+                "pytket-qiskit is required for to_pytket(). "
+                "Install with: pip install marqov[pytket]"
+            ) from exc
+
+        qiskit_circuit = self.to_qiskit()
+        try:
+            return qiskit_to_tk(qiskit_circuit)
+        except Exception as exc:
+            supported = ", ".join(sorted(self._QISKIT_GATE_MAP))
+            raise NotImplementedError(
+                "Circuit.to_pytket() supports the Marqov canonical gate set "
+                f"({supported}). A gate in this circuit could not be converted "
+                "through the pytket Qiskit bridge."
+            ) from exc
 
     def to_openqasm(self, version: int = 2) -> str:
         """Export circuit as an OpenQASM string.
