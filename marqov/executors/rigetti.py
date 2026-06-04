@@ -16,15 +16,8 @@ Example:
 from __future__ import annotations
 
 import asyncio
-import socket
-import time
-import uuid
 from dataclasses import dataclass
-from functools import partial
 from typing import Any
-from urllib.parse import urlparse
-
-import numpy as np
 
 from marqov.executors.base import BaseExecutor
 
