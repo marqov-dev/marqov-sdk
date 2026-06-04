@@ -133,8 +133,8 @@ The Rigetti QCS executor tests run against a local QVM instance. QVM requires
 ```bash
 docker pull rigetti/quilc
 docker pull rigetti/qvm
-docker run -d -p 5555:5555 rigetti/quilc -server
-docker run -d -p 5000:5000 rigetti/qvm -server
+docker run -d -p 5555:5555 rigetti/quilc -S
+docker run -d -p 5000:5000 rigetti/qvm -S
 ```
 
 Verify:
