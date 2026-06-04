@@ -147,8 +147,20 @@ check both containers are running with `docker ps`.
 
 ## §5 — Running Benchmarks
 
+The unified suite runs Bell, three-qubit GHZ, and deterministic random depth-5
+circuits. The local executor works without credentials:
+
 ```bash
 python benchmarks/suite.py --executor local --shots 1000
+```
+
+Configured executors can be supplied programmatically:
+
+```python
+from benchmarks.suite import format_table, run_suite
+
+rows = await run_suite({"my-backend": executor}, shots=1000)
+print(format_table(rows))
 ```
 
 Output format — one row per (backend × circuit) combination:
@@ -166,5 +178,5 @@ Columns:
 - `exec_time_ms`: wall time in milliseconds
 - `top_3_outcomes`: counts dict of top 3 measurement outcomes
 
-On executor error: the suite skips that backend, logs the error to stderr, and
-continues — it does not abort.
+On executor error: the suite discards any partial rows for that backend, logs
+the error to stderr, and continues — it does not abort.
