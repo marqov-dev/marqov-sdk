@@ -23,6 +23,7 @@ from marqov.executors.base import BaseExecutor
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
 from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig
 from marqov.executors.local import LocalExecutor
+from marqov.executors.rigetti import RigettiExecutor, RigettiExecutorConfig
 from marqov.simulation.config import SimulationConfig
 from marqov.simulation.executor import SimulationExecutor
 
@@ -105,6 +106,10 @@ class ExecutorFactory:
         if provider == "Azure Quantum":
             return cls._create_azure_executor(backend_slug, backend_config)
 
+        # Rigetti QCS
+        if provider == "Rigetti QCS":
+            return cls._create_rigetti_executor(backend_slug, backend_config)
+
         # IonQ Direct API (future)
         if provider == "IonQ Direct":
             raise NotImplementedError(
@@ -118,9 +123,27 @@ class ExecutorFactory:
 
         raise ValueError(
             f"Unsupported provider: {provider}. "
-            f"Supported providers: AWS Braket, IBM Quantum, Azure Quantum, Quantum Brilliance, Local. "
+            f"Supported providers: AWS Braket, IBM Quantum, Azure Quantum, Rigetti QCS, Quantum Brilliance, Local. "
             f"Coming soon: IonQ Direct."
         )
+
+    @classmethod
+    def _create_rigetti_executor(
+        cls,
+        backend_slug: str,
+        backend_config: dict[str, Any],
+    ) -> RigettiExecutor:
+        """Create Rigetti QCS executor from configuration."""
+        quantum_processor_id = backend_config.get("quantum_processor_id", backend_slug)
+        config = RigettiExecutorConfig(
+            quantum_processor_id=quantum_processor_id,
+            as_qvm=backend_config.get("as_qvm"),
+            poll_interval_seconds=backend_config.get("poll_interval_seconds", 0.2),
+            timeout_seconds=backend_config.get("timeout_seconds", 120.0),
+            qvm_url=backend_config.get("qvm_url", "http://127.0.0.1:5000"),
+            quilc_url=backend_config.get("quilc_url", "tcp://127.0.0.1:5555"),
+        )
+        return RigettiExecutor(config)
 
     @classmethod
     def _create_braket_executor(
@@ -277,6 +300,7 @@ class ExecutorFactory:
             "AWS Braket",
             "IBM Quantum",
             "Azure Quantum",
+            "Rigetti QCS",
             "Quantum Brilliance",
             "Local",
             # "IonQ Direct",     # Coming soon
