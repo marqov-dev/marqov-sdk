@@ -238,6 +238,30 @@ class Circuit:
         """
         return qf.transpile(self._qf, output_format="pyquil")
 
+    def to_pytket(self):
+        """Convert to pytket circuit.
+
+        Uses the Qiskit bridge: Marqov -> Qiskit -> pytket.
+
+        Returns:
+            pytket Circuit object.
+
+        Raises:
+            ImportError: If pytket or qiskit is not installed.
+            NotImplementedError: If a gate is not in the canonical set.
+        """
+        try:
+            from pytket.extensions.qiskit import qiskit_to_tk
+        except ImportError:
+            raise ImportError(
+                "pytket is required for Circuit.to_pytket(). "
+                "Install with: pip install marqov[pytket]"
+            )
+
+        # Convert to Qiskit first, then to pytket
+        qiskit_circuit = self.to_qiskit()
+        return qiskit_to_tk(qiskit_circuit)
+
     def to_openqasm(self, version: int = 2) -> str:
         """Export circuit as an OpenQASM string.
 

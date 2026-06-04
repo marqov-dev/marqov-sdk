@@ -531,6 +531,80 @@ class TestOpenQASM:
             Circuit.from_openqasm("this is not valid QASM")
 
 
+class TestToPytket:
+    """Tests for Circuit.to_pytket()."""
+
+    def test_bell_state_roundtrip(self) -> None:
+        """Bell state survives pytket roundtrip via Qiskit bridge."""
+        import numpy as np
+
+        original = bell_state()
+        pytket_circuit = original.to_pytket()
+
+        # Convert back via Qiskit bridge
+        from pytket.extensions.qiskit import tk_to_qiskit
+        qiskit_restored = tk_to_qiskit(pytket_circuit)
+        imported = Circuit.from_qiskit(qiskit_restored)
+
+        orig_amps = original.simulate().tensor.flatten()
+        imported_amps = imported.simulate().tensor.flatten()
+        assert np.allclose(np.abs(orig_amps), np.abs(imported_amps))
+
+    def test_handwritten_bell_state(self) -> None:
+        """Compare with hand-written pytket Bell state circuit."""
+        import numpy as np
+        from pytket import Circuit as PytketCircuit
+        from pytket.circuit import H, CX
+
+        # Build hand-written pytket Bell state
+        pytket_bell = PytketCircuit(2, name="bell")
+        pytket_bell.add_gate(H, [0])
+        pytket_bell.add_gate(CX, [0, 1])
+
+        # Build Marqov Bell state and convert to pytket
+        marqov_bell = bell_state()
+        marqov_pytket = marqov_bell.to_pytket()
+
+        # Both should produce same state vectors
+        from pytket.extensions.qiskit import tk_to_qiskit
+        marqov_qiskit = tk_to_qiskit(marqov_pytket)
+        marqov_imported = Circuit.from_qiskit(marqov_qiskit)
+
+        marqov_amps = marqov_imported.simulate().tensor.flatten()
+        hand_qiskit = tk_to_qiskit(pytket_bell)
+        hand_imported = Circuit.from_qiskit(hand_qiskit)
+        hand_amps = hand_imported.simulate().tensor.flatten()
+
+        assert np.allclose(np.abs(marqov_amps), np.abs(hand_amps))
+
+    def test_import_error_without_pytket(self) -> None:
+        """ImportError raised when pytket not installed."""
+        import sys
+        from unittest.mock import patch
+
+        circuit = Circuit().h(0)
+
+        with patch.dict(sys.modules, {"pytket": None, "pytket.extensions.qiskit": None}):
+            with pytest.raises(ImportError, match="pytket is required"):
+                circuit.to_pytket()
+
+    def test_rotation_gates_preserve_angles(self) -> None:
+        """Parameterized rotation gates preserve angles through pytket."""
+        import math
+        import numpy as np
+
+        original = Circuit().rx(math.pi / 3, 0).ry(math.pi / 5, 1).rz(math.pi / 7, 2)
+        pytket_circuit = original.to_pytket()
+
+        from pytket.extensions.qiskit import tk_to_qiskit
+        qiskit_restored = tk_to_qiskit(pytket_circuit)
+        imported = Circuit.from_qiskit(qiskit_restored)
+
+        orig_amps = original.simulate().tensor.flatten()
+        imported_amps = imported.simulate().tensor.flatten()
+        assert np.allclose(np.abs(orig_amps), np.abs(imported_amps))
+
+
 class TestSerialization:
     """Tests for circuit serialization."""
 
