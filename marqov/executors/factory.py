@@ -23,7 +23,13 @@ from marqov.executors.base import BaseExecutor
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
 from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig
 from marqov.executors.local import LocalExecutor
-from marqov.executors.rigetti import RigettiExecutor, RigettiExecutorConfig
+from marqov.executors.rigetti import (
+    DEFAULT_GRPC_API_URL,
+    DEFAULT_QUILC_URL,
+    DEFAULT_QVM_URL,
+    RigettiExecutor,
+    RigettiExecutorConfig,
+)
 from marqov.simulation.config import SimulationConfig
 from marqov.simulation.executor import SimulationExecutor
 
@@ -138,10 +144,14 @@ class ExecutorFactory:
         config = RigettiExecutorConfig(
             quantum_processor_id=quantum_processor_id,
             as_qvm=backend_config.get("as_qvm"),
+            refresh_token=backend_config.get("refresh_token"),
+            client_id=backend_config.get("client_id"),
+            issuer=backend_config.get("issuer"),
+            grpc_api_url=backend_config.get("grpc_api_url", DEFAULT_GRPC_API_URL),
+            quilc_url=backend_config.get("quilc_url", DEFAULT_QUILC_URL),
+            qvm_url=backend_config.get("qvm_url", DEFAULT_QVM_URL),
             poll_interval_seconds=backend_config.get("poll_interval_seconds", 0.2),
             timeout_seconds=backend_config.get("timeout_seconds", 120.0),
-            qvm_url=backend_config.get("qvm_url", "http://127.0.0.1:5000"),
-            quilc_url=backend_config.get("quilc_url", "tcp://127.0.0.1:5555"),
         )
         return RigettiExecutor(config)
 
