@@ -358,7 +358,45 @@ class RigettiExecutor(BaseExecutor):
         except Exception:
             return False
 
+    @staticmethod
+    def _port_open(host: str, port: int, timeout: float = 1.0) -> bool:
+        """Return True if the TCP port is accepting connections."""
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except OSError:
+            return False
+
     async def get_status(self) -> DeviceStatus:
+        if _is_qvm_target(self.config.quantum_processor_id, self.config.as_qvm):
+            qvm_parsed = urlparse(self.config.qvm_url)
+            quilc_parsed = urlparse(self.config.quilc_url)
+
+            qvm_host = qvm_parsed.hostname or "127.0.0.1"
+            qvm_port = qvm_parsed.port or 5000
+            quilc_host = quilc_parsed.hostname or "127.0.0.1"
+            quilc_port = quilc_parsed.port or 5555
+
+            loop = asyncio.get_running_loop()
+            qvm_up = await loop.run_in_executor(
+                None, partial(self._port_open, qvm_host, qvm_port)
+            )
+            quilc_up = await loop.run_in_executor(
+                None, partial(self._port_open, quilc_host, quilc_port)
+            )
+
+            if qvm_up and quilc_up:
+                return DeviceStatus(
+                    status="online",
+                    queue_depth=0,
+                    queue_time_seconds=0,
+                )
+            return DeviceStatus(
+                status="offline",
+                queue_depth=None,
+                queue_time_seconds=None,
+            )
+
         return DeviceStatus(
             status="online",
             queue_depth=None,
