@@ -738,6 +738,76 @@ class Circuit:
         _process_operations(tape.operations)
         return circuit
 
+    def to_pennylane(self) -> "pennylane.tape.QuantumTape":
+        """Export to a PennyLane QuantumTape.
+
+        Known gates are mapped directly using the reverse of the
+        ``from_pennylane`` gate mapping. Unsupported gates raise a
+        ``ValueError``.
+
+        Requires PennyLane to be installed (``pip install marqov[pennylane]``).
+
+        Args:
+            None
+
+        Returns:
+            A PennyLane ``QuantumTape`` instance.
+
+        Raises:
+            ImportError: If PennyLane is not installed.
+            ValueError: If a gate cannot be mapped.
+        """
+        try:
+            import pennylane as qml
+        except ImportError:
+            raise ImportError(
+                "PennyLane is required for Circuit.to_pennylane(). "
+                "Install with: pip install marqov[pennylane]"
+            )
+
+        # Reverse gate map: Marqov method name -> PennyLane gate name
+        _MARQOV_TO_PENNYLANE_MAP = {
+            "h": qml.Hadamard,
+            "x": qml.PauliX,
+            "y": qml.PauliY,
+            "z": qml.PauliZ,
+            "s": qml.S,
+            "t": qml.T,
+            "rx": qml.RX,
+            "ry": qml.RY,
+            "rz": qml.RZ,
+            "cnot": qml.CNOT,
+            "cz": qml.CZ,
+            "swap": qml.SWAP,
+        }
+
+        _MARQOV_ROTATION_GATES = {"rx", "ry", "rz"}
+
+        operations = []
+        for gate in self._circuit:
+            gate_name = gate.name.lower()
+            targets = gate.qubits
+
+            if gate_name not in _MARQOV_TO_PENNYLANE_MAP:
+                raise ValueError(
+                    f"Unsupported Marqov gate '{gate_name}' cannot be converted to PennyLane. "
+                    f"Supported gates: {list(_MARQOV_TO_PENNYLANE_MAP.keys())}"
+                )
+
+            pennylane_gate = _MARQOV_TO_PENNYLANE_MAP[gate_name]
+
+            if gate_name in _MARQOV_ROTATION_GATES:
+                # Rotation gates have an angle parameter
+                angle = gate.params[0]
+                operations.append(pennylane_gate(angle, wires=targets))
+            else:
+                # Non-rotation gates
+                operations.append(pennylane_gate(wires=targets))
+
+        # Create QuantumTape from operations
+        tape = qml.tape.QuantumScript(operations)
+        return tape
+
     @classmethod
     def from_openqasm(cls, qasm_string: str) -> Circuit:
         """Import a circuit from an OpenQASM 2.0 or 3.0 string.

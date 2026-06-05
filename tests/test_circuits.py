@@ -562,6 +562,39 @@ class TestFromPennylane:
         assert np.isclose(np.abs(amps[0]) ** 2, 0.5, atol=0.01)
         assert np.isclose(np.abs(amps[3]) ** 2, 0.5, atol=0.01)
 
+    def test_to_pennylane_roundtrip(self) -> None:
+        """Circuit → tape → Circuit produces an equivalent circuit."""
+        import numpy as np
+        import pennylane as qml
+
+        # Build a Marqov circuit
+        original = Circuit().h(0).cnot(0, 1).rx(0.5, 0)
+
+        # Convert to PennyLane tape
+        tape = original.to_pennylane()
+
+        # Convert back to Marqov
+        recovered = Circuit.from_pennylane(tape)
+
+        # Simulate both and compare
+        original_amps = original.simulate().tensor.flatten()
+        recovered_amps = recovered.simulate().tensor.flatten()
+
+        # States should be equivalent (up to global phase)
+        assert np.allclose(np.abs(original_amps), np.abs(recovered_amps), atol=0.01)
+
+    def test_to_pennylane_basic(self) -> None:
+        """to_pennylane() produces a valid QuantumTape."""
+        import pennylane as qml
+
+        circuit = Circuit().h(0).cnot(0, 1)
+        tape = circuit.to_pennylane()
+
+        assert isinstance(tape, qml.tape.QuantumScript)
+        assert len(tape.operations) == 2
+        assert tape.operations[0].name == "Hadamard"
+        assert tape.operations[1].name == "CNOT"
+
 
 class TestOpenQASM:
     """Tests for OpenQASM import and export."""
