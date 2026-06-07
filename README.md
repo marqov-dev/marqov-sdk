@@ -144,6 +144,9 @@ pip install -r docs/requirements.txt
 mkdocs serve
 ```
 
+The first examples cover a credential-free Bell-state run and a local parameter
+sweep.
+
 ## License
 
 [Apache 2.0](LICENSE)
