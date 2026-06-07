@@ -134,6 +134,16 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the executor interface spec, canonica
 
 Bounty issues are open through [unitaryHACK 2026](https://unitaryhack.dev) — see the [issues page](https://github.com/marqov-dev/marqov-sdk/issues) for what's available.
 
+## Documentation
+
+The documentation site lives in [`docs/`](docs/) and can be served locally:
+
+```bash
+pip install -e .
+pip install -r docs/requirements.txt
+mkdocs serve
+```
+
 ## License
 
 [Apache 2.0](LICENSE)

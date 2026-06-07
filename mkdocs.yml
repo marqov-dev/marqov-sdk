@@ -1,0 +1,31 @@
+site_name: Marqov SDK
+site_description: Documentation for the Marqov quantum workflow SDK
+repo_url: https://github.com/marqov-dev/marqov-sdk
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.instant
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Examples:
+      - Bell state with local execution: examples/bell-state-local.md
+  - API Reference:
+      - Circuits: api/circuits.md
+      - Executors: api/executors.md
+      - Workflows: api/workflows.md
+      - Simulation noise: api/simulation-noise.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            members_order: source
+            show_source: true
+            show_signature_annotations: true
