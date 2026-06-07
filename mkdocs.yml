@@ -13,6 +13,7 @@ nav:
   - Home: index.md
   - Examples:
       - Bell state with local execution: examples/bell-state-local.md
+      - Local parameter sweep: examples/parameter-sweep-local.md
   - API Reference:
       - Circuits: api/circuits.md
       - Executors: api/executors.md
