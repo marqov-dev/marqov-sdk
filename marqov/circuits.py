@@ -784,9 +784,10 @@ class Circuit:
         _MARQOV_ROTATION_GATES = {"rx", "ry", "rz"}
 
         operations = []
-        for gate in self._circuit:
+        for gate in self._qf._elements:
             gate_name = gate.name.lower()
-            targets = gate.qubits
+            qubits = list(gate.qubits)
+            params = list(gate.params) if hasattr(gate, "params") and gate.params else []
 
             if gate_name not in _MARQOV_TO_PENNYLANE_MAP:
                 raise ValueError(
@@ -798,11 +799,10 @@ class Circuit:
 
             if gate_name in _MARQOV_ROTATION_GATES:
                 # Rotation gates have an angle parameter
-                angle = gate.params[0]
-                operations.append(pennylane_gate(angle, wires=targets))
+                operations.append(pennylane_gate(params[0], wires=qubits))
             else:
                 # Non-rotation gates
-                operations.append(pennylane_gate(wires=targets))
+                operations.append(pennylane_gate(wires=qubits))
 
         # Create QuantumTape from operations
         tape = qml.tape.QuantumScript(operations)
