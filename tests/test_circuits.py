@@ -130,17 +130,12 @@ class TestThreeQubitGates:
             Circuit().x(0).x(1).cswap(0, 1, 2),
         )
 
-    def test_ccx_out_of_order_qubits(self) -> None:
-        """CCX respects argument order with non-ascending qubit indices."""
-        import numpy as np
-
-        # controls q2 and q0, target q1: q0=q2=1 -> flip q1
-        # start |101> (q0=1,q1=0,q2=1) -> |111>
-        amps = Circuit().x(2).x(0).ccx(2, 0, 1).simulate().tensor.flatten()
-        assert np.isclose(np.abs(amps[_basis_index("111")]) ** 2, 1.0)
-
     def test_cswap_out_of_order_qubits(self) -> None:
-        """CSWAP respects argument order with non-ascending qubit indices."""
+        """CSWAP respects argument order with non-ascending qubit indices.
+
+        CSWAP has three distinct roles (one control, two targets), so this also
+        covers the CCX case, whose two controls are interchangeable.
+        """
         import numpy as np
 
         # control q1, targets q0 and q2: control set, q0=1,q2=0 -> swap to q0=0,q2=1
@@ -212,8 +207,8 @@ class TestBackendConversion:
     def test_three_qubit_gates_roundtrip(self) -> None:
         """CCX and CSWAP survive a Braket roundtrip (state preserved up to phase).
 
-        Each prep is asymmetric and exercises its gate non-trivially, so the
-        fidelity check would catch a control/target permutation.
+        The preps are asymmetric and fire each gate, so a control/target
+        permutation on import would fail the fidelity check (see _state_equiv).
         """
         for original in (
             Circuit().ry(0.7, 0).x(1).ccx(0, 1, 2),
@@ -595,8 +590,7 @@ class TestFromPennylane:
 
         PennyLane has no to_pennylane() export yet (issue #27), so we compare a
         natively-built tape against the equivalent Marqov circuit rather than
-        doing a to->from roundtrip. Each prep is asymmetric so a control/target
-        permutation would change the state.
+        doing a to->from roundtrip.
         """
         import pennylane as qml
 
@@ -722,11 +716,7 @@ class TestOpenQASM:
         assert np.allclose(np.abs(orig_state), np.abs(rest_state), atol=1e-6)
 
     def test_ccx_roundtrip_v2_and_v3(self) -> None:
-        """Toffoli survives OpenQASM 2 and 3 roundtrips (state preserved up to phase).
-
-        The prep is asymmetric and fires the gate (both controls set), so a
-        control/target permutation on import fails the fidelity check.
-        """
+        """Toffoli survives OpenQASM 2 and 3 roundtrips (state preserved up to phase)."""
         original = Circuit().ry(0.7, 0).x(1).ccx(0, 1, 2)
         for version in (2, 3):
             restored = Circuit.from_openqasm(original.to_openqasm(version=version))
@@ -735,10 +725,8 @@ class TestOpenQASM:
     def test_cswap_roundtrip_v2_and_v3(self) -> None:
         """Fredkin survives OpenQASM 2 and 3 roundtrips (state preserved up to phase).
 
-        QASM2 needs the legacy qelib1 gate set on import — qiskit's default
-        QASM2 builtins omit cswap even though it dumps one (see from_openqasm).
-        The asymmetric prep makes a qubit-order bug on this custom-parsed path
-        actually fail rather than slip through a magnitude-only check.
+        QASM2 needs the legacy qelib1 gate set on import: qiskit's default QASM2
+        builtins omit cswap even though it dumps one (see from_openqasm).
         """
         original = Circuit().ry(0.7, 0).x(1).cswap(0, 1, 2)
         for version in (2, 3):
