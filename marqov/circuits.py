@@ -204,6 +204,68 @@ class Circuit:
         self._qf += qf.Swap(qubit0, qubit1)
         return self
 
+    # Three-qubit gates
+
+    def ccx(self, control1: int, control2: int, target: int) -> Circuit:
+        """Apply Toffoli (CCX, controlled-controlled-NOT) gate.
+
+        Flips ``target`` if and only if both ``control1`` and ``control2``
+        are in the |1⟩ state.
+
+        Args:
+            control1: First control qubit index.
+            control2: Second control qubit index.
+            target: Target qubit index.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._qf += qf.CCNot(control1, control2, target)
+        return self
+
+    def toffoli(self, control1: int, control2: int, target: int) -> Circuit:
+        """Apply Toffoli gate (alias for ccx).
+
+        Args:
+            control1: First control qubit index.
+            control2: Second control qubit index.
+            target: Target qubit index.
+
+        Returns:
+            Self for method chaining.
+        """
+        return self.ccx(control1, control2, target)
+
+    def cswap(self, control: int, target0: int, target1: int) -> Circuit:
+        """Apply Fredkin (CSWAP, controlled-SWAP) gate.
+
+        Swaps ``target0`` and ``target1`` if and only if ``control`` is in
+        the |1⟩ state.
+
+        Args:
+            control: Control qubit index.
+            target0: First target qubit index.
+            target1: Second target qubit index.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._qf += qf.CSwap(control, target0, target1)
+        return self
+
+    def fredkin(self, control: int, target0: int, target1: int) -> Circuit:
+        """Apply Fredkin gate (alias for cswap).
+
+        Args:
+            control: Control qubit index.
+            target0: First target qubit index.
+            target1: Second target qubit index.
+
+        Returns:
+            Self for method chaining.
+        """
+        return self.cswap(control, target0, target1)
+
     # Backend conversion methods
 
     def to_braket(self) -> BraketCircuit:
@@ -308,6 +370,8 @@ class Circuit:
         "cx": "cnot",
         "cz": "cz",
         "swap": "swap",
+        "ccx": "ccx",
+        "cswap": "cswap",
     }
 
     # Basis gates for Qiskit transpiler decomposition.
@@ -380,10 +444,9 @@ class Circuit:
             if name in cls._ROTATION_GATES:
                 angle = float(instruction.operation.params[0])
                 getattr(circuit, method_name)(angle, qubits[0])
-            elif len(qubits) == 1:
-                getattr(circuit, method_name)(qubits[0])
             else:
-                getattr(circuit, method_name)(qubits[0], qubits[1])
+                # Splat handles 1-, 2-, and 3-qubit gates uniformly.
+                getattr(circuit, method_name)(*qubits)
 
         return circuit
 
@@ -443,6 +506,15 @@ class Circuit:
             return True
         if isinstance(gate, cirq.SwapPowGate) and gate.exponent == 1:
             circuit.swap(qubits[0], qubits[1])
+            return True
+
+        # Three-qubit gates. CSwapGate is not an EigenGate, so it has no
+        # exponent to check; CCXPowGate does, so only map the full-turn case.
+        if isinstance(gate, cirq.CCXPowGate) and gate.exponent == 1:
+            circuit.ccx(qubits[0], qubits[1], qubits[2])
+            return True
+        if isinstance(gate, cirq.CSwapGate):
+            circuit.cswap(qubits[0], qubits[1], qubits[2])
             return True
 
         return False
@@ -542,6 +614,8 @@ class Circuit:
         "CNOT": "cnot",
         "CZ": "cz",
         "SWAP": "swap",
+        "Toffoli": "ccx",
+        "CSWAP": "cswap",
     }
 
     _PENNYLANE_ROTATION_GATES: set[str] = {"RX", "RY", "RZ"}
@@ -613,10 +687,9 @@ class Circuit:
                     if name in cls._PENNYLANE_ROTATION_GATES:
                         angle = float(op.parameters[0])
                         getattr(circuit, method_name)(angle, wires[0])
-                    elif len(wires) == 1:
-                        getattr(circuit, method_name)(wires[0])
                     else:
-                        getattr(circuit, method_name)(wires[0], wires[1])
+                        # Splat handles 1-, 2-, and 3-wire gates uniformly.
+                        getattr(circuit, method_name)(*wires)
                     continue
 
                 # Unknown gate — try decomposing.
@@ -675,7 +748,12 @@ class Circuit:
         if stripped.startswith("OPENQASM 3"):
             qiskit_circuit = qasm3.loads(stripped)
         else:
-            qiskit_circuit = qasm2.loads(stripped)
+            # Parse with the full legacy qelib1 gate set so 3-qubit gates such
+            # as cswap (Fredkin) round-trip. Qiskit's default QASM2 builtins
+            # omit cswap even though qasm2.dumps() happily emits it.
+            qiskit_circuit = qasm2.loads(
+                stripped, custom_instructions=qasm2.LEGACY_CUSTOM_INSTRUCTIONS
+            )
 
         return cls.from_qiskit(qiskit_circuit)
 
@@ -726,6 +804,8 @@ class Circuit:
             "CNot": lambda q, p: circuit.cnot(q[0], q[1]),
             "CZ": lambda q, p: circuit.cz(q[0], q[1]),
             "Swap": lambda q, p: circuit.swap(q[0], q[1]),
+            "CCNot": lambda q, p: circuit.ccx(q[0], q[1], q[2]),
+            "CSwap": lambda q, p: circuit.cswap(q[0], q[1], q[2]),
         }
         for gate_data in data.get("gates", []):
             gate_name = gate_data["gate"]
