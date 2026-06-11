@@ -18,6 +18,8 @@ import quantumflow as qf
 
 if TYPE_CHECKING:
     from braket.circuits import Circuit as BraketCircuit
+    from pytket.circuit import Circuit as PytketCircuit
+    from qiskit import QuantumCircuit
 
 
 class Circuit:
@@ -214,13 +216,50 @@ class Circuit:
         """
         return qf.circuit_to_braket(self._qf, translate=True)
 
-    def to_qiskit(self):
+    def to_qiskit(self) -> QuantumCircuit:
         """Convert to IBM Qiskit circuit.
 
         Returns:
             Qiskit QuantumCircuit object.
         """
         return qf.transpile(self._qf, output_format="qiskit")
+
+    def to_pytket(self) -> PytketCircuit:
+        """Convert to a pytket circuit.
+
+        Conversion uses pytket's Qiskit bridge, which preserves the canonical
+        gate set supported by Marqov.
+
+        Returns:
+            pytket Circuit object.
+
+        Raises:
+            ImportError: If pytket's Qiskit extension is not installed.
+            NotImplementedError: If the circuit contains a gate outside
+                Marqov's canonical gate set.
+        """
+        unsupported_gates = {
+            operation.name
+            for operation in self._qf
+            if operation.name not in self._CANONICAL_QF_GATES
+        }
+        if unsupported_gates:
+            unsupported = ", ".join(sorted(unsupported_gates))
+            supported = ", ".join(sorted(self._CANONICAL_QF_GATES))
+            raise NotImplementedError(
+                f"Cannot convert non-canonical gate(s) to pytket: {unsupported}. "
+                f"Supported gates: {supported}"
+            )
+
+        try:
+            from pytket.extensions.qiskit.qiskit_convert import qiskit_to_tk
+        except ImportError:
+            raise ImportError(
+                "pytket and its Qiskit extension are required for to_pytket(). "
+                "Install with: pip install marqov[pytket]"
+            )
+
+        return qiskit_to_tk(self.to_qiskit())
 
     def to_cirq(self):
         """Convert to Google Cirq circuit.
@@ -308,6 +347,22 @@ class Circuit:
         "cx": "cnot",
         "cz": "cz",
         "swap": "swap",
+    }
+
+    # QuantumFlow names corresponding to the canonical gate set.
+    _CANONICAL_QF_GATES: set[str] = {
+        "H",
+        "X",
+        "Y",
+        "Z",
+        "S",
+        "T",
+        "Rx",
+        "Ry",
+        "Rz",
+        "CNot",
+        "CZ",
+        "Swap",
     }
 
     # Basis gates for Qiskit transpiler decomposition.

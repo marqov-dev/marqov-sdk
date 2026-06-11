@@ -37,6 +37,11 @@ qiskit = [
     "qiskit>=1.0.0",
     "qiskit-qasm3-import>=0.5.0",
 ]
+pytket = [
+    "qiskit>=1.0.0",
+    "pytket>=2.0.0",
+    "pytket-qiskit>=0.70.0",
+]
 ibm = [
     "qiskit>=1.0.0",
     "qiskit-ibm-runtime>=0.20.0",
@@ -66,6 +71,8 @@ all = [
     "cirq-core>=1.0.0",
     "pennylane>=0.35.0",
     "requests>=2.31.0",
+    "pytket>=2.0.0",
+    "pytket-qiskit>=0.70.0",
 ]
 
 [project.scripts]

@@ -446,6 +446,59 @@ class TestFromPennylane:
         assert np.isclose(np.abs(amps[3]) ** 2, 0.5, atol=0.01)
 
 
+class TestPytketConversion:
+    """Tests for pytket circuit export."""
+
+    def test_bell_state_matches_known_correct_circuit(self) -> None:
+        """Bell state conversion matches a hand-written pytket circuit."""
+        from pytket import Circuit as PytketCircuit
+        from pytket.extensions.qiskit import tk_to_qiskit
+        from qiskit.quantum_info import Operator
+
+        expected = PytketCircuit(2).H(0).CX(0, 1)
+        converted = bell_state().to_pytket()
+
+        assert Operator(tk_to_qiskit(expected)).equiv(Operator(tk_to_qiskit(converted)))
+
+    def test_canonical_gate_set_roundtrip_is_faithful(self) -> None:
+        """Every canonical gate survives a pytket/Qiskit roundtrip."""
+        import math
+
+        from pytket.extensions.qiskit import tk_to_qiskit
+        from qiskit.quantum_info import Operator
+
+        circuit = (
+            Circuit()
+            .h(0)
+            .x(1)
+            .y(2)
+            .z(3)
+            .s(4)
+            .t(5)
+            .rx(math.pi / 3, 0)
+            .ry(math.pi / 5, 1)
+            .rz(math.pi / 7, 2)
+            .cnot(0, 1)
+            .cz(1, 2)
+            .swap(2, 3)
+        )
+
+        expected = Operator(circuit.to_qiskit())
+        roundtripped = Operator(tk_to_qiskit(circuit.to_pytket()))
+
+        assert expected.equiv(roundtripped)
+
+    def test_non_canonical_gate_raises_not_implemented(self) -> None:
+        """Gates outside the canonical set fail with a clear error."""
+        import quantumflow as qf
+
+        circuit = Circuit()
+        circuit._qf += qf.CCNot(0, 1, 2)
+
+        with pytest.raises(NotImplementedError, match="CCNot"):
+            circuit.to_pytket()
+
+
 class TestOpenQASM:
     """Tests for OpenQASM import and export."""
 
