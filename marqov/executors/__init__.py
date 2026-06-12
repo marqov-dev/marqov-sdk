@@ -7,6 +7,7 @@ Available executors:
 - BraketExecutor: AWS Braket (simulators and QPUs)
 - AzureQuantumExecutor: Azure Quantum (Quantinuum, PASQAL, IonQ, Rigetti)
 - IBMExecutor: IBM Quantum (Heron r2, Eagle, etc. via Qiskit Runtime)
+- IonQExecutor: IonQ Direct API (simulators and QPUs)
 
 Example:
     >>> from marqov.executors import LocalExecutor
@@ -22,6 +23,7 @@ from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
 from marqov.executors.factory import ExecutorFactory
 from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig
+from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
 from marqov.executors.local import LocalExecutor
 from marqov.simulation.executor import SimulationExecutor
 
@@ -36,6 +38,8 @@ __all__ = [
     "ExecutorFactory",
     "IBMExecutor",
     "IBMExecutorConfig",
+    "IonQExecutor",
+    "IonQExecutorConfig",
     "LocalExecutor",
     "SimulationExecutor",
 ]

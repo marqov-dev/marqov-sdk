@@ -97,7 +97,7 @@ asyncio.run(main())
 | AWS Braket | ✅ Available |
 | IBM Quantum | ✅ Available |
 | Azure Quantum | ✅ Available |
-| IonQ Direct | [🔧 Open issue #1](https://github.com/marqov-dev/marqov-sdk/issues/1) |
+| IonQ Direct | ✅ Available |
 | Rigetti QCS | [🔧 Open issue #2](https://github.com/marqov-dev/marqov-sdk/issues/2) |
 | Quantinuum | [🔧 Open issue #6](https://github.com/marqov-dev/marqov-sdk/issues/6) |
 
