@@ -16,3 +16,8 @@ def is_azure(params: dict) -> bool:
 def is_ibm(params: dict) -> bool:
     """Return True if params indicate an IBM Quantum target."""
     return bool(params.get("ibm_token") or params.get("ibm_channel"))
+
+
+def is_braket(params: dict) -> bool:
+    """Return True if params indicate an AWS Braket target."""
+    return bool(params.get("device_arn"))
