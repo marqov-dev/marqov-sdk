@@ -1,6 +1,6 @@
 [project]
 name = "marqov"
-version = "0.5.0"
+version = "0.2.0"
 description = "Open-source Python SDK for running quantum circuits across multiple hardware backends"
 readme = "README.md"
 requires-python = ">=3.12"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from marqov.backends import is_azure, is_ibm, is_simulator
+from marqov.backends import is_azure, is_braket, is_ibm, is_simulator
 from marqov.circuits import Circuit
 
 
@@ -65,17 +65,12 @@ class MarqovDevice:
             targets = workspace.get_targets(name=self._backend)
             self._provider_device = targets
 
-        else:
+        elif is_braket(self._params):
             from braket.aws import AwsDevice
             from braket.aws.aws_session import AwsSession
             import boto3
 
-            device_arn = self._params.get("device_arn", "")
-            if not device_arn:
-                raise ValueError(
-                    f"device_arn is required for backend '{self._backend}'. "
-                    f"Check the backends table configuration."
-                )
+            device_arn = self._params["device_arn"]
 
             # Extract region from ARN for explicit session
             # ARN format: arn:aws:braket:<region>::device/...
@@ -84,6 +79,13 @@ class MarqovDevice:
 
             session = AwsSession(boto3.Session(region_name=region))
             self._provider_device = AwsDevice(device_arn, aws_session=session)
+
+        else:
+            raise ValueError(
+                f"Cannot determine provider for backend '{self._backend}'. "
+                f"Params must include one of: device_arn (AWS Braket), "
+                f"ibm_token/ibm_channel (IBM Quantum), azure_subscription_id (Azure Quantum)."
+            )
 
         return self._provider_device
 
@@ -172,6 +174,7 @@ class MarqovDevice:
                 qc.measure_all()
             return qc
 
+        # Braket format: local simulators and AWS Braket devices
         return marqov_circuit.to_braket()
 
     def run(self, circuit, shots: int = 1000, **kwargs) -> dict[str, int]:
@@ -233,7 +236,7 @@ class MarqovDevice:
             results = job.get_results()
             return dict(results)
 
-        else:
+        elif is_braket(self._params):
             s3_folder = self._params.get("s3_destination_folder")
             if not s3_folder:
                 # Construct from separate bucket/prefix params (worker passes these)
@@ -273,6 +276,13 @@ class MarqovDevice:
                         f"Try again later or choose a different backend. Original error: {error_msg}"
                     ) from e
                 raise
+
+        else:
+            raise ValueError(
+                f"Cannot determine provider for backend '{self._backend}'. "
+                f"Params must include one of: device_arn (AWS Braket), "
+                f"ibm_token/ibm_channel (IBM Quantum), azure_subscription_id (Azure Quantum)."
+            )
 
 
 def get_device(params: dict) -> MarqovDevice:
