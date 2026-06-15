@@ -66,6 +66,10 @@ azure = [
     "qiskit>=1.0.0",
     "cirq>=1.0.0",
 ]
+ionq = [
+    "requests>=2.31.0",
+    "qiskit>=1.0.0",
+]
 all = [
     "qiskit>=1.0.0",
     "qiskit-ibm-runtime>=0.20.0",

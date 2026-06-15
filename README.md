@@ -89,6 +89,16 @@ async def main():
 asyncio.run(main())
 ```
 
+Or run directly on IonQ hardware via the native REST API (no AWS account needed):
+
+```python
+executor = ExecutorFactory.create_executor("qpu.aria-1", {
+    "provider": "IonQ Direct",
+    "api_key": "your-ionq-api-key",  # or set IONQ_API_KEY
+})
+result = await executor.execute(circuit, shots=1000)
+```
+
 ## Supported Backends
 
 | Backend | Status |
@@ -97,7 +107,7 @@ asyncio.run(main())
 | AWS Braket | ✅ Available |
 | IBM Quantum | ✅ Available |
 | Azure Quantum | ✅ Available |
-| IonQ Direct | [🔧 Open issue #1](https://github.com/marqov-dev/marqov-sdk/issues/1) |
+| IonQ Direct | ✅ Available |
 | Rigetti QCS | [🔧 Open issue #2](https://github.com/marqov-dev/marqov-sdk/issues/2) |
 | Quantinuum | ✅ Available |
 

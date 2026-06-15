@@ -7,10 +7,11 @@ import pytest
 from marqov.circuits import Circuit, bell_state
 from marqov.executors import (
     AzureQuantumExecutor,
-    BaseExecutor,
     BraketExecutor,
     ExecutionResult,
+    ExecutorFactory,
     IBMExecutor,
+    IonQExecutor,
     LocalExecutor,
     QuantinuumExecutor,
 )
@@ -755,3 +756,36 @@ class TestIBMExecutorGetStatus:
             assert status.status == "online"
             assert status.queue_depth is None
             assert status.queue_time_seconds is None
+
+
+class TestExecutorFactory:
+    """Tests for ExecutorFactory provider routing."""
+
+    def test_ionq_direct_is_supported(self) -> None:
+        """IonQ Direct is listed as a supported provider."""
+        assert ExecutorFactory.is_provider_supported("IonQ Direct")
+        assert "IonQ Direct" in ExecutorFactory.get_supported_providers()
+
+    def test_create_ionq_executor(self) -> None:
+        """Factory builds an IonQExecutor for the IonQ Direct provider."""
+        executor = ExecutorFactory.create_executor(
+            "qpu.aria-1",
+            {"provider": "IonQ Direct", "api_key": "test-key"},
+        )
+        assert isinstance(executor, IonQExecutor)
+        assert executor.config.target == "qpu.aria-1"
+        assert executor.config.api_key == "test-key"
+
+    def test_create_ionq_executor_uses_explicit_target(self) -> None:
+        """An explicit target overrides the backend slug."""
+        executor = ExecutorFactory.create_executor(
+            "ignored-slug",
+            {"provider": "IonQ Direct", "target": "simulator"},
+        )
+        assert isinstance(executor, IonQExecutor)
+        assert executor.config.target == "simulator"
+
+    def test_missing_provider_raises(self) -> None:
+        """A config without a provider raises ValueError."""
+        with pytest.raises(ValueError, match="missing 'provider'"):
+            ExecutorFactory.create_executor("sv1", {})

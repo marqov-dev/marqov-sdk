@@ -147,24 +147,58 @@ check both containers are running with `docker ps`.
 
 ## §5 — Running Benchmarks
 
+`benchmarks/suite.py` runs a fixed set of reference circuits — Bell, 3-qubit
+GHZ, and a deterministic depth-5 random circuit — against any configured
+executor and prints a comparison table. It works out of the box with
+`LocalExecutor`, so no credentials are required:
+
 ```bash
-python benchmarks/suite.py --executor local --shots 1000
+python benchmarks/suite.py --executor local --shots 1000 --seed 1234
 ```
 
 Output format — one row per (backend × circuit) combination:
 
-| backend | circuit   | shots | exec_time_ms | top_3_outcomes         |
-|---------|-----------|-------|--------------|------------------------|
-| local   | bell      | 1000  | 12.3         | {"00": 503, "11": 497} |
-| local   | ghz       | 1000  | 18.1         | {"000": 998, "111": 2} |
-| local   | random_d5 | 1000  | 24.7         | {"010": 312, ...}      |
+| backend | circuit   | shots | exec_time_ms | top_3_outcomes                       |
+|---------|-----------|-------|--------------|--------------------------------------|
+| local   | bell      | 1000  | 0.4          | {"11": 502, "00": 498}               |
+| local   | ghz       | 1000  | 0.4          | {"111": 524, "000": 476}             |
+| local   | random_d5 | 1000  | 0.4          | {"010": 262, "100": 254, "110": 243} |
 
 Columns:
 - `backend`: executor name
 - `circuit`: circuit name (`bell`, `ghz`, `random_d5`)
 - `shots`: number of shots
-- `exec_time_ms`: wall time in milliseconds
-- `top_3_outcomes`: counts dict of top 3 measurement outcomes
+- `exec_time_ms`: wall time in milliseconds (varies per run and machine)
+- `top_3_outcomes`: counts of the 3 most frequent measurement outcomes, ordered
+  by count descending
 
-On executor error: the suite skips that backend, logs the error to stderr, and
-continues — it does not abort.
+The measurement outcomes above are reproducible for a fixed `--seed` (it seeds
+both the random circuit and the local sampler); `exec_time_ms` is wall time and
+will differ on your machine.
+
+**Scope.** The suite compares execution time and outcome distribution only.
+Shot-fidelity and queue-overhead metrics are out of scope for this harness;
+device-level queue status is available separately via `BaseExecutor.get_status()`.
+
+**Error handling.** If a backend errors on any circuit, the suite skips that
+*entire* backend (it emits no partial rows for it), logs the backend and the
+failing circuit to stderr, and continues with the next backend — it never
+aborts. If every backend fails the command exits non-zero, so CI can flag a
+fully broken run.
+
+**Benchmarking other backends.** The CLI only constructs the zero-credential
+`local` executor, but `run_suite()` is executor-agnostic — pass a mapping of
+name → `BaseExecutor` to benchmark cloud backends programmatically:
+
+```python
+import asyncio
+from benchmarks.suite import run_suite, format_table
+from marqov.executors import ExecutorFactory, LocalExecutor
+
+executors = {
+    "local": LocalExecutor(),
+    "sv1": ExecutorFactory.create_executor("sv1", braket_config),
+}
+rows = asyncio.run(run_suite(executors, shots=1000))
+print(format_table(rows))
+```
