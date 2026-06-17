@@ -9,6 +9,7 @@ Available executors:
 - QuantinuumExecutor: Quantinuum devices and emulators (via pytket-quantinuum)
 - IBMExecutor: IBM Quantum (Heron r2, Eagle, etc. via Qiskit Runtime)
 - IonQExecutor: IonQ Direct API (native REST, no Braket intermediary)
+- RigettiExecutor: Rigetti QCS QPUs and the local QVM (via pyquil)
 
 Example:
     >>> from marqov.executors import LocalExecutor
@@ -27,6 +28,7 @@ from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
 from marqov.executors.local import LocalExecutor
 from marqov.executors.quantinuum import QuantinuumExecutor, QuantinuumExecutorConfig
+from marqov.executors.rigetti import RigettiExecutor, RigettiExecutorConfig
 from marqov.simulation.executor import SimulationExecutor
 
 __all__ = [
@@ -45,5 +47,7 @@ __all__ = [
     "LocalExecutor",
     "QuantinuumExecutor",
     "QuantinuumExecutorConfig",
+    "RigettiExecutor",
+    "RigettiExecutorConfig",
     "SimulationExecutor",
 ]

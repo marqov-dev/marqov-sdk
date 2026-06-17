@@ -18,6 +18,7 @@ import quantumflow as qf
 
 if TYPE_CHECKING:
     from braket.circuits import Circuit as BraketCircuit
+    from pyquil import Program as PyQuilProgram
 
 
 class Circuit:
@@ -677,6 +678,154 @@ class Circuit:
 
         # tape.operations excludes measurements — no skip logic needed.
         _process_operations(tape.operations)
+        return circuit
+
+    # PyQuil gate name -> Circuit fluent method mapping.
+    _PYQUIL_GATE_MAP: dict[str, str] = {
+        "H": "h",
+        "X": "x",
+        "Y": "y",
+        "Z": "z",
+        "S": "s",
+        "T": "t",
+        "RX": "rx",
+        "RY": "ry",
+        "RZ": "rz",
+        "CNOT": "cnot",
+        "CX": "cnot",
+        "CZ": "cz",
+        "SWAP": "swap",
+    }
+
+    _PYQUIL_ROTATION_GATES: set[str] = {"RX", "RY", "RZ"}
+
+    # Classical declarations and measurement instructions do not affect the
+    # unitary circuit representation imported by this SDK.
+    _PYQUIL_SKIP_INSTRUCTIONS: set[str] = {"Declare", "Measurement", "Halt", "Pragma"}
+
+    @classmethod
+    def _pyquil_float_param(cls, value) -> float:
+        """Return a real-valued PyQuil gate parameter."""
+        try:
+            numeric = complex(value)
+        except (TypeError, ValueError) as exc:
+            raise NotImplementedError(
+                "Circuit.from_pyquil() only supports numeric real-valued "
+                "rotation parameters."
+            ) from exc
+
+        if abs(numeric.imag) > 1e-12:
+            raise NotImplementedError(
+                "Circuit.from_pyquil() only supports real-valued rotation parameters."
+            )
+        return float(numeric.real)
+
+    @classmethod
+    def _try_consume_swap_from_cnots(cls, instructions: list, index: int) -> tuple[int, int, int] | None:
+        """Detect a three-CNOT SWAP decomposition and return (q0, q1, consumed)."""
+        if index + 2 >= len(instructions):
+            return None
+
+        gates = instructions[index : index + 3]
+        try:
+            from pyquil.quilbase import Gate
+        except ImportError:
+            return None
+
+        if not all(isinstance(gate, Gate) for gate in gates):
+            return None
+
+        names = [gate.name.upper() for gate in gates]
+        if names != ["CNOT", "CNOT", "CNOT"]:
+            return None
+
+        q0, q1 = gates[0].get_qubit_indices()
+        if (
+            gates[1].get_qubit_indices() == [q1, q0]
+            and gates[2].get_qubit_indices() == [q0, q1]
+        ):
+            return q0, q1, 3
+
+        return None
+
+    @classmethod
+    def from_pyquil(cls, program: "PyQuilProgram") -> "Circuit":
+        """Import from a PyQuil Program.
+
+        Known gates in the Marqov canonical gate set are mapped directly.
+        SWAP is accepted either as a native ``SWAP`` instruction or as the
+        standard three-``CNOT`` decomposition. Classical declarations and
+        measurements are skipped. Quil-native gates outside the canonical set
+        raise ``NotImplementedError`` so callers can decompose them explicitly
+        before importing.
+
+        Requires PyQuil to be installed (``pip install marqov[pyquil]``).
+
+        Args:
+            program: A PyQuil ``Program`` instance.
+
+        Returns:
+            New Circuit instance.
+
+        Raises:
+            ImportError: If PyQuil is not installed.
+            TypeError: If the input is not a PyQuil Program or uses non-integer qubits.
+            NotImplementedError: If a Quil instruction cannot be mapped.
+        """
+        try:
+            from pyquil import Program
+            from pyquil.quilbase import Gate
+        except ImportError:
+            raise ImportError(
+                "PyQuil is required for Circuit.from_pyquil(). "
+                "Install with: pip install marqov[pyquil]"
+            )
+
+        if not isinstance(program, Program):
+            raise TypeError(f"Expected a PyQuil Program, got {type(program).__name__}")
+
+        circuit = cls()
+        instructions = list(program.instructions)
+        index = 0
+
+        while index < len(instructions):
+            swap_match = cls._try_consume_swap_from_cnots(instructions, index)
+            if swap_match is not None:
+                q0, q1, consumed = swap_match
+                circuit.swap(q0, q1)
+                index += consumed
+                continue
+
+            instruction = instructions[index]
+            index += 1
+
+            if not isinstance(instruction, Gate):
+                instruction_type = type(instruction).__name__
+                if instruction_type in cls._PYQUIL_SKIP_INSTRUCTIONS:
+                    continue
+                raise NotImplementedError(
+                    f"Unsupported PyQuil instruction '{instruction_type}'. "
+                    "Only canonical gates plus declarations and measurements are supported."
+                )
+
+            name = instruction.name.upper()
+            if name not in cls._PYQUIL_GATE_MAP:
+                raise NotImplementedError(
+                    f"Unsupported PyQuil gate '{name}'. Supported gates: "
+                    f"{', '.join(sorted(cls._PYQUIL_GATE_MAP))}"
+                )
+
+            qubits = list(instruction.get_qubit_indices())
+            method_name = cls._PYQUIL_GATE_MAP[name]
+
+            if name in cls._PYQUIL_ROTATION_GATES:
+                angle = cls._pyquil_float_param(instruction.params[0])
+                getattr(circuit, method_name)(angle, qubits[0])
+            elif len(qubits) == 1:
+                getattr(circuit, method_name)(qubits[0])
+            else:
+                getattr(circuit, method_name)(qubits[0], qubits[1])
+
         return circuit
 
     @classmethod

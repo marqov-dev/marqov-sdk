@@ -24,6 +24,7 @@ from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
 from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
 from marqov.executors.local import LocalExecutor
+from marqov.executors.rigetti import RigettiExecutor, RigettiExecutorConfig
 from marqov.simulation.config import SimulationConfig
 from marqov.simulation.executor import SimulationExecutor
 from marqov.executors.quantinuum import QuantinuumExecutor, QuantinuumExecutorConfig
@@ -116,6 +117,10 @@ class ExecutorFactory:
         if provider == "IonQ Direct":
             return cls._create_ionq_executor(backend_slug, backend_config)
 
+        # Rigetti QCS (and local QVM)
+        if provider == "Rigetti QCS":
+            return cls._create_rigetti_executor(backend_slug, backend_config)
+
         # C++ simulation backends (qpp, tnqvm, cudaq, aer)
         if provider == "Quantum Brilliance":
             return cls._create_simulation_executor(backend_slug, backend_config)
@@ -123,7 +128,7 @@ class ExecutorFactory:
         raise ValueError(
             f"Unsupported provider: {provider}. "
             f"Supported providers: AWS Braket, IBM Quantum, Azure Quantum, "
-            f"IonQ Direct, Quantum Brilliance, Local."
+            f"IonQ Direct, Rigetti QCS, Quantum Brilliance, Local."
         )
 
     @classmethod
@@ -308,13 +313,59 @@ class ExecutorFactory:
         config_kwargs: dict[str, Any] = {
             "target": backend_config.get("target", backend_slug),
         }
-        for key in ("api_key", "base_url", "poll_interval_seconds", "timeout_seconds", "noise_model"):
+        for key in (
+            "api_key",
+            "base_url",
+            "poll_interval_seconds",
+            "timeout_seconds",
+            "noise_model",
+        ):
             if key in backend_config:
                 config_kwargs[key] = backend_config[key]
 
         config = IonQExecutorConfig(**config_kwargs)
 
         return IonQExecutor(config)
+
+    @classmethod
+    def _create_rigetti_executor(
+        cls,
+        backend_slug: str,
+        backend_config: dict[str, Any],
+    ) -> RigettiExecutor:
+        """Create a Rigetti QCS executor from configuration.
+
+        No field is strictly required: the quantum-processor id falls back to the
+        backend slug, so ``{"provider": "Rigetti QCS"}`` with a ``"2q-qvm"`` slug
+        runs against a local QVM without any cloud account.
+
+        Args:
+            backend_slug: Backend slug used as the quantum-processor id if not
+                given (e.g. ``"2q-qvm"``, ``"Ankaa-3"``).
+            backend_config: Configuration with optional quantum_processor_id,
+                as_qvm, and timeout options.
+
+        Returns:
+            Configured RigettiExecutor instance.
+        """
+        # Only forward keys present in backend_config and rely on
+        # RigettiExecutorConfig's own defaults otherwise, so factory and dataclass
+        # defaults can't drift apart. The processor id falls back to the slug.
+        config_kwargs: dict[str, Any] = {
+            "quantum_processor_id": backend_config.get("quantum_processor_id", backend_slug),
+        }
+        for key in (
+            "as_qvm",
+            "compiler_timeout_seconds",
+            "execution_timeout_seconds",
+            "timeout_seconds",
+        ):
+            if key in backend_config:
+                config_kwargs[key] = backend_config[key]
+
+        config = RigettiExecutorConfig(**config_kwargs)
+
+        return RigettiExecutor(config)
 
     @classmethod
     def _create_simulation_executor(
@@ -350,6 +401,7 @@ class ExecutorFactory:
             "IBM Quantum",
             "Azure Quantum",
             "IonQ Direct",
+            "Rigetti QCS",
             "Quantum Brilliance",
             "Local",
             "Quantinuum",

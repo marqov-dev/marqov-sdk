@@ -57,6 +57,8 @@ quantinuum = [
     "pytket-quantinuum>=0.40.0",
     "pytket-qiskit>=0.50.0",
     "qiskit>=1.0.0",
+pyquil = [
+    "pyquil>=4.0.0",
 ]
 openqasm = [
     "qiskit>=1.0.0",
@@ -70,6 +72,9 @@ ionq = [
     "requests>=2.31.0",
     "qiskit>=1.0.0",
 ]
+rigetti = [
+    "pyquil>=4.0.0",
+]
 all = [
     "qiskit>=1.0.0",
     "qiskit-ibm-runtime>=0.20.0",
@@ -80,6 +85,9 @@ all = [
     "pytket-quantinuum>=0.40.0",
     "pytket-qiskit>=0.50.0",
     "qiskit>=1.0.0",
+    "pyquil>=4.0.0",
+    "requests>=2.31.0",
+    "pyquil>=4.0.0",
 ]
 
 [project.scripts]
