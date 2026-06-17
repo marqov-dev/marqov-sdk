@@ -320,7 +320,7 @@ class ExecutorFactory:
             "Quantum Brilliance",
             "Local",
             "Quantinuum",
-            # "IonQ Direct",     # Coming soon
+            "IonQ Direct",
         ]
 
     @classmethod
