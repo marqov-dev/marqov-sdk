@@ -293,6 +293,97 @@ class Circuit:
         circuit._qf = qf.braket_to_circuit(braket_circuit)
         return circuit
 
+    @classmethod
+    def from_pyquil(cls, pyquil_program) -> "Circuit":
+        """Import from a pyQuil Program.
+
+        Known gates are mapped directly. Unsupported gates raise a
+        NotImplementedError with a clear message.
+
+        Requires pyQuil to be installed (``pip install marqov[pyquil]``).
+
+        Args:
+            pyquil_program: A pyQuil ``Program`` instance.
+
+        Returns:
+            New Circuit instance.
+
+        Raises:
+            ImportError: If pyQuil is not installed.
+            TypeError: If the input is not a pyQuil Program.
+            NotImplementedError: If a gate is not in the canonical set.
+        """
+        try:
+            from pyquil import Program
+            from pyquil.gates import (
+                H, X, Y, Z, S, T,
+                RX, RY, RZ,
+                CNOT, CZ, SWAP,
+                MEASURE
+            )
+        except ImportError:
+            raise ImportError(
+                "pyQuil is required for Circuit.from_pyquil(). "
+                "Install with: pip install marqov[pyquil]"
+            )
+
+        if not isinstance(pyquil_program, Program):
+            raise TypeError(
+                f"Expected a pyQuil Program, got {type(pyquil_program).__name__}"
+            )
+
+        # PyQuil gate name -> Circuit fluent method mapping
+        _PYQUIL_GATE_MAP = {
+            "H": "h",
+            "X": "x",
+            "Y": "y",
+            "Z": "z",
+            "S": "s",
+            "T": "t",
+            "RX": "rx",
+            "RY": "ry",
+            "RZ": "rz",
+            "CNOT": "cnot",
+            "CZ": "cz",
+            "SWAP": "swap",
+        }
+
+        _PYQUIL_ROTATION_GATES = {"RX", "RY", "RZ"}
+        _PYQUIL_SKIP = {"MEASURE"}
+
+        circuit = cls()
+
+        for instruction in pyquil_program:
+            gate = instruction.operator
+
+            # Skip measurements
+            if isinstance(gate, MEASURE):
+                continue
+
+            gate_name = gate.__class__.__name__
+
+            if gate_name in _PYQUIL_SKIP:
+                continue
+
+            if gate_name not in _PYQUIL_GATE_MAP:
+                raise NotImplementedError(
+                    f"Unsupported pyQuil gate '{gate_name}'. "
+                    f"Supported gates: {', '.join(sorted(_PYQUIL_GATE_MAP))}"
+                )
+
+            method_name = _PYQUIL_GATE_MAP[gate_name]
+            qubits = [q.index for q in gate.qubits]
+
+            if gate_name in _PYQUIL_ROTATION_GATES:
+                angle = float(gate.params[0])
+                getattr(circuit, method_name)(angle, qubits[0])
+            elif len(qubits) == 1:
+                getattr(circuit, method_name)(qubits[0])
+            else:
+                getattr(circuit, method_name)(qubits[0], qubits[1])
+
+        return circuit
+
     # Qiskit gate name -> Circuit fluent method mapping.
     # Used by from_qiskit() to convert decomposed Qiskit circuits.
     _QISKIT_GATE_MAP: dict[str, str] = {
@@ -646,6 +737,76 @@ class Circuit:
         # tape.operations excludes measurements — no skip logic needed.
         _process_operations(tape.operations)
         return circuit
+
+    def to_pennylane(self) -> "pennylane.tape.QuantumTape":
+        """Export to a PennyLane QuantumTape.
+
+        Known gates are mapped directly using the reverse of the
+        ``from_pennylane`` gate mapping. Unsupported gates raise a
+        ``ValueError``.
+
+        Requires PennyLane to be installed (``pip install marqov[pennylane]``).
+
+        Args:
+            None
+
+        Returns:
+            A PennyLane ``QuantumTape`` instance.
+
+        Raises:
+            ImportError: If PennyLane is not installed.
+            ValueError: If a gate cannot be mapped.
+        """
+        try:
+            import pennylane as qml
+        except ImportError:
+            raise ImportError(
+                "PennyLane is required for Circuit.to_pennylane(). "
+                "Install with: pip install marqov[pennylane]"
+            )
+
+        # Reverse gate map: Marqov method name -> PennyLane gate name
+        _MARQOV_TO_PENNYLANE_MAP = {
+            "h": qml.Hadamard,
+            "x": qml.PauliX,
+            "y": qml.PauliY,
+            "z": qml.PauliZ,
+            "s": qml.S,
+            "t": qml.T,
+            "rx": qml.RX,
+            "ry": qml.RY,
+            "rz": qml.RZ,
+            "cnot": qml.CNOT,
+            "cz": qml.CZ,
+            "swap": qml.SWAP,
+        }
+
+        _MARQOV_ROTATION_GATES = {"rx", "ry", "rz"}
+
+        operations = []
+        for gate in self._qf._elements:
+            gate_name = gate.name.lower()
+            qubits = list(gate.qubits)
+            params = list(gate.params) if hasattr(gate, "params") and gate.params else []
+
+            if gate_name not in _MARQOV_TO_PENNYLANE_MAP:
+                raise ValueError(
+                    f"Unsupported Marqov gate '{gate_name}' cannot be converted to PennyLane. "
+                    f"Supported gates: {list(_MARQOV_TO_PENNYLANE_MAP.keys())}"
+                )
+
+            pennylane_gate = _MARQOV_TO_PENNYLANE_MAP[gate_name]
+
+            if gate_name in _MARQOV_ROTATION_GATES:
+                # Rotation gates have an angle parameter
+                operations.append(pennylane_gate(params[0], wires=qubits))
+            else:
+                # Non-rotation gates
+                operations.append(pennylane_gate(wires=qubits))
+
+        # Create QuantumTape from operations
+        tape = qml.tape.QuantumScript(operations)
+        return tape
 
     @classmethod
     def from_openqasm(cls, qasm_string: str) -> Circuit:

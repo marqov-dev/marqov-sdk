@@ -325,6 +325,123 @@ class TestFromCirq:
         assert np.isclose(np.abs(amps[3]) ** 2, 0.5, atol=0.01)
 
 
+class TestFromPyquil:
+    """Tests for Circuit.from_pyquil()."""
+
+    def test_bell_state_roundtrip(self) -> None:
+        """Bell state survives pyQuil roundtrip (state vector preserved)."""
+        import numpy as np
+
+        original = bell_state()
+        pyquil_program = original.to_pyquil()
+        imported = Circuit.from_pyquil(pyquil_program)
+
+        orig_amps = original.simulate().tensor.flatten()
+        imported_amps = imported.simulate().tensor.flatten()
+        assert np.allclose(np.abs(orig_amps), np.abs(imported_amps))
+
+    def test_handwritten_bell_state(self) -> None:
+        """Compare with hand-written pyQuil Bell state program."""
+        import numpy as np
+        from pyquil import Program
+        from pyquil.gates import H, CNOT
+
+        # Build hand-written pyQuil Bell state
+        pyquil_bell = Program()
+        pyquil_bell += H(0)
+        pyquil_bell += CNOT(0, 1)
+
+        # Import and compare with our bell_state()
+        imported = Circuit.from_pyquil(pyquil_bell)
+        orig_amps = bell_state().simulate().tensor.flatten()
+        imported_amps = imported.simulate().tensor.flatten()
+        assert np.allclose(np.abs(orig_amps), np.abs(imported_amps))
+
+    def test_single_qubit_gates(self) -> None:
+        """All single-qubit gates convert correctly."""
+        from pyquil import Program
+        from pyquil.gates import H, X, Y, Z, S, T
+
+        pyquil_prog = Program()
+        pyquil_prog += H(0)
+        pyquil_prog += X(1)
+        pyquil_prog += Y(2)
+        pyquil_prog += Z(3)
+        pyquil_prog += S(4)
+        pyquil_prog += T(5)
+
+        imported = Circuit.from_pyquil(pyquil_prog)
+        assert imported.num_qubits == 6
+
+    def test_rotation_gates_preserve_angles(self) -> None:
+        """Parameterized rotation gates preserve angles through roundtrip."""
+        import math
+        import numpy as np
+        from pyquil import Program
+        from pyquil.gates import RX, RY, RZ
+
+        original = Circuit().rx(math.pi / 3, 0).ry(math.pi / 5, 1).rz(math.pi / 7, 2)
+        pyquil_program = original.to_pyquil()
+        imported = Circuit.from_pyquil(pyquil_program)
+
+        orig_amps = original.simulate().tensor.flatten()
+        imported_amps = imported.simulate().tensor.flatten()
+        assert np.allclose(np.abs(orig_amps), np.abs(imported_amps))
+
+    def test_two_qubit_gates(self) -> None:
+        """Two-qubit gates (CNOT, CZ, SWAP) convert correctly."""
+        import numpy as np
+        from pyquil import Program
+        from pyquil.gates import CNOT, CZ, SWAP
+
+        original = Circuit().h(0).cnot(0, 1).cz(1, 2).swap(0, 2)
+        pyquil_program = original.to_pyquil()
+        imported = Circuit.from_pyquil(pyquil_program)
+
+        orig_amps = original.simulate().tensor.flatten()
+        imported_amps = imported.simulate().tensor.flatten()
+        assert np.allclose(np.abs(orig_amps), np.abs(imported_amps))
+
+    def test_measurements_skipped(self) -> None:
+        """Measurement gates are silently skipped."""
+        from pyquil import Program
+        from pyquil.gates import H, CNOT, MEASURE
+
+        pyquil_prog = Program()
+        pyquil_prog += H(0)
+        pyquil_prog += CNOT(0, 1)
+        pyquil_prog += MEASURE(0, ro=None)
+        pyquil_prog += MEASURE(1, ro=None)
+
+        imported = Circuit.from_pyquil(pyquil_prog)
+        assert imported.num_qubits == 2
+
+    def test_type_error_on_wrong_input(self) -> None:
+        """TypeError raised for non-Program input."""
+        with pytest.raises(TypeError, match="Expected a pyQuil Program"):
+            Circuit.from_pyquil("not a program")
+
+    def test_not_implemented_for_unsupported_gate(self) -> None:
+        """NotImplementedError raised for gates outside canonical set."""
+        from pyquil import Program
+        from pyquil.gates import PHASE
+
+        pyquil_prog = Program()
+        pyquil_prog += PHASE(0.5, 0)
+
+        with pytest.raises(NotImplementedError, match="Unsupported pyQuil gate"):
+            Circuit.from_pyquil(pyquil_prog)
+
+    def test_import_error_without_pyquil(self) -> None:
+        """ImportError raised when pyQuil not installed."""
+        import sys
+        from unittest.mock import patch
+
+        with patch.dict(sys.modules, {"pyquil": None, "pyquil.gates": None}):
+            with pytest.raises(ImportError, match="pyQuil is required"):
+                Circuit.from_pyquil(None)
+
+
 class TestFromPennylane:
     """Tests for Circuit.from_pennylane()."""
 
@@ -444,6 +561,39 @@ class TestFromPennylane:
         # Bell state: equal probability on |00⟩ and |11⟩
         assert np.isclose(np.abs(amps[0]) ** 2, 0.5, atol=0.01)
         assert np.isclose(np.abs(amps[3]) ** 2, 0.5, atol=0.01)
+
+    def test_to_pennylane_roundtrip(self) -> None:
+        """Circuit → tape → Circuit produces an equivalent circuit."""
+        import numpy as np
+        import pennylane as qml
+
+        # Build a Marqov circuit
+        original = Circuit().h(0).cnot(0, 1).rx(0.5, 0)
+
+        # Convert to PennyLane tape
+        tape = original.to_pennylane()
+
+        # Convert back to Marqov
+        recovered = Circuit.from_pennylane(tape)
+
+        # Simulate both and compare
+        original_amps = original.simulate().tensor.flatten()
+        recovered_amps = recovered.simulate().tensor.flatten()
+
+        # States should be equivalent (up to global phase)
+        assert np.allclose(np.abs(original_amps), np.abs(recovered_amps), atol=0.01)
+
+    def test_to_pennylane_basic(self) -> None:
+        """to_pennylane() produces a valid QuantumTape."""
+        import pennylane as qml
+
+        circuit = Circuit().h(0).cnot(0, 1)
+        tape = circuit.to_pennylane()
+
+        assert isinstance(tape, qml.tape.QuantumScript)
+        assert len(tape.operations) == 2
+        assert tape.operations[0].name == "Hadamard"
+        assert tape.operations[1].name == "CNOT"
 
 
 class TestOpenQASM:
