@@ -398,8 +398,41 @@ class TestQuantinuumExecutor:
         assert executor.config == config
         assert executor.name == "QuantinuumExecutor"
 
-class TestAzureQuantumExecutor:
-    """Tests for AzureQuantumExecutor."""
+
+    def test_pytket_counts_tuple_keys(self) -> None:
+        raw = {(0, 0): 512, (1, 1): 488}
+        assert QuantinuumExecutor._pytket_counts_to_bitstring(raw) == {"00": 512, "11": 488}
+   
+    def test_pytket_counts_string_keys_passthrough(self) -> None:
+        raw = {"00": 300, "11": 700}
+        assert QuantinuumExecutor._pytket_counts_to_bitstring(raw) == {"00": 300, "11": 700}
+
+    @pytest.mark.asyncio
+    async def test_execute_converts_tuple_counts(self) -> None:
+        """execute() converts pytket tuple counts to bitstring ExecutionResult.counts."""
+        mock_result = MagicMock()
+        mock_result.get_counts.return_value = {(0, 0): 512, (1, 1): 488}
+
+        config = QuantinuumExecutorConfig(
+            device_name="H2-1",
+            simulator="state-vector",
+            group="test-group",
+            label="test-label",
+        )
+        executor = QuantinuumExecutor(config)
+
+        with patch.object(executor, "_get_backend", new_callable=AsyncMock, return_value=MagicMock()):
+            with patch.object(executor, "_run_sync", return_value=(mock_result, "job-123")):
+                with patch.object(Circuit, "to_pytket", return_value=MagicMock()):
+                    result = await executor.execute(bell_state(), shots=1000)
+
+        assert isinstance(result, ExecutionResult)
+        assert result.counts == {"00": 512, "11": 488}
+        assert result.shots == 1000
+        assert result.metadata["job_id"] == "job-123"
+
+    class TestAzureQuantumExecutor:
+        """Tests for AzureQuantumExecutor."""
 
     def test_config_validation(self) -> None:
         """Config validates framework parameter."""
