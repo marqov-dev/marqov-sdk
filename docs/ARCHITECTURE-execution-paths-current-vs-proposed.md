@@ -95,13 +95,14 @@ of `detect_provider()` and the adapters entirely.
 | Benefit | Delivered by |
 |---|---|
 | Routing decided in one place | Step 1 — shared `detect_provider()` |
-| Clearer public surface (signpost sync vs. async) | Step 2 |
-| **A provider bug is fixed once** — incl. counts-extraction bugs like the IBM `DataBin` issue | **Step 3 adapter layer**, *not* step 1 |
+| **A provider bug is fixed once** — incl. counts-extraction bugs like the IBM `DataBin` issue | **Step 2 adapter layer**, *not* step 1 |
+| Clearer public surface (signpost sync vs. async) | Step 3 |
+| A single execution core (sync facade delegates to async) | Step 4 (gated) |
 
 > ⚠ Step 1 alone unifies *routing*, not *counts extraction*. Bugs like the IBM
 > `DataBin` fix live in per-provider extraction, which stays duplicated until
-> the adapter layer lands. Schedule the adapter work concurrently with or
-> immediately after step 1 — that is where the duplicated-bug-fix pain actually is.
+> the adapter layer (step 2) lands. That is where the duplicated-bug-fix pain
+> actually is, so step 2 runs concurrently with or immediately after step 1.
 
 ## Cross-cutting invariants
 
@@ -112,19 +113,25 @@ write this section's checks before adapter/routing work begins.
 | Invariant | Enforcing check |
 |---|---|
 | Routing exists in exactly one place — no `is_braket`/`is_ibm`/`is_azure` sniffing outside `detect_provider()` | CI grep-gate (or a custom `ruff` rule) failing on provider-sniffing predicates referenced outside the routing module |
-| Both facades produce identical counts/measurement semantics for the same circuit+backend | Shared conformance suite parametrized over (provider × facade), asserting bitstring-keyed count dicts match |
+| Both facades produce identical counts/measurement semantics for the same circuit+backend | Shared conformance suite parametrized over (provider × facade), asserting bitstring-keyed count dicts match — **authored in step 2 with the adapter layer** (it is the pin the step-4 cutover depends on; it must exist before, not at, cutover) |
 | The vendored third copy cannot drift | Drift-gate in **marqov-platform's** CI comparing `marqov-platform/sdk/marqov/device.py` to the canonical SDK (the SDK repo's CI cannot see the platform repo), or — preferred once the PyPI/`quantumflow`-VCS blocker clears — delete the vendored copy and depend on the published package |
 | Adapter interface is total — every provider implements build·convert·run·counts | ABC with abstract methods + `mypy` enforcement; registry-completeness test asserting every supported provider has a registered adapter |
-| Count extraction normalizes vendor formats (IBM `DataBin`, Braket `GateModelQuantumTaskResult`, …) to one canonical type | Adapter return type constrained to `dict[str, int]` (or a `Counts` newtype) + per-provider unit tests |
+| Count extraction normalizes vendor formats (IBM `DataBin`, Braket `GateModelQuantumTaskResult`, …) to one canonical type | **Decision: use a `Counts = NewType("Counts", dict[str, int])`**, not a bare `dict[str, int]`. A bare dict can't be distinguished from any other string→int map at the type level and won't catch an adapter that forgets to normalize; the newtype forces an explicit `Counts(...)` wrap at the normalization boundary (a *static* guarantee — `mypy` flags an un-wrapped return). Decide before adapters are written: changing the return type afterward touches every adapter. Pair with per-provider unit tests. |
 
 ### Incremental path (don't big-bang it)
 1. **Now (low risk):** land `detect_provider()` and make it the **shared**
    routing used by *both* paths — removes the divergence even while execution
    facades stay separate. (This is the existing 2026-06-12 refactor plan,
    extended to be shared.)
-2. **Signpost:** document sync-for-scripts vs. async-for-infra; consider
+2. **Adapter layer + conformance suite** (concurrent with / immediately after
+   step 1): build the per-provider adapters (build·convert·run·counts→canonical
+   `Counts`) as the single source of truth, and **author the shared conformance
+   suite here** — parametrized over (provider × facade). This is where the
+   "fix a provider bug once" benefit is actually delivered, and the conformance
+   suite authored here is the pin the step-4 cutover later depends on.
+3. **Signpost:** document sync-for-scripts vs. async-for-infra; consider
    demoting one from the top-level public API.
-3. **Later — make `MarqovDevice.run()` delegate to one async core.** This is
+4. **Later — make `MarqovDevice.run()` delegate to one async core.** This is
    the riskiest step. `MarqovDevice.run()` is a public contract used by
    platform-generated scripts — treat as a breaking change. **Two decisions
    must be resolved before this step is scheduled, not deferred:**
@@ -139,7 +146,11 @@ write this section's checks before adapter/routing work begins.
      fail. Same hazard in Jupyter/notebooks and Temporal activity threads.
      **Decision required:** confirm the call-site contract, or use a
      loop-aware shim (detect a running loop and dispatch to a worker thread)
-     instead of bare `asyncio.run()`.
+     instead of bare `asyncio.run()`. *Caveat for the worker-thread shim:* the
+     adapter's `run` then executes off the calling thread, so any vendor SDK
+     with thread-affinity or thread-local auth/session state (some Qiskit
+     Runtime and Azure client sessions hold connection state) must be verified
+     under that path — settle this in the decision, not during implementation.
    - **Config representation.** Make the typed `*ExecutorConfig` the single
      internal representation. The sync facade builds a typed config from its
      param-dict (node `N` in the diagram) *before* routing; `detect_provider()`
@@ -147,5 +158,6 @@ write this section's checks before adapter/routing work begins.
      `detect_provider()` accept both shapes — that re-introduces the dual-shape
      problem this refactor exists to remove.
 
-   Also confirm counts/measurement semantics match across the two paths (pinned
-   by the conformance suite in Cross-cutting invariants) before cutover.
+   Also confirm counts/measurement semantics match across the two paths before
+   cutover — pinned by the conformance suite authored back in step 2 (it must
+   already exist by the time this step runs).
