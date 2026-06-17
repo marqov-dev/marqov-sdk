@@ -71,19 +71,51 @@ flowchart TD
     U1 --> F1["MarqovDevice.run()<br/><i>thin sync facade</i>"]
     U2 --> F2["BaseExecutor.execute()<br/><i>thin async facade</i>"]
 
-    F1 --> R
-    F2 --> R
+    F1 --> N["param-dict → typed config<br/><i>normalization, sync facade only</i>"]
+    N --> R
+    F2 -->|"already typed config"| R
 
-    R{{"detect_provider(backend, params)<br/>ONE routing decision, shared"}}
-    R --> A["Provider adapters — one per provider<br/>Braket · IBM · Azure · Local · Sim<br/><b>build · convert · run · counts</b><br/>ONE source of truth"]
+    R{{"detect_provider(...) on typed config<br/>ONE routing decision, shared"}}
+    R --> A["Provider adapters — one per provider<br/>Braket · IBM · Azure · Local · Sim<br/><b>build · convert · run · counts→canonical</b><br/>ONE source of truth"]
     A --> V["Vendor SDKs<br/>Braket · Qiskit · Azure · QuantumFlow"]
 
     classDef good fill:#eafaf1,stroke:#2a9d4a,color:#064;
+    classDef norm fill:#eef3fb,stroke:#3b6fb0,color:#234;
     class R,A good;
+    class N norm;
 ```
 
-**Benefits:** single routing + single adapter layer; sync and async are faces
-over one core; a provider bug is fixed once; clearer public surface.
+The **typed config is the single internal representation.** The async facade
+already constructs typed `*ExecutorConfig`; the sync facade gets a thin
+param-dict→typed-config adapter (node `N`) so the dual-shape problem stays out
+of `detect_provider()` and the adapters entirely.
+
+**Benefits (and what delivers each):**
+
+| Benefit | Delivered by |
+|---|---|
+| Routing decided in one place | Step 1 — shared `detect_provider()` |
+| Clearer public surface (signpost sync vs. async) | Step 2 |
+| **A provider bug is fixed once** — incl. counts-extraction bugs like the IBM `DataBin` issue | **Step 3 adapter layer**, *not* step 1 |
+
+> ⚠ Step 1 alone unifies *routing*, not *counts extraction*. Bugs like the IBM
+> `DataBin` fix live in per-provider extraction, which stays duplicated until
+> the adapter layer lands. Schedule the adapter work concurrently with or
+> immediately after step 1 — that is where the duplicated-bug-fix pain actually is.
+
+## Cross-cutting invariants
+
+These must hold across **both** facades and **every** adapter once the
+convergence lands. Each is paired with the machine check that enforces it;
+write this section's checks before adapter/routing work begins.
+
+| Invariant | Enforcing check |
+|---|---|
+| Routing exists in exactly one place — no `is_braket`/`is_ibm`/`is_azure` sniffing outside `detect_provider()` | CI grep-gate (or a custom `ruff` rule) failing on provider-sniffing predicates referenced outside the routing module |
+| Both facades produce identical counts/measurement semantics for the same circuit+backend | Shared conformance suite parametrized over (provider × facade), asserting bitstring-keyed count dicts match |
+| The vendored third copy cannot drift | Drift-gate in **marqov-platform's** CI comparing `marqov-platform/sdk/marqov/device.py` to the canonical SDK (the SDK repo's CI cannot see the platform repo), or — preferred once the PyPI/`quantumflow`-VCS blocker clears — delete the vendored copy and depend on the published package |
+| Adapter interface is total — every provider implements build·convert·run·counts | ABC with abstract methods + `mypy` enforcement; registry-completeness test asserting every supported provider has a registered adapter |
+| Count extraction normalizes vendor formats (IBM `DataBin`, Braket `GateModelQuantumTaskResult`, …) to one canonical type | Adapter return type constrained to `dict[str, int]` (or a `Counts` newtype) + per-provider unit tests |
 
 ### Incremental path (don't big-bang it)
 1. **Now (low risk):** land `detect_provider()` and make it the **shared**
@@ -92,9 +124,28 @@ over one core; a provider bug is fixed once; clearer public surface.
    extended to be shared.)
 2. **Signpost:** document sync-for-scripts vs. async-for-infra; consider
    demoting one from the top-level public API.
-3. **Later (optional, needs feasibility check):** make `MarqovDevice.run()`
-   delegate to `asyncio.run(executor.execute(...))` so there is literally one
-   execution core. Blocked on reconciling config shapes (sniffed param-dicts
-   vs. typed `*ExecutorConfig`) and confirming counts/measurement semantics
-   match. `MarqovDevice.run()` is a public contract used by platform-generated
-   scripts — treat as a breaking change.
+3. **Later — make `MarqovDevice.run()` delegate to one async core.** This is
+   the riskiest step. `MarqovDevice.run()` is a public contract used by
+   platform-generated scripts — treat as a breaking change. **Two decisions
+   must be resolved before this step is scheduled, not deferred:**
+
+   - **Event-loop safety (call-site contract).** A naïve
+     `asyncio.run(executor.execute(...))` inside `run()` raises
+     `RuntimeError: asyncio.run() cannot be called from a running event loop`
+     whenever `run()` is invoked from within an active loop. This is **not
+     hypothetical**: `platform_worker.py:868-869` already executes coroutine
+     `run_experiment` scripts via `asyncio.run(fn(device, params))`, so a
+     `device.run()` call inside such a script would nest `asyncio.run()` and
+     fail. Same hazard in Jupyter/notebooks and Temporal activity threads.
+     **Decision required:** confirm the call-site contract, or use a
+     loop-aware shim (detect a running loop and dispatch to a worker thread)
+     instead of bare `asyncio.run()`.
+   - **Config representation.** Make the typed `*ExecutorConfig` the single
+     internal representation. The sync facade builds a typed config from its
+     param-dict (node `N` in the diagram) *before* routing; `detect_provider()`
+     and the adapters never see the param-dict shape. Do **not** let
+     `detect_provider()` accept both shapes — that re-introduces the dual-shape
+     problem this refactor exists to remove.
+
+   Also confirm counts/measurement semantics match across the two paths (pinned
+   by the conformance suite in Cross-cutting invariants) before cutover.
