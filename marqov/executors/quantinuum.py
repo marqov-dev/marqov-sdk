@@ -76,7 +76,7 @@ class QuantinuumExecutor(BaseExecutor):
         """Initialize QuantinuumExecutor.
 
         Args:
-            config: Executur configuration including device settings.
+            config: Executor configuration including device settings.
         """
         self.config = config
         self._api_handler = self.config.api_handler 
@@ -176,7 +176,7 @@ class QuantinuumExecutor(BaseExecutor):
         backend = await self._get_backend()
         tket_circuit = circuit.to_pytket()
         result, job_id = await loop.run_in_executor(
-            None, self._run_sync, backend, tket_circuit, shots, **kwargs
+            None, partial(self._run_sync, backend, tket_circuit, shots, **kwargs)
         )
         wall_time = time.perf_counter() - start_time
         self._current_job_id = job_id
