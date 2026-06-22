@@ -10,7 +10,7 @@ import asyncio
 import time
 from functools import partial
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping
 
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 
@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from pytket.extensions.quantinuum.backends.quantinuum import (
         QuantinuumBackendCompilationConfig,
     )
-
 
 @dataclass
 class QuantinuumExecutorConfig:
@@ -77,7 +76,7 @@ class QuantinuumExecutor(BaseExecutor):
         """Initialize QuantinuumExecutor.
 
         Args:
-            config: Executur configuration including device settings.
+            config: Executor configuration including device settings.
         """
         self.config = config
         self._api_handler = self.config.api_handler 
@@ -139,6 +138,21 @@ class QuantinuumExecutor(BaseExecutor):
         result = backend.get_result(handle, **get_result_kwargs)
         return result, job_id
 
+    @staticmethod
+    def _pytket_counts_to_bitstring(counts_dict: Mapping[Any, int]) -> dict[str, int]:
+        """Convert tuples or bitstrings to a dictionary of bitstrings.
+        Args:
+            counts_dict: Dictionary of tuples to convert.
+        Returns:
+            Dictionary of bitstrings to counts.
+        """     
+        return {
+            key if isinstance(key, str) else "".join(str(b) for b in key): count
+            for key, count in counts_dict.items()
+        }
+
+        
+
     async def execute(
         self,
         circuit: Circuit,
@@ -162,11 +176,11 @@ class QuantinuumExecutor(BaseExecutor):
         backend = await self._get_backend()
         tket_circuit = circuit.to_pytket()
         result, job_id = await loop.run_in_executor(
-            None, self._run_sync, backend, tket_circuit, shots, **kwargs
+            None, partial(self._run_sync, backend, tket_circuit, shots, **kwargs)
         )
         wall_time = time.perf_counter() - start_time
         self._current_job_id = job_id
-        counts = dict(result.get_counts())
+        counts = self._pytket_counts_to_bitstring(result.get_counts())
         return ExecutionResult(
             backend=self.config.device_name,
             counts=counts,

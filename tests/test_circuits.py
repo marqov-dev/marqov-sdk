@@ -82,7 +82,7 @@ class TestToPytket:
     """Tests for Circuit.to_pytket()."""
     
     def test_to_pytket_bell_state(self) -> None:
-        """Bell state converts to PyTket circuit."""
+        """Bell state converts to pytket Circuit object."""
 
         from pytket import Circuit as PytketCircuit
         from pytket.circuit import OpType
