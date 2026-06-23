@@ -432,8 +432,8 @@ class TestQuantinuumExecutor:
         assert result.shots == 1000
         assert result.metadata["job_id"] == "job-123"
 
-    class TestAzureQuantumExecutor:
-        """Tests for AzureQuantumExecutor."""
+class TestAzureQuantumExecutor:
+    """Tests for AzureQuantumExecutor."""
 
     def test_config_validation(self) -> None:
         """Config validates framework parameter."""
