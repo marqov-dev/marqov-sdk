@@ -239,6 +239,38 @@ class Circuit:
         """
         return qf.transpile(self._qf, output_format="pyquil")
 
+    def to_pytket(self):
+        """Convert to pytket Circuit.
+
+        Returns:
+            pytket Circuit object.
+
+        Raises:
+            ImportError: If pytket is not installed.
+            NotImplementedError: If the circuit contains an unsupported gate.
+        """
+        try:
+            from pytket.extensions.qiskit import qiskit_to_tk
+        except ImportError:
+            raise ImportError(
+                "pytket is required for Circuit.to_pytket(). "
+                "Install with: pip install pytket pytket-qiskit"
+            )
+
+        qiskit_circuit = self.to_qiskit()
+
+        for instruction in qiskit_circuit.data:
+            name = instruction.operation.name
+            if name in self._SKIP_INSTRUCTIONS:
+                continue
+            if name not in self._QISKIT_GATE_MAP:
+                raise NotImplementedError(
+                    f"Unsupported gate '{name}' after decomposition. "
+                    f"Supported gates: {', '.join(sorted(self._QISKIT_GATE_MAP))}"
+                )
+
+        return qiskit_to_tk(qiskit_circuit)
+
     def to_openqasm(self, version: int = 2) -> str:
         """Export circuit as an OpenQASM string.
 

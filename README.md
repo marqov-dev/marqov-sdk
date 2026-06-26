@@ -118,7 +118,7 @@ result = await executor.execute(circuit, shots=1000)
 | Azure Quantum | ✅ Available |
 | IonQ Direct | ✅ Available |
 | Rigetti QCS | ✅ Available |
-| Quantinuum | [🔧 Open issue #6](https://github.com/marqov-dev/marqov-sdk/issues/6) |
+| Quantinuum | ✅ Available |
 
 ## Circuit Interop
 

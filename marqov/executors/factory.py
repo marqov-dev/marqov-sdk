@@ -1,7 +1,7 @@
 """Executor factory for multi-cloud quantum backend support.
 
 This module provides a factory pattern for creating executors based on provider.
-Supports AWS Braket, IBM Quantum, Azure Quantum, and IonQ Direct API.
+Supports AWS Braket, Quantinuum, IBM Quantum, Azure Quantum, and IonQ Direct API.
 
 Example:
     >>> backend_config = {
@@ -27,6 +27,7 @@ from marqov.executors.local import LocalExecutor
 from marqov.executors.rigetti import RigettiExecutor, RigettiExecutorConfig
 from marqov.simulation.config import SimulationConfig
 from marqov.simulation.executor import SimulationExecutor
+from marqov.executors.quantinuum import QuantinuumExecutor, QuantinuumExecutorConfig
 
 if TYPE_CHECKING:
     pass
@@ -43,6 +44,7 @@ class ExecutorFactory:
         - AWS Braket: Simulators (SV1, DM1, TN1) and QPUs (IonQ, Rigetti, IQM, QuEra)
         - IBM Quantum: Heron r2, Eagle processors via Qiskit Runtime SamplerV2
         - Azure Quantum: Quantinuum, PASQAL, IonQ, Rigetti (Qiskit/Cirq support)
+        - Quantinuum: Quantinuum devices and emulators (via pytket-quantinuum)
         - Local: QuantumFlow simulator (no cloud required)
         - IonQ Direct: Native IonQ REST API (no AWS/Braket intermediary)
 
@@ -102,6 +104,10 @@ class ExecutorFactory:
         # IBM Quantum
         if provider == "IBM Quantum":
             return cls._create_ibm_executor(backend_slug, backend_config)
+
+        # Quantinuum
+        if provider == "Quantinuum":
+            return cls._create_quantinuum_executor(backend_slug, backend_config)
 
         # Azure Quantum
         if provider == "Azure Quantum":
@@ -163,6 +169,40 @@ class ExecutorFactory:
         )
 
         return BraketExecutor(config)
+
+    @classmethod
+    def _create_quantinuum_executor(
+        cls,
+        backend_slug: str,
+        backend_config: dict[str, Any],
+    ) -> QuantinuumExecutor:
+        """Create Quantinuum executor from configuration.
+        """
+        required_fields = [
+            "device_name",
+        ]
+        missing_fields = [f for f in required_fields if f not in backend_config]
+        if missing_fields:
+            raise ValueError(
+                f"QuantinuumExecutor config missing required fields for {backend_slug}: "
+                f"{', '.join(missing_fields)}"
+            )
+
+        config = QuantinuumExecutorConfig(
+            device_name=backend_config["device_name"],
+            simulator=backend_config.get("simulator", "state-vector"),
+            group=backend_config.get("group"),
+            label=backend_config.get("label", "job"),
+            provider=backend_config.get("auth_provider"),
+            machine_debug=backend_config.get("machine_debug", False),
+            api_handler=backend_config.get("api_handler"),
+            compilation_config=backend_config.get("compilation_config"),
+            options=backend_config.get("options", {}),
+            poll_interval_seconds=backend_config.get("poll_interval_seconds", 2.0),
+            timeout_seconds=backend_config.get("timeout_seconds", 300.0),
+            optimisation_level=backend_config.get("optimisation_level", 2),
+        )
+        return QuantinuumExecutor(config)
 
     @classmethod
     def _create_azure_executor(
@@ -354,7 +394,7 @@ class ExecutorFactory:
 
         Example:
             >>> ExecutorFactory.get_supported_providers()
-            ['AWS Braket', 'IBM Quantum', 'Azure Quantum', 'IonQ Direct', ...]
+            ['AWS Braket', 'IBM Quantum', 'Azure Quantum', 'Quantum Brilliance', 'Local', 'Quantinuum']
         """
         return [
             "AWS Braket",
@@ -364,6 +404,8 @@ class ExecutorFactory:
             "Rigetti QCS",
             "Quantum Brilliance",
             "Local",
+            "Quantinuum",
+            "IonQ Direct",
         ]
 
     @classmethod

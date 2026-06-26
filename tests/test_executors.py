@@ -13,11 +13,13 @@ from marqov.executors import (
     IBMExecutor,
     IonQExecutor,
     LocalExecutor,
+    QuantinuumExecutor,
 )
 from marqov.executors.azure import AzureQuantumExecutorConfig
 from marqov.executors.braket import BraketExecutorConfig, _extract_region_from_arn
 from marqov.executors.ibm import IBMExecutorConfig
 from marqov.executors.local import LocalExecutorConfig
+from marqov.executors.quantinuum import QuantinuumExecutorConfig
 
 
 class TestExecutionResult:
@@ -360,6 +362,75 @@ class TestBraketExecutor:
                         with pytest.raises(ValueError, match="non-native gates"):
                             await executor.execute(circuit, shots=100, verbatim=True)
 
+class TestQuantinuumExecutor:
+    """Tests for QuantinuumExecutor."""
+
+    def test_config_validation(self) -> None:
+        """Config validates required fields."""
+        config = QuantinuumExecutorConfig(
+            device_name="H2-1",
+            simulator="state-vector",
+            group="test-group",
+            label="test-label",
+        )
+        assert config.device_name == "H2-1"
+        assert config.simulator == "state-vector"
+        assert config.group == "test-group"
+        assert config.label == "test-label"
+        assert config.provider is None
+        assert config.api_handler is None
+        assert config.compilation_config is None
+        assert config.options == {}
+        assert config.poll_interval_seconds == 2.0
+        assert config.timeout_seconds == 300.0
+        assert config.optimisation_level == 2
+
+
+
+    def test_executor_creation(self) -> None:
+        """Executor can be created with valid config."""
+        config = QuantinuumExecutorConfig(
+            device_name="H2-1",
+            simulator="state-vector",
+            group="test-group",
+            label="test-label",
+        )
+        executor = QuantinuumExecutor(config)
+        assert executor.config == config
+        assert executor.name == "QuantinuumExecutor"
+
+
+    def test_pytket_counts_tuple_keys(self) -> None:
+        raw = {(0, 0): 512, (1, 1): 488}
+        assert QuantinuumExecutor._pytket_counts_to_bitstring(raw) == {"00": 512, "11": 488}
+   
+    def test_pytket_counts_string_keys_passthrough(self) -> None:
+        raw = {"00": 300, "11": 700}
+        assert QuantinuumExecutor._pytket_counts_to_bitstring(raw) == {"00": 300, "11": 700}
+
+    @pytest.mark.asyncio
+    async def test_execute_converts_tuple_counts(self) -> None:
+        """execute() converts pytket tuple counts to bitstring ExecutionResult.counts."""
+        mock_result = MagicMock()
+        mock_result.get_counts.return_value = {(0, 0): 512, (1, 1): 488}
+
+        config = QuantinuumExecutorConfig(
+            device_name="H2-1",
+            simulator="state-vector",
+            group="test-group",
+            label="test-label",
+        )
+        executor = QuantinuumExecutor(config)
+
+        with patch.object(executor, "_get_backend", new_callable=AsyncMock, return_value=MagicMock()):
+            with patch.object(executor, "_run_sync", return_value=(mock_result, "job-123")):
+                with patch.object(Circuit, "to_pytket", return_value=MagicMock()):
+                    result = await executor.execute(bell_state(), shots=1000)
+
+        assert isinstance(result, ExecutionResult)
+        assert result.counts == {"00": 512, "11": 488}
+        assert result.shots == 1000
+        assert result.metadata["job_id"] == "job-123"
 
 class TestAzureQuantumExecutor:
     """Tests for AzureQuantumExecutor."""
@@ -600,7 +671,26 @@ class TestBraketExecutorGetStatus:
             assert status.status == "maintenance"
             assert status.queue_depth is None
 
+class TestQuantinuumExecutorGetStatus:
+    """Tests for QuantinuumExecutor.get_status()."""
 
+    @pytest.mark.asyncio
+    async def test_online_status(self) -> None:
+        config = QuantinuumExecutorConfig(device_name="H2-1", simulator="state-vector", group="test-group", label="test-label")
+        executor = QuantinuumExecutor(config)
+        with patch.object(executor, 'get_device_status', new_callable=AsyncMock, return_value="online"):
+            status = await executor.get_status()
+            assert status.status == "online"
+            assert status.queue_depth is None
+
+    @pytest.mark.asyncio
+    async def test_offline_status(self) -> None:
+        config = QuantinuumExecutorConfig(device_name="H2-1", simulator="state-vector", group="test-group", label="test-label")
+        executor = QuantinuumExecutor(config)
+        with patch.object(executor, 'get_device_status', new_callable=AsyncMock, return_value="offline"):
+            status = await executor.get_status()
+            assert status.status == "offline"
+            assert status.queue_depth is None
 class TestAzureExecutorGetStatus:
     """Tests for AzureQuantumExecutor.get_status()."""
 

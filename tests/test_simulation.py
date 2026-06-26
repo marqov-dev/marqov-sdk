@@ -11,6 +11,7 @@ from marqov.simulation.backends import SIMULATION_BACKENDS
 from marqov.simulation.circuit_converter import convert_counts, count_qubits, ensure_measurements
 from marqov.simulation.config import SimulationConfig
 from marqov.simulation.executor import SimulationExecutor, _validate_qubit_limit
+from marqov.executors.quantinuum import QuantinuumExecutor
 
 
 class TestCountQubits:
@@ -413,6 +414,22 @@ class TestFactoryIntegration:
         }
         executor = ExecutorFactory.create_executor("qb-sim-statevector", config)
         assert isinstance(executor, SimulationExecutor)
+
+    def test_create_quantinuum_executor(self) -> None:
+        """Factory creates QuantinuumExecutor for Quantinuum provider."""
+        config = {
+            "provider": "Quantinuum",
+            "device_name": "H2-1",
+            "simulator": "state-vector",
+            "group": "test-group",
+            "label": "test-label",
+            "auth_provider": None,
+            "api_handler": None,
+            "compilation_config": None,
+        }
+
+        executor = ExecutorFactory.create_executor("h2-1", config)
+        assert isinstance(executor, QuantinuumExecutor)
 
     def test_simulation_in_supported_providers(self) -> None:
         """Quantum Brilliance listed as a supported provider."""

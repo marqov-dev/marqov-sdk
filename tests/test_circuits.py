@@ -78,6 +78,22 @@ class TestSimulation:
         assert np.isclose(prob_00, 0.5, atol=0.01)
         assert np.isclose(prob_11, 0.5, atol=0.01)
 
+class TestToPytket:
+    """Tests for Circuit.to_pytket()."""
+    
+    def test_to_pytket_bell_state(self) -> None:
+        """Bell state converts to pytket Circuit object."""
+
+        from pytket import Circuit as PytketCircuit
+        from pytket.circuit import OpType
+
+        expected = PytketCircuit(2)
+        expected.H(0)
+        expected.add_gate(OpType.CX, [0, 1])
+
+        result = bell_state().to_pytket()
+        assert isinstance(result, PytketCircuit)
+        assert result.n_qubits == expected.n_qubits
 
 class TestConvenienceConstructors:
     """Tests for convenience circuit constructors."""
