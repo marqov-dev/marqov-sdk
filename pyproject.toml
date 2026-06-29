@@ -99,10 +99,8 @@ all = [
     "pytket>=2.0.0",
     "pytket-quantinuum>=0.40.0",
     "pytket-qiskit>=0.50.0",
-    "qiskit>=1.0.0",
     "pyquil>=4.0.0",
     "requests>=2.31.0",
-    "pyquil>=4.0.0",
 ]
 
 [project.urls]
