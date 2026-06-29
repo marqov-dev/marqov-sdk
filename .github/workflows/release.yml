@@ -1,0 +1,46 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:        # manual TestPyPI dry-run
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install uv && uv build
+      - name: Assert built version matches the tag (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          test -f "dist/marqov-${TAG}-py3-none-any.whl" \
+            || { echo "FAIL: built wheel is not version ${TAG} (check pyproject version)"; ls dist/; exit 1; }
+          echo "version OK: ${TAG}"
+      - uses: actions/upload-artifact@v4
+        with: { name: dist, path: dist/ }
+
+  publish-testpypi:
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions: { id-token: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: dist/ }
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions: { id-token: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: dist/ }
+      - uses: pypa/gh-action-pypi-publish@release/v1

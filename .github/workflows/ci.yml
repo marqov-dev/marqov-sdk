@@ -1,0 +1,24 @@
+name: CI
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install uv
+        run: pip install uv
+      # Install the [all] backend extras (qiskit/cirq/pennylane/pytket/quantinuum/
+      # pyquil): the circuit-interop / device / executor tests import these at
+      # module load and HARD-FAIL (ModuleNotFoundError) rather than skip when
+      # absent. Installing them is what makes the full suite green.
+      - name: Install (with all backend extras + dev)
+        run: uv pip install --system -e ".[all,dev]"
+      - name: No-URL-deps guard
+        run: python tools/check_no_url_deps.py
+      - name: Test suite
+        run: pytest tests/ -q

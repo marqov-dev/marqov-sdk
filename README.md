@@ -43,17 +43,17 @@ Independent tasks execute in parallel automatically. Marqov handles scheduling, 
 ## Installation
 
 ```bash
-pip install "git+https://github.com/marqov-dev/marqov-sdk.git"
+pip install marqov
 ```
 
 With backend-specific extras:
 
 ```bash
 # IBM Quantum
-pip install "marqov[qiskit] @ git+https://github.com/marqov-dev/marqov-sdk.git"
+pip install "marqov[qiskit]"
 
 # All extras
-pip install "marqov[all] @ git+https://github.com/marqov-dev/marqov-sdk.git"
+pip install "marqov[all]"
 ```
 
 For local development:
