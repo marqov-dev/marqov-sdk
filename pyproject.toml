@@ -1,16 +1,30 @@
 [project]
 name = "marqov"
-version = "0.2.0"
+dynamic = ["version"]   # single-sourced from marqov/__init__.py (see [tool.hatch.version])
 description = "Open-source Python SDK for running quantum circuits across multiple hardware backends"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
+authors = [
+  { name = "Marqov" },
+]
+keywords = ["quantum", "quantum-computing", "qpu", "braket", "qiskit", "cirq", "sdk"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Physics",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
     # Workflow engine
     "temporalio>=1.7.0",
-    # Circuit transpilation
-    # Pinned to v1.4.0 for reproducibility
-    "quantumflow @ git+https://github.com/gecrooks/quantumflow.git@v1.4.0",
+    # Circuit transpilation (marqov-owned fork of QuantumFlow v1.4.0; see marqov-dev/marqov-quantumflow)
+    "marqov-quantumflow==1.0.0",
     # AWS Braket
     "amazon-braket-sdk>=1.80.0",
     # Azure Quantum
@@ -23,7 +37,7 @@ dependencies = [
     "structlog>=24.0.0",
     # Core
     "numpy>=1.26.0,<2.4",
-    "scipy>=1.11.0",
+    "scipy>=1.11.2",   # 1.11.0/1.11.1 have no cp312 wheel
 ]
 
 [project.optional-dependencies]
@@ -85,11 +99,15 @@ all = [
     "pytket>=2.0.0",
     "pytket-quantinuum>=0.40.0",
     "pytket-qiskit>=0.50.0",
-    "qiskit>=1.0.0",
     "pyquil>=4.0.0",
     "requests>=2.31.0",
-    "pyquil>=4.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/marqov-dev/marqov-sdk"
+Repository = "https://github.com/marqov-dev/marqov-sdk.git"
+Issues = "https://github.com/marqov-dev/marqov-sdk/issues"
+Changelog = "https://github.com/marqov-dev/marqov-sdk/blob/main/CHANGELOG.md"
 
 [project.scripts]
 marqov = "marqov.cli:main"
@@ -98,8 +116,8 @@ marqov = "marqov.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.hatch.metadata]
-allow-direct-references = true
+[tool.hatch.version]
+path = "marqov/__init__.py"   # __version__ here is the single source of truth
 
 [tool.hatch.build.targets.wheel]
 packages = ["marqov"]

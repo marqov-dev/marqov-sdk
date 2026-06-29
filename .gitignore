@@ -1,5 +1,11 @@
 .venv/
 .venv-gate/
+# Any virtualenv (e.g. .verify-venv) — excluded so the hatchling sdist build does
+# not try to bundle venv symlinks.
+*-venv/
+.*-venv/
+# Claude Code local tooling / worktrees — never ship in the sdist.
+.claude/
 __pycache__/
 *.pyc
 *.pyo
