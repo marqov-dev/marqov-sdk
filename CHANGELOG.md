@@ -24,4 +24,11 @@ First public release on PyPI.
   via hatchling, so the distribution metadata, `marqov.__version__`, and
   `marqov --version` always agree.
 
+### Known limitations
+- `@task`/`@workflow` serialize the decorated function with `cloudpickle` at
+  decoration time. When the function is a local/closure (not module-level) and a
+  large set of heavy backends is imported in the same process, this can overflow
+  into a `RecursionError`. Module-level task functions are unaffected. A fix that
+  defers/removes the function serialization is planned.
+
 [0.2.0]: https://pypi.org/project/marqov/0.2.0/
