@@ -1,39 +1,15 @@
-"""Tests for activity heartbeating and cancellation handling.
-
-The project conftest.py stubs heavy dependencies (cloudpickle, temporalio)
-with mock modules. This test needs the real packages, so we restore them
-from the actual installed packages before importing the activity module.
-"""
+"""Tests for activity heartbeating and cancellation handling."""
 import asyncio
-import importlib
+import base64
 import json
-import sys
 import time
 
 import pytest
 from unittest.mock import patch, MagicMock
 
-
-def _restore_real_module(name: str) -> None:
-    """Remove mock module and all sub-modules, then import the real one."""
-    keys_to_remove = [k for k in sys.modules if k == name or k.startswith(name + ".")]
-    for k in keys_to_remove:
-        del sys.modules[k]
-    importlib.import_module(name)
-
-
-# Restore real cloudpickle and temporalio before importing activity module.
-_restore_real_module("cloudpickle")
-_restore_real_module("temporalio")
-
-# Now we can safely import - these will use real packages.
-import base64
 import cloudpickle
 from temporalio import activity
 
-# Re-import activity module so it picks up real cloudpickle/temporalio.
-if "marqov.workflows.activity" in sys.modules:
-    del sys.modules["marqov.workflows.activity"]
 from marqov.workflows.activity import execute_task
 
 
