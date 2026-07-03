@@ -4,17 +4,17 @@ import pytest
 from marqov import task, workflow
 from marqov.workflows import TransportGraph, TaskProxy
 
-# KNOWN PRE-EXISTING ISSUE (marqov-platform#1259): @task serializes the function
-# with cloudpickle.dumps() at DECORATION time. These tests decorate *local*
-# functions, which cloudpickle must pickle by value; under the full suite (with
-# the [all] heavy backends imported) that overflows into a RecursionError
-# (segfault on macOS). It is not caused by the PyPI-publishing work — the same 13
-# fail on unmodified main — and the real fix is architectural (don't pickle at
-# decoration; reference functions by name / defer to dispatch). Marked xfail so
-# CI is honest while it's tracked. strict=False: they pass when this file is run
-# in isolation, so an unexpected pass must not fail the run.
+# KNOWN PRE-EXISTING ISSUE (marqov-platform#1259). Approach A has landed: @task no
+# longer cloudpickles at DECORATION time (that import-time landmine is fixed — see
+# tests/test_task_serialization.py, which enforces it). What remains is the RESIDUAL
+# case this marker guards: these tests decorate *local* functions and then build a
+# workflow graph, so the by-value cloudpickle now happens at GRAPH-BUILD; under the
+# full suite (with the [all] heavy backends imported) that can still overflow into a
+# RecursionError (segfault on macOS/musl). Fully removing this needs the by-reference
+# work (require importable/module-level task functions; see the alignment spec).
+# strict=False: they pass in isolation, so an unexpected pass must not fail the run.
 pytestmark = pytest.mark.xfail(
-    reason="cloudpickle recursion at @task decoration under heavy imports; see marqov-platform#1259",
+    reason="cloudpickle by-value recursion at graph-build for LOCAL @task fns under heavy imports; see marqov-platform#1259",
     strict=False,
 )
 

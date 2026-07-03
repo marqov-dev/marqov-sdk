@@ -124,9 +124,27 @@ def task(
             timeout_seconds=timeout,
         )
 
-        # Serialize the function once
-        func_bytes = cloudpickle.dumps(fn)
-        func_ref = base64.b64encode(func_bytes).decode("utf-8")
+        # Serialize the function LAZILY — only when a task actually builds a graph
+        # node, and cache the result so it is computed at most once per task.
+        #
+        # Serializing eagerly here (at decoration time) was an import-time landmine
+        # (marqov-platform#1259): cloudpickle serializes local/closure functions BY
+        # VALUE, walking the function's referenced globals and closure by hand. In a
+        # heavy-import environment that deep traversal can overflow the recursion
+        # limit — a catchable RecursionError on Linux, a hard C-stack segfault on
+        # macOS / musl — and it fired for EVERY @task the moment its module was
+        # imported, whether or not the task was ever dispatched. Deferring to
+        # graph-build means importing a module full of @task functions pickles
+        # nothing; the cost (and the residual by-value risk for genuinely local
+        # functions) moves to the point a workflow graph is actually built.
+        _func_ref_cache: list[str] = []
+
+        def _func_ref() -> str:
+            if not _func_ref_cache:
+                _func_ref_cache.append(
+                    base64.b64encode(cloudpickle.dumps(fn)).decode("utf-8")
+                )
+            return _func_ref_cache[0]
 
         @wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -140,7 +158,7 @@ def task(
                 node = TaskNode(
                     id=generate_node_id(),
                     func_name=fn.__name__,
-                    func_ref=func_ref,
+                    func_ref=_func_ref(),
                     args=list(_serialize_arg(arg) for arg in args),
                     kwargs={k: _serialize_arg(v) for k, v in kwargs.items()},
                     config=config,
@@ -152,10 +170,12 @@ def task(
                 # Outside lattice: execute directly
                 return fn(*args, **kwargs)
 
-        # Mark as task for introspection
+        # Mark as task for introspection.
+        # NB: no eager `_task_func_ref` attribute — it was write-only (zero readers
+        # in the SDK or the platform) and computing it here would defeat the lazy
+        # serialization above. Dropped per marqov-platform#1259.
         wrapper._is_task = True  # type: ignore
         wrapper._task_config = config  # type: ignore
-        wrapper._task_func_ref = func_ref  # type: ignore
 
         return wrapper  # type: ignore
 
