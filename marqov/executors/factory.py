@@ -394,7 +394,7 @@ class ExecutorFactory:
 
         Example:
             >>> ExecutorFactory.get_supported_providers()
-            ['AWS Braket', 'IBM Quantum', 'Azure Quantum', 'Quantum Brilliance', 'Local', 'Quantinuum']
+            ['AWS Braket', 'IBM Quantum', 'Azure Quantum', 'IonQ Direct', 'Rigetti QCS', 'Quantum Brilliance', 'Local', 'Quantinuum']
         """
         return [
             "AWS Braket",
@@ -405,7 +405,6 @@ class ExecutorFactory:
             "Quantum Brilliance",
             "Local",
             "Quantinuum",
-            "IonQ Direct",
         ]
 
     @classmethod

@@ -822,3 +822,18 @@ class TestExecutorFactory:
         """A config without a provider raises ValueError."""
         with pytest.raises(ValueError, match="missing 'provider'"):
             ExecutorFactory.create_executor("sv1", {})
+
+    def test_supported_providers_has_no_duplicates(self) -> None:
+        """Regression: `IonQ Direct` was listed twice after concurrent unitaryHACK merges
+        re-added it. get_supported_providers() must have no duplicates."""
+        providers = ExecutorFactory.get_supported_providers()
+        assert len(providers) == len(set(providers)), (
+            f"duplicate provider(s) in get_supported_providers(): {providers}")
+
+    def test_supported_providers_matches_the_registered_executors(self) -> None:
+        """The list must be exactly the providers create_executor() dispatches to — so a new
+        executor added without updating the list (or vice versa) trips this."""
+        assert set(ExecutorFactory.get_supported_providers()) == {
+            "Local", "AWS Braket", "IBM Quantum", "Quantinuum",
+            "Azure Quantum", "IonQ Direct", "Rigetti QCS", "Quantum Brilliance",
+        }
