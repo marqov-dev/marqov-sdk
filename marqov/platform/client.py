@@ -110,12 +110,23 @@ class MarqovClient:
                        * A ``str`` — treated as ``inline_code``.  The
                          ``framework`` argument is **required** when passing a
                          string program; omitting it raises :class:`ValueError`.
-                       * A :class:`marqov.Circuit` — serialised as
-                         ``{"format": "qasm3", "payload": <OpenQASM 3 string>}``
-                         and sent as ``inline_code``.  Passing ``framework``
-                         with a ``Circuit`` raises :class:`ValueError` (the
-                         circuit self-describes its format; a framework override
-                         would be incorrect).
+                       * A :class:`marqov.Circuit` — serialised as a separate
+                         ``circuit`` body field: ``{"format": "qasm3",
+                         "payload": <OpenQASM 3 string>}``.  ``inline_code``
+                         is **not** set for a ``Circuit`` submission.  Passing
+                         ``framework`` with a ``Circuit`` raises
+                         :class:`ValueError` (the circuit self-describes its
+                         format; a framework override would be incorrect).
+
+                         .. warning::
+                             **PROVISIONAL — §11 reconciliation item.**
+                             The exact circuit-submission wire contract (the
+                             ``circuit`` body field) is pending the platform's
+                             circuit-submission variant (spec §8.6 #1), which is
+                             unbuilt at this revision.  This path is verified —
+                             or marked **BLOCKED** — by the Task 5b staging
+                             smoke test.  Do not assume it works against the
+                             current server.
 
             backend:   Backend slug to run on (e.g. ``"sv1"``,
                        ``"dwave-sim"``).
@@ -156,8 +167,9 @@ class MarqovClient:
                     "framework is required when submitting a string program. "
                     "Pass framework='marqov' (or the appropriate framework for your code)."
                 )
-            inline_code = program
+            inline_code: str | None = program
             req_framework: str | None = framework
+            circuit_payload: dict | None = None
 
         elif isinstance(program, Circuit):
             if framework is not None:
@@ -165,12 +177,18 @@ class MarqovClient:
                     "Do not pass framework= when submitting a marqov.Circuit. "
                     "The circuit self-describes its format as QASM 3."
                 )
-            # Wire format: inline_code carries the JSON-encoded circuit payload.
-            # Ratified wire format per project spec:
-            #   {"format": "qasm3", "payload": "<OpenQASM 3 string>"}
-            import json as _json
+            # PROVISIONAL — §11 reconciliation item pending the platform's
+            # circuit-submission variant (spec §8.6 #1).
+            #
+            # The circuit rides as a SEPARATE body field ("circuit"), NOT inside
+            # inline_code.  inline_code is executable server-side code and must
+            # not carry a JSON envelope.  The exact wire contract for "circuit"
+            # is unbuilt on the platform at this revision; this implementation
+            # will be verified — or marked BLOCKED — by the Task 5b staging
+            # smoke test.  Do NOT claim this path works against the current server.
             qasm3_str = program.to_openqasm(version=3)
-            inline_code = _json.dumps({"format": "qasm3", "payload": qasm3_str})
+            circuit_payload = {"format": "qasm3", "payload": qasm3_str}
+            inline_code = None
             req_framework = None
 
         else:
@@ -184,12 +202,18 @@ class MarqovClient:
         # Note: the server-side field is "params" (not "parameters").
         body: dict = {
             "backend": backend,
-            "inline_code": inline_code,
             "params": {"shots": shots},
             "sdk_version": marqov.__version__,
         }
+        if inline_code is not None:
+            # str-program path: inline_code carries the executable source.
+            body["inline_code"] = inline_code
         if req_framework is not None:
             body["framework"] = req_framework
+        if circuit_payload is not None:
+            # Circuit path: "circuit" is a separate field, NOT inside inline_code.
+            # PROVISIONAL — see docstring §11 reconciliation note above.
+            body["circuit"] = circuit_payload
 
         # --- POST to /api/jobs/submit (idempotent write — safe to retry) ---
         resp = self._transport.request(

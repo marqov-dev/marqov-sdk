@@ -181,12 +181,23 @@ class TestSubmitStringProgram:
 
 
 class TestSubmitCircuitProgram:
-    """submit() with a marqov.Circuit program."""
+    """submit() with a marqov.Circuit program.
 
-    def test_circuit_posts_qasm3_inline_code(self):
-        """Circuit → inline_code contains JSON with format=qasm3 and payload.
+    PROVISIONAL — §11 reconciliation item: the ``circuit`` body field and the
+    circuit-submission wire contract are pending the platform's circuit-submission
+    variant (spec §8.6 #1).  These tests verify the SDK builds the correct body
+    shape; end-to-end server behaviour is verified (or marked BLOCKED) by the
+    Task 5b staging smoke test.
+    """
 
-        Wire format source: project spec (ratified circuit wire format).
+    def test_circuit_posts_circuit_field_not_inline_code(self):
+        """Circuit → body has a 'circuit' field, NOT inline_code.
+
+        The circuit rides as a separate body field alongside backend/params/
+        sdk_version.  inline_code is executable server-side code and must NOT
+        carry a JSON envelope for a Circuit submission.
+
+        PROVISIONAL — exact wire contract pending platform §8.6 #1 variant.
         Requires qiskit (openqasm extra).
         """
         pytest.importorskip("qiskit")
@@ -202,14 +213,20 @@ class TestSubmitCircuitProgram:
         _, kwargs = mock_req.call_args
         body = kwargs["json"]
 
-        # inline_code should be a JSON-encoded dict with format + payload
-        parsed = json.loads(body["inline_code"])
-        assert parsed["format"] == "qasm3"
-        assert "payload" in parsed
-        assert isinstance(parsed["payload"], str)
-        assert len(parsed["payload"]) > 0
+        # Circuit path: body["circuit"] carries the serialised circuit.
+        assert "circuit" in body, "body must contain 'circuit' field for Circuit submissions"
+        assert body["circuit"]["format"] == "qasm3"
+        assert "payload" in body["circuit"]
+        assert isinstance(body["circuit"]["payload"], str)
+        assert len(body["circuit"]["payload"]) > 0
 
-        # framework must NOT be in the body for Circuit submissions
+        # inline_code must NOT be set for Circuit submissions.
+        assert "inline_code" not in body, (
+            "inline_code must not be set for Circuit submissions; "
+            "circuit rides as a separate 'circuit' body field"
+        )
+
+        # framework must NOT be in the body for Circuit submissions.
         assert "framework" not in body
 
     def test_circuit_returns_job_with_server_id(self):
@@ -236,7 +253,10 @@ class TestSubmitCircuitProgram:
             client.submit(Circuit().h(0), backend="dwave-sim", framework="marqov")
 
     def test_circuit_qasm3_payload_is_valid_qasm(self):
-        """The payload in inline_code parses back to a semantically equivalent circuit."""
+        """The payload in body['circuit'] is a valid QASM 3 string.
+
+        PROVISIONAL — exact wire contract pending platform §8.6 #1 variant.
+        """
         pytest.importorskip("qiskit")
         from marqov import Circuit
 
@@ -248,9 +268,8 @@ class TestSubmitCircuitProgram:
             client.submit(circuit, backend="dwave-sim")
 
         _, kwargs = mock_req.call_args
-        parsed = json.loads(kwargs["json"]["inline_code"])
-        # Should be parseable QASM — contains "qasm" or "OPENQASM"
-        payload = parsed["payload"]
+        payload = kwargs["json"]["circuit"]["payload"]
+        # Should be valid QASM — contains "OPENQASM" or "qasm"
         assert "OPENQASM" in payload or "qasm" in payload.lower()
 
     def test_non_circuit_non_str_raises_type_error(self):
