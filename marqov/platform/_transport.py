@@ -190,10 +190,7 @@ class Transport:
                 # of write/read mode.
                 last_exc = exc
                 continue
-            except (
-                requests.exceptions.Timeout,
-                requests.exceptions.ReadTimeout,
-            ) as exc:
+            except requests.exceptions.Timeout as exc:  # ReadTimeout is a subclass of Timeout; listed for documentation clarity
                 # Ambiguous: the server may have received and processed the
                 # request.  Retry only for idempotent reads.
                 if idempotent_write:
@@ -273,7 +270,14 @@ class Transport:
         # HTTP 429 → RateLimited (when Retry-After present; always for 429)
         # Source: status/route.ts:48-58 + submit/route.ts:135-146 — 429 + Retry-After header
         if status == 429:
-            raise RateLimited(message, code=code, status=status)
+            _retry_after_raw = resp.headers.get("Retry-After")
+            _retry_after: int | None = None
+            if _retry_after_raw is not None:
+                try:
+                    _retry_after = int(_retry_after_raw)
+                except (ValueError, TypeError):
+                    _retry_after = None
+            raise RateLimited(message, code=code, status=status, retry_after=_retry_after)
 
         # All other structured errors → base MarqovPlatformError (code preserved)
         # NEVER coerce an unknown code to TransportError.

@@ -108,7 +108,23 @@ class RateLimited(MarqovPlatformError):
     """Raised when the server returns HTTP 429 (Too Many Requests).
 
     Back off and retry.  The :attr:`status` attribute will be ``429``.
+
+    Attributes:
+        retry_after: Value of the ``Retry-After`` response header parsed as an
+            integer (seconds), or ``None`` if the header was absent or
+            non-numeric.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        status: int | None = None,
+        retry_after: int | None = None,
+    ) -> None:
+        super().__init__(message, code=code, status=status)
+        self.retry_after = retry_after
 
 
 class TransportError(MarqovPlatformError):
