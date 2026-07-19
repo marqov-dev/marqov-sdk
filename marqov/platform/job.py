@@ -31,10 +31,11 @@ Source citations (real platform routes read before encoding any contract):
       real cancel endpoint this path must be updated.
 
 .. note::
-    ``dispatch_failed`` is a terminal state on the server that is not
-    currently listed in :func:`~marqov.platform._models.is_terminal`.  The
-    :meth:`Job.result` polling loop handles it explicitly by raising
-    :class:`~marqov.platform.errors.JobFailed`.
+    ``dispatch_failed`` is one of the four terminal states (with ``completed``,
+    ``failed``, ``cancelled``) recognised by
+    :func:`~marqov.platform._models.is_terminal`.  The :meth:`Job.result`
+    polling loop treats both ``failed`` and ``dispatch_failed`` as failures
+    (raising :class:`~marqov.platform.errors.JobFailed`).
 """
 
 from __future__ import annotations
@@ -198,8 +199,9 @@ class Job:
 
         .. note::
             ``dispatch_failed`` is treated as a ``failed`` terminal state
-            (raises :class:`~marqov.platform.errors.JobFailed`), even though
-            :func:`~marqov.platform._models.is_terminal` does not list it.
+            (raises :class:`~marqov.platform.errors.JobFailed`); it is one of
+            the four states recognised by
+            :func:`~marqov.platform._models.is_terminal`.
         """
         deadline = time.monotonic() + timeout
         backoff = poll_interval

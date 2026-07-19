@@ -41,6 +41,7 @@ class JobStatus(str, Enum):
     FAILED = "failed"
     CANCELLING = "cancelling"
     CANCELLED = "cancelled"
+    DISPATCH_FAILED = "dispatch_failed"
 
 
 def is_terminal(status: str) -> bool:
@@ -58,10 +59,11 @@ def is_terminal(status: str) -> bool:
         status: Raw job status string from the server API.
 
     Returns:
-        ``True`` iff the status is one of ``completed``, ``failed``, or
-        ``cancelled``.
+        ``True`` iff the status is one of the four server-side terminal
+        states — ``completed``, ``failed``, ``cancelled``, or
+        ``dispatch_failed`` (see ``status/route.ts`` ``TERMINAL_STATES``).
     """
-    return status in {"completed", "failed", "cancelled"}
+    return status in {"completed", "failed", "cancelled", "dispatch_failed"}
 
 
 # ---------------------------------------------------------------------------
