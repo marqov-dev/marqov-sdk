@@ -106,6 +106,16 @@ class Transport:
         # Source: api-key.ts:40 — platform checks ``authHeader.startsWith("Bearer marqey_")``.
         self._session.headers.update({"Authorization": f"Bearer {resolved_key}"})
 
+    @property
+    def timeout(self) -> float:
+        """Per-request timeout in seconds (read-only).
+
+        Exposed so :class:`~marqov.platform.job.Job` can compute the
+        ``wait`` long-poll budget: the server-side wait must be strictly
+        shorter than this per-request timeout.
+        """
+        return self._timeout
+
     def request(
         self,
         method: str,
