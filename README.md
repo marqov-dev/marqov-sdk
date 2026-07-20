@@ -40,6 +40,8 @@ dispatch = multi_shot_study([100, 500, 1000, 5000])
 
 Independent tasks execute in parallel automatically. Marqov handles scheduling, retries, and result collection across any supported backend.
 
+---
+
 ## Installation
 
 ```bash
@@ -65,9 +67,12 @@ pip install -e ".[all,dev]"
 pytest tests/ -v
 ```
 
+---
+
 ## Cloud Executors
 
-Swap in a cloud backend when you're ready to run on hardware:
+Swap in a cloud backend when you're ready to run on hardware — on **your own
+provider accounts**, no Marqov account needed:
 
 ```python
 import asyncio
@@ -108,17 +113,21 @@ executor = ExecutorFactory.create_executor("2q-qvm", {
 result = await executor.execute(circuit, shots=1000)
 ```
 
+---
+
 ## Supported Backends
 
 | Backend | Status |
 |---|---|
-| Local (QuantumFlow simulator) | ✅ Available |
-| AWS Braket | ✅ Available |
-| IBM Quantum | ✅ Available |
-| Azure Quantum | ✅ Available |
-| IonQ Direct | ✅ Available |
-| Rigetti QCS | ✅ Available |
-| Quantinuum | ✅ Available |
+| Local (QuantumFlow simulator) | Available |
+| AWS Braket | Available |
+| IBM Quantum | Available |
+| Azure Quantum | Available |
+| IonQ Direct | Available |
+| Rigetti QCS | Available |
+| Quantinuum | Available |
+
+---
 
 ## Circuit Interop
 
@@ -144,9 +153,109 @@ circuit = Circuit.from_pennylane(tape)
 circuit = Circuit.from_pyquil(pyquil_program)  # requires pip install marqov[pyquil]
 ```
 
-## Marqov Platform
+---
 
-The SDK runs standalone, but the [Marqov platform](https://marqov.ai) removes the infrastructure overhead, with an integrated Temporal worker, job tracking and cost visibility built in, and one-click access to every supported QPU. Scripts written against the SDK run unchanged on the platform via `MarqovDevice`, so the platform handles backend routing, retries, and result storage. In private beta (but early teams are granted QPU credits).
+## Using the hosted platform (`marqov.platform`)
+
+The SDK runs fully standalone — everything above needs no Marqov account.
+
+If you want managed backend credentials, persistent job history, execution
+traces, and spend controls without running your own infrastructure, the Marqov
+Platform is an opt-in value-add.
+
+`marqov.platform` is an **optional import** — loading `marqov` never loads the
+platform client. It is only activated when you import it explicitly.
+
+> **Live-server caveat:** The examples below are not yet verified against a live
+> server — live verification is pending our staging environment.
+
+> **v1.0 scope:** v1.0 supports **free backends** (e.g. `dwave-sim`).
+> Paid backends and `Circuit` submission are coming in a future update.
+
+### Quickstart
+
+**1. Set your API key** (get one from the Marqov Platform dashboard):
+
+```bash
+export MARQOV_PLATFORM_KEY="marqey_live_your_key_here"
+```
+
+**2. Submit a script and poll for results:**
+
+```python
+from marqov.platform import MarqovClient
+
+# Key is read from MARQOV_PLATFORM_KEY automatically
+client = MarqovClient()
+
+script = """
+from marqov import task
+
+@task
+async def bell(shots):
+    from marqov.circuits import Circuit
+    from marqov.executors import LocalExecutor
+    result = await LocalExecutor().execute(
+        Circuit().h(0).cnot(0, 1), shots=shots
+    )
+    return result.counts
+
+bell(1000)
+"""
+
+job = client.submit(script, backend="dwave-sim", framework="marqov", shots=1000)
+print("Job ID:", job.id)
+
+# Block until complete (up to 5 minutes by default)
+result = job.result(timeout=300.0)
+print(result.counts)       # e.g. {'00': 507, '11': 493}
+print(result.probabilities) # e.g. {'00': 0.507, '11': 0.493}
+```
+
+**3. Check available backends:**
+
+```python
+for b in client.backends():
+    print(b.slug, b.name, "available:", b.is_available)
+```
+
+**4. Reconnect to a job from a previous session:**
+
+```python
+job = client.job("550e8400-e29b-41d4-a716-446655440000")
+result = job.result(timeout=60.0)
+```
+
+### Error handling
+
+All platform errors inherit from `MarqovPlatformError`:
+
+```python
+from marqov.platform import AuthenticationError, JobFailed, RateLimited
+
+try:
+    job = client.submit(script, backend="dwave-sim", framework="marqov")
+    result = job.result(timeout=120.0)
+except AuthenticationError:
+    print("Check your MARQOV_PLATFORM_KEY")
+except JobFailed as e:
+    print("Job failed:", e.message)
+except RateLimited as e:
+    print(f"Rate limited — retry after {e.retry_after}s")
+except TimeoutError:
+    print("Timed out — job is still running server-side")
+```
+
+For the full error taxonomy and retry guidance see
+[`docs/platform-client/error-handling.md`](docs/platform-client/error-handling.md).
+
+### Platform documentation
+
+- [Getting started](docs/platform-client/getting-started.md)
+- [Error handling](docs/platform-client/error-handling.md)
+- [API reference](docs/platform-client/api-reference.md)
+
+---
 
 ## Contributing
 

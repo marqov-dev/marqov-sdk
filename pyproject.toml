@@ -35,6 +35,8 @@ dependencies = [
     "pydantic>=2.0.0",
     # Logging
     "structlog>=24.0.0",
+    # HTTP client (required by marqov.platform)
+    "requests>=2.31.0",
     # Core
     "numpy>=1.26.0,<2.4",
     "scipy>=1.11.2",   # 1.11.0/1.11.1 have no cp312 wheel
