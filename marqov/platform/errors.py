@@ -48,7 +48,7 @@ class MarqovPlatformError(Exception):
 class AuthenticationError(MarqovPlatformError):
     """Raised when the API key is missing, invalid, or has been revoked.
 
-    Check that ``MARQOV_API_KEY`` is set and that the key is still active
+    Check that ``MARQOV_PLATFORM_KEY`` is set and that the key is still active
     in the Marqov dashboard.
     """
 

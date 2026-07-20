@@ -10,6 +10,10 @@ Source citations (real platform routes read before encoding any contract):
       marqov-platform/…/app/api/jobs/submit/route.ts — ``analysis_required``
       (422), ``spend_limit_exceeded`` (429), ``permission_denied`` (403),
       ``unauthorized`` (401), 402 budget errors.
+      ``backend_unknown`` (422): submit/route.ts:211-215
+      ``backend_retired`` (422): submit/route.ts:228-232
+      ``validation_error`` (400/422): submit/route.ts:105, 241, 494-500
+      ``is_available==false`` (400, plain-string body): submit/route.ts:359-362
   - Status long-poll ``wait`` param name:
       marqov-platform/…/app/api/jobs/[id]/status/route.ts:70 —
       ``request.nextUrl.searchParams.get("wait")``.
@@ -22,6 +26,7 @@ from __future__ import annotations
 
 import os
 import time
+import typing
 import uuid
 from typing import Any
 
@@ -30,6 +35,8 @@ import requests.exceptions
 
 from .errors import (
     AuthenticationError,
+    BackendUnavailable,
+    InvalidProgram,
     MarqovPlatformError,
     PaidBackendNotSupportedYet,
     PermissionTierError,
@@ -233,11 +240,10 @@ class Transport:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _raise_for_response(self, resp: requests.Response) -> dict[str, Any]:
+    def _raise_for_response(self, resp: requests.Response) -> typing.NoReturn:
         """Parse an error response and raise the appropriate exception.
 
-        Guaranteed to raise — the return type annotation is a lie to satisfy
-        mypy at call sites (avoids needing ``NoReturn``-typed helper).
+        Guaranteed to raise — never returns normally.
 
         Error envelope shape (source: error-envelope.ts):
             ``{ "error": { "code": "...", "message": "...", "status": ... } }``
@@ -288,6 +294,19 @@ class Transport:
                 except (ValueError, TypeError):
                     _retry_after = None
             raise RateLimited(message, code=code, status=status, retry_after=_retry_after)
+
+        # backend_unknown / backend_retired → BackendUnavailable
+        # Source: submit/route.ts:211-215 — apiError("backend_unknown", …, 422)
+        # Source: submit/route.ts:228-232 — apiError("backend_retired", …, 422)
+        if code in ("backend_unknown", "backend_retired"):
+            raise BackendUnavailable(message, code=code, status=status)
+
+        # validation_error → InvalidProgram
+        # Source: submit/route.ts:105 — apiError("validation_error", "Invalid JSON body", 400)
+        # Source: submit/route.ts:241 — apiError("validation_error", "Idempotency-Key …", 400)
+        # Source: submit/route.ts:494-500 — finalize(422, { error: { code: "validation_error", … } })
+        if code == "validation_error":
+            raise InvalidProgram(message, code=code, status=status)
 
         # All other structured errors → base MarqovPlatformError (code preserved)
         # NEVER coerce an unknown code to TransportError.

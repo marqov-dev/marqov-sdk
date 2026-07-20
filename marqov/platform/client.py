@@ -38,6 +38,10 @@ Source citations (real platform routes verified before encoding any contract):
 - ``sdk_version`` source:
       ``marqov/__init__.py:__version__`` (``"0.2.0"``).
       Imported via ``import marqov``.
+      Note: the server's Zod schema (submitJobSchema) strips unknown keys, so
+      ``sdk_version`` is currently discarded server-side.  It is sent for
+      forward-compat and is **not yet consumed server-side** (reconciliation
+      item — update this note when the server begins reading the field).
 """
 
 from __future__ import annotations
@@ -203,6 +207,8 @@ class MarqovClient:
         body: dict = {
             "backend": backend,
             "params": {"shots": shots},
+            # sdk_version is sent for forward-compat; not yet consumed server-side
+            # (server's Zod schema strips unknown keys — reconciliation item).
             "sdk_version": marqov.__version__,
         }
         if inline_code is not None:

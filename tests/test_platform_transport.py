@@ -20,6 +20,8 @@ import requests.exceptions
 from marqov.platform._transport import Transport, _DEFAULT_BASE_URL
 from marqov.platform.errors import (
     AuthenticationError,
+    BackendUnavailable,
+    InvalidProgram,
     MarqovPlatformError,
     PaidBackendNotSupportedYet,
     PermissionTierError,
@@ -250,6 +252,114 @@ class TestErrorMapping:
             with pytest.raises(RateLimited) as exc_info:
                 transport.request("POST", "/api/jobs/submit", json={})
         assert exc_info.value.status == 429
+
+    def test_backend_unknown_raises_backend_unavailable(self):
+        """HTTP 422 backend_unknown → BackendUnavailable.
+
+        Source: submit/route.ts:211-215 —
+          ``apiError("backend_unknown", "Backend '<slug>' is not in the registry", 422)``
+        Body shape: error-envelope.ts — ``{ error: { code, message, status } }``
+        """
+        # Transcribed from submit/route.ts:211-215 via apiError() in error-envelope.ts
+        body = {
+            "error": {
+                "code": "backend_unknown",
+                "message": "Backend 'bad-slug' is not in the registry",
+                "status": 422,
+            }
+        }
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        mock_resp = _mock_response(422, body)
+
+        with patch.object(transport._session, "request", return_value=mock_resp):
+            with pytest.raises(BackendUnavailable) as exc_info:
+                transport.request("POST", "/api/jobs/submit", json={})
+
+        exc = exc_info.value
+        assert exc.code == "backend_unknown"
+        assert exc.status == 422
+        assert isinstance(exc, BackendUnavailable)
+
+    def test_backend_retired_raises_backend_unavailable(self):
+        """HTTP 422 backend_retired → BackendUnavailable.
+
+        Source: submit/route.ts:228-232 —
+          ``apiError("backend_retired", "Backend '<slug>' is retired", 422)``
+        Body shape: error-envelope.ts — ``{ error: { code, message, status } }``
+        """
+        # Transcribed from submit/route.ts:228-232 via apiError() in error-envelope.ts
+        body = {
+            "error": {
+                "code": "backend_retired",
+                "message": "Backend 'old-qpu' is retired",
+                "status": 422,
+            }
+        }
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        mock_resp = _mock_response(422, body)
+
+        with patch.object(transport._session, "request", return_value=mock_resp):
+            with pytest.raises(BackendUnavailable) as exc_info:
+                transport.request("POST", "/api/jobs/submit", json={})
+
+        exc = exc_info.value
+        assert exc.code == "backend_retired"
+        assert exc.status == 422
+        assert isinstance(exc, BackendUnavailable)
+
+    def test_validation_error_on_400_raises_invalid_program(self):
+        """HTTP 400 validation_error → InvalidProgram.
+
+        Source: submit/route.ts:105 — ``apiError("validation_error", "Invalid JSON body", 400)``
+        Source: submit/route.ts:241 — ``apiError("validation_error", "Idempotency-Key …", 400)``
+        Body shape: error-envelope.ts — ``{ error: { code, message, status } }``
+        """
+        # Transcribed from submit/route.ts:241 via apiError() in error-envelope.ts
+        body = {
+            "error": {
+                "code": "validation_error",
+                "message": "Idempotency-Key header is required for API key authentication",
+                "status": 400,
+            }
+        }
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        mock_resp = _mock_response(400, body)
+
+        with patch.object(transport._session, "request", return_value=mock_resp):
+            with pytest.raises(InvalidProgram) as exc_info:
+                transport.request("POST", "/api/jobs/submit", json={})
+
+        exc = exc_info.value
+        assert exc.code == "validation_error"
+        assert exc.status == 400
+        assert isinstance(exc, InvalidProgram)
+
+    def test_validation_error_on_422_raises_invalid_program(self):
+        """HTTP 422 validation_error → InvalidProgram (structured body shape).
+
+        Source: submit/route.ts:494-500 — ``finalize(422, { error: { code: "validation_error",
+          message: "Script has no inline content to submit", status: 422 } })``
+        Body shape: finalize wraps as-is (not via apiError) but same envelope structure.
+        """
+        # Transcribed from submit/route.ts:494-500
+        body = {
+            "error": {
+                "code": "validation_error",
+                "message": "Script has no inline content to submit",
+                "status": 422,
+            }
+        }
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        mock_resp = _mock_response(422, body)
+
+        with patch.object(transport._session, "request", return_value=mock_resp):
+            with pytest.raises(InvalidProgram) as exc_info:
+                transport.request("POST", "/api/jobs/submit", json={})
+
+        exc = exc_info.value
+        assert exc.code == "validation_error"
+        assert exc.status == 422
+        assert isinstance(exc, InvalidProgram)
 
     def test_429_rate_limited_raises_rate_limited(self):
         """HTTP 429 rate_limited from status poll → RateLimited.
