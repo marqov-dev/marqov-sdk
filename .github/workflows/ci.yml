@@ -22,3 +22,19 @@ jobs:
         run: python tools/check_no_url_deps.py
       - name: Test suite
         run: pytest tests/ -q
+
+  # CUDA-Q is Linux-only and heavy, so it is NOT in [all] — the main `test` job
+  # skips test_real_cudaq_bell_state. This job installs [cudaq] on Linux so that
+  # real CUDA-Q run actually executes (on the qpp-cpu target; no GPU required).
+  test-cudaq:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install uv
+        run: pip install uv
+      - name: Install (with cudaq + dev)
+        run: uv pip install --system -e ".[cudaq,dev]"
+      - name: CUDA-Q executor tests (incl. real qpp-cpu run)
+        run: pytest tests/test_cudaq_executor.py -q
