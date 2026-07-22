@@ -4,6 +4,7 @@ This module provides executors for running quantum circuits on various backends.
 
 Available executors:
 - LocalExecutor: QuantumFlow simulator (no cloud required)
+- CudaqExecutor: NVIDIA CUDA-Q (GPU/CPU statevector, direct IQM)
 - BraketExecutor: AWS Braket (simulators and QPUs)
 - AzureQuantumExecutor: Azure Quantum (Quantinuum, PASQAL, IonQ, Rigetti)
 - QuantinuumExecutor: Quantinuum devices and emulators (via pytket-quantinuum)
@@ -23,6 +24,7 @@ Example:
 from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorConfig
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
+from marqov.executors.cudaq import CudaqExecutor, CudaqExecutorConfig
 from marqov.executors.factory import ExecutorFactory
 from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
@@ -37,6 +39,8 @@ __all__ = [
     "BaseExecutor",
     "BraketExecutor",
     "BraketExecutorConfig",
+    "CudaqExecutor",
+    "CudaqExecutorConfig",
     "DeviceStatus",
     "ExecutionResult",
     "ExecutorFactory",

@@ -60,6 +60,12 @@ ibm = [
 cirq = [
     "cirq-core>=1.0.0",
 ]
+cudaq = [
+    # cudaq ships Linux-only wheels; the marker keeps macOS/Windows installs from
+    # failing (they get the transpile deps but not the runtime).
+    "cudaq>=0.14.2 ; platform_system == 'Linux'",
+    "qiskit>=1.0.0",  # transpile path: Marqov Circuit -> Qiskit -> CUDA-Q kernel
+]
 pennylane = [
     "pennylane>=0.35.0",
 ]

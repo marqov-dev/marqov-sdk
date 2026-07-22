@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorConfig
 from marqov.executors.base import BaseExecutor
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
+from marqov.executors.cudaq import CudaqExecutor, CudaqExecutorConfig, _SLUG_TO_TARGET
 from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
 from marqov.executors.local import LocalExecutor
@@ -97,6 +98,10 @@ class ExecutorFactory:
         if backend_slug == "local" or provider == "Local":
             return LocalExecutor()
 
+        # NVIDIA CUDA-Q (GPU/CPU statevector, direct IQM)
+        if provider == "CUDA-Q" or backend_slug in _SLUG_TO_TARGET:
+            return cls._create_cudaq_executor(backend_slug, backend_config)
+
         # AWS Braket
         if provider == "AWS Braket":
             return cls._create_braket_executor(backend_slug, backend_config)
@@ -128,7 +133,7 @@ class ExecutorFactory:
         raise ValueError(
             f"Unsupported provider: {provider}. "
             f"Supported providers: AWS Braket, IBM Quantum, Azure Quantum, "
-            f"IonQ Direct, Rigetti QCS, Quantum Brilliance, Local."
+            f"IonQ Direct, Rigetti QCS, Quantum Brilliance, CUDA-Q, Local."
         )
 
     @classmethod
@@ -368,6 +373,37 @@ class ExecutorFactory:
         return RigettiExecutor(config)
 
     @classmethod
+    def _create_cudaq_executor(
+        cls,
+        backend_slug: str,
+        backend_config: dict[str, Any],
+    ) -> CudaqExecutor:
+        """Create an NVIDIA CUDA-Q executor from configuration.
+
+        No field is strictly required for the CPU/GPU targets: the target falls
+        back from the backend slug (``cudaq-cpu`` / ``cudaq-gpu`` / ``cudaq-iqm``)
+        or an explicit ``target`` in the config. The ``iqm`` target additionally
+        needs ``iqm_url`` (and a token via config or the ``IQM_TOKEN`` env var).
+
+        Args:
+            backend_slug: Backend slug; maps to a CUDA-Q target when it is one of
+                ``cudaq-cpu`` / ``cudaq-gpu`` / ``cudaq-iqm``.
+            backend_config: Optional ``target``, ``iqm_url``, ``iqm_token``,
+                ``gpu_fallback_to_cpu``, ``seed``, ``target_options``.
+
+        Returns:
+            Configured CudaqExecutor instance.
+        """
+        target = backend_config.get("target") or _SLUG_TO_TARGET.get(backend_slug, "qpp-cpu")
+
+        config_kwargs: dict[str, Any] = {"target": target}
+        for key in ("iqm_url", "iqm_token", "gpu_fallback_to_cpu", "seed", "target_options"):
+            if key in backend_config:
+                config_kwargs[key] = backend_config[key]
+
+        return CudaqExecutor(CudaqExecutorConfig(**config_kwargs))
+
+    @classmethod
     def _create_simulation_executor(
         cls,
         backend_slug: str,
@@ -403,6 +439,7 @@ class ExecutorFactory:
             "IonQ Direct",
             "Rigetti QCS",
             "Quantum Brilliance",
+            "CUDA-Q",
             "Local",
             "Quantinuum",
         ]
