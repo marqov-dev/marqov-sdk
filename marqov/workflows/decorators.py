@@ -124,9 +124,18 @@ def task(
             timeout_seconds=timeout,
         )
 
-        # Serialize the function once
-        func_bytes = cloudpickle.dumps(fn)
-        func_ref = base64.b64encode(func_bytes).decode("utf-8")
+        # Defer cloudpickle.dumps OUT of decoration time. Eagerly pickling a
+        # local/closure fn by value at import — for EVERY @task whether or not it is
+        # ever dispatched — is what overflows the recursion budget under a deep
+        # ambient import stack (e.g. a full heavy-backend test suite, or a host
+        # worker process). Compute func_ref lazily (cached), only when a graph node
+        # actually needs it. This also eliminates all pickling of never-dispatched tasks.
+        _func_ref_cache: dict[str, str] = {}
+
+        def _func_ref() -> str:
+            if "v" not in _func_ref_cache:
+                _func_ref_cache["v"] = base64.b64encode(cloudpickle.dumps(fn)).decode("utf-8")
+            return _func_ref_cache["v"]
 
         @wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -140,7 +149,7 @@ def task(
                 node = TaskNode(
                     id=generate_node_id(),
                     func_name=fn.__name__,
-                    func_ref=func_ref,
+                    func_ref=_func_ref(),
                     args=list(_serialize_arg(arg) for arg in args),
                     kwargs={k: _serialize_arg(v) for k, v in kwargs.items()},
                     config=config,
@@ -155,7 +164,7 @@ def task(
         # Mark as task for introspection
         wrapper._is_task = True  # type: ignore
         wrapper._task_config = config  # type: ignore
-        wrapper._task_func_ref = func_ref  # type: ignore
+        wrapper._task_func_ref_fn = _func_ref  # type: ignore  # lazy accessor (was eager _task_func_ref; unread internally)
 
         return wrapper  # type: ignore
 
