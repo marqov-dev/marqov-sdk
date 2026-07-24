@@ -7,6 +7,12 @@ libraries (quantumflow, sympy, etc.).
 The key architectural principle:
 - Workflows = pure coordination (no marqov imports)
 - Activities = all computation (imports anything)
+
+The task body (cloudpickle.loads + run) executes in an isolated,
+**scrubbed subprocess** — the activity process itself never calls
+cloudpickle.loads on func_ref or the result.  The result is forwarded
+opaquely (as a JSON blob) so Temporal carries the bytes without this
+process deserialising them.
 """
 
 from __future__ import annotations
@@ -14,22 +20,45 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
+import signal
+import sys
+from pathlib import Path
 from typing import Any
 
-import cloudpickle
 from temporalio import activity
+
+from marqov.workflows._child_env import build_child_env, new_task_workdir
 
 # Heartbeat interval for execute_task. Temporal throttles forwarding to 80%
 # of heartbeat_timeout (48s for 60s timeout), so the send interval just needs
 # to be well under 48s. 10s gives ~4 heartbeats per forward window.
 _HEARTBEAT_INTERVAL_S = 10
 
+# Path to the child entry-point (same package, found via __file__).
+_CHILD_SCRIPT = str(Path(__file__).parent / "_task_child.py")
+
+# Size caps for child output files.  A child must never return so much data
+# that reading it exhausts the worker process.
+# error.json is small and structured (our code); 64 KiB is generous.
+# result.json cap is aligned with Temporal's default gRPC payload limit (~4 MiB):
+# a larger result would pass this cap but then be rejected by Temporal itself — a
+# confusing failure at demo scale. Kept UNDER 4 MiB for envelope/protocol headroom.
+# Results larger than this need spill-to-S3 + a reference (follow-up, not this build).
+MAX_ERROR_BYTES: int = 64 * 1024         # 64 KiB
+MAX_RESULT_BYTES: int = 3 * 1024 * 1024  # 3 MiB — under Temporal's ~4 MiB gRPC limit
+
 
 def _deserialize_value(value: Any) -> Any:
     """Deserialize a value from JSON transport.
 
     Handles cloudpickle-encoded complex objects.
+
+    NOTE: This function is used only by prepare_node_inputs (proxy resolution)
+    and by tests.  execute_task MUST NOT call it — results are forwarded opaquely.
     """
+    import cloudpickle
+
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     elif isinstance(value, list):
@@ -47,6 +76,8 @@ def _serialize_value(value: Any) -> Any:
 
     Uses cloudpickle for complex objects, JSON-compatible types pass through.
     """
+    import cloudpickle
+
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     elif isinstance(value, (list, tuple)):
@@ -64,50 +95,71 @@ def _serialize_value(value: Any) -> Any:
         }
 
 
+def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
+    """SIGKILL the child's whole process group.
+
+    ``start_new_session=True`` makes pgid == pid, so grandchildren die with it
+    instead of lingering (mirrors dwave_executor._kill_process_group).
+    """
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+
+
 @activity.defn
 async def execute_task(
     node_id: str,
     func_ref: str,
     args_json: str,
     kwargs_json: str,
+    provider_env: dict[str, str] | None = None,
 ) -> str:
-    """Execute a single task node.
+    """Execute a single task node in a scrubbed subprocess.
 
-    This activity receives serialized function and arguments,
-    executes the function, and returns the serialized result.
-
-    All marqov imports happen here, inside the activity,
-    which is NOT subject to Temporal's workflow sandbox.
+    The activity process NEVER calls cloudpickle.loads on func_ref, args, or
+    the result — all deserialization happens inside a scrubbed child process.
+    The result is returned **opaquely** as a JSON string containing the raw
+    serialized blob produced by the child.
 
     Args:
         node_id: Unique identifier for this node.
         func_ref: Base64-encoded cloudpickle of the function.
         args_json: JSON-encoded list of arguments.
         kwargs_json: JSON-encoded dict of keyword arguments.
+        provider_env: Optional provider credentials to inject into the child env
+            (e.g. AWS keys for a Braket task).  Never inherited from the parent
+            process env — only what is explicitly passed here enters the child.
 
     Returns:
-        JSON-encoded result with node_id and serialized value.
+        JSON-encoded result with node_id and opaque result blob.
     """
-    # Deserialize the function
-    func_bytes = base64.b64decode(func_ref)
-    func = cloudpickle.loads(func_bytes)
+    workdir = new_task_workdir(node_id)
+    result_path = workdir / "result.json"
 
-    # Deserialize arguments
-    args_raw = json.loads(args_json)
-    kwargs_raw = json.loads(kwargs_json)
+    # Write inputs for the child.  func_ref is base64-encoded; write the text
+    # so the child can decode it (writing decoded bytes would require the child
+    # to know the encoding; keeping b64 is simpler and avoids double-decode).
+    (workdir / "node_id").write_text(node_id)
+    (workdir / "func_ref").write_text(func_ref)
+    (workdir / "args.json").write_text(args_json)
+    (workdir / "kwargs.json").write_text(kwargs_json)
 
-    args = [_deserialize_value(arg) for arg in args_raw]
-    kwargs = {k: _deserialize_value(v) for k, v in kwargs_raw.items()}
+    child_env = build_child_env(workdir, provider_env=provider_env)
+    # The child needs to know its workdir.
+    child_env["MARQOV_TASK_WORKDIR"] = str(workdir)
 
-    # Run user code in a separate thread for complete event loop isolation.
-    # Libraries like PennyLane's Braket plugin call asyncio.run() internally,
-    # which conflicts with Temporal's event loop. A separate thread gets its
-    # own clean event loop, avoiding any interference. (#728)
-    #
-    # Heartbeat every 10s so Temporal can deliver CancelledError when the
-    # workflow is cancelled. The thread itself is NOT interruptible — we
-    # abandon it and let it finish in the background. The important thing
-    # is that the activity reports cancellation immediately.
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        _CHILD_SCRIPT,
+        stdout=asyncio.subprocess.DEVNULL,  # child logs go to stderr; don't mix
+        stderr=asyncio.subprocess.PIPE,
+        env=child_env,
+        start_new_session=True,
+    )
 
     async def _heartbeat_loop() -> None:
         """Send heartbeats to Temporal until cancelled."""
@@ -115,40 +167,78 @@ async def execute_task(
             await asyncio.sleep(_HEARTBEAT_INTERVAL_S)
             activity.heartbeat(f"executing {node_id}")
 
-    if asyncio.iscoroutinefunction(func):
-        def _run_async() -> Any:
-            return asyncio.run(func(*args, **kwargs))
-        task = asyncio.create_task(asyncio.to_thread(_run_async))
-    else:
-        task = asyncio.create_task(asyncio.to_thread(func, *args, **kwargs))
-
     heartbeat_task = asyncio.create_task(_heartbeat_loop())
+    child_task = asyncio.create_task(proc.wait())
 
     try:
-        result = await task
+        await child_task
     except asyncio.CancelledError:
-        # Workflow was cancelled via Temporal.
-        # The thread is still running but we report cancellation immediately.
-        activity.logger.warning(
-            "Activity cancelled for node %s",
-            node_id,
-        )
+        # Activity was cancelled by Temporal — kill the child and propagate.
+        _kill_process_group(proc)
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
+        activity.logger.warning("Activity cancelled for node %s — child killed", node_id)
         raise
     finally:
         heartbeat_task.cancel()
         try:
             await heartbeat_task
         except (asyncio.CancelledError, Exception):
-            # CancelledError is the normal case (we just cancelled it).
-            # Other exceptions (e.g. heartbeat SDK error) should not
-            # mask the main task's result or error.
             pass
 
-    # Serialize and return result
-    return json.dumps({
-        "node_id": node_id,
-        "result": _serialize_value(result),
-    })
+    # --- Separate error channel -------------------------------------------
+    # The child writes failures to error.json and successes to result.json.
+    # Reading error.json is safe: it's small, structured, and written by our
+    # own child wrapper code (not by user task code).
+    # The success path forwards result.json OPAQUELY (bytes → string) without
+    # ever calling json.loads on the result content.
+    error_path = workdir / "error.json"
+    if error_path.exists():
+        error_size = error_path.stat().st_size
+        if error_size > MAX_ERROR_BYTES:
+            raise RuntimeError(
+                f"Task {node_id} error.json size {error_size} exceeds limit "
+                f"{MAX_ERROR_BYTES} bytes."
+            )
+        error_data = json.loads(error_path.read_text())
+        raise RuntimeError(
+            f"Task {node_id} failed in child process: {error_data.get('error', '(no message)')}"
+        )
+
+    if result_path.exists():
+        result_size = result_path.stat().st_size
+        if result_size > MAX_RESULT_BYTES:
+            raise RuntimeError(
+                f"Task {node_id} result.json size {result_size} exceeds the "
+                f"{MAX_RESULT_BYTES}-byte limit (aligned with Temporal's ~4 MiB gRPC "
+                f"payload limit). Large results must spill to S3 + pass a reference "
+                f"(follow-up); returning multi-MiB results inline is unsupported."
+            )
+        # Forward result.json content OPAQUELY as a raw string — do NOT
+        # json.loads the result value here. The activity wraps it in an
+        # envelope so the caller can extract node_id and the opaque blob.
+        result_text = result_path.read_text()
+        # We need the node_id in the envelope but must not parse result content.
+        # Produce the envelope by string construction, not json.loads+json.dumps.
+        # result_text is already valid JSON: {"node_id": ..., "result": <blob>}
+        # We just forward it directly — the schema matches what callers expect.
+        return result_text
+
+    # No result file — child crashed before writing anything.
+    rc = proc.returncode
+    stderr_bytes = b""
+    if proc.stderr is not None:
+        try:
+            stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=2)
+        except (asyncio.TimeoutError, Exception):
+            pass
+    stderr_snippet = stderr_bytes.decode(errors="replace")[-2000:] if stderr_bytes else ""
+    raise RuntimeError(
+        f"Task {node_id} child exited with code {rc} and no result.\n"
+        f"Stderr: {stderr_snippet}"
+    )
 
 
 @activity.defn
@@ -160,6 +250,10 @@ async def prepare_node_inputs(
 
     This activity resolves proxy references in arguments by looking up
     results from previously completed nodes.
+
+    Upstream results are kept **opaque** — they are passed through as-is
+    (still in their __cloudpickle__ envelope) without deserialization.
+    The child process for the next execute_task call will deserialize them.
 
     Args:
         node_data_json: JSON with node's args, kwargs, and dependency info.
@@ -177,6 +271,7 @@ async def prepare_node_inputs(
             node_id = arg["node_id"]
             if node_id not in completed:
                 raise ValueError(f"Dependency {node_id} not yet computed")
+            # Pass the upstream result through opaquely — do NOT deserialize.
             return completed[node_id]
         elif isinstance(arg, list):
             return [resolve_arg(item) for item in arg]

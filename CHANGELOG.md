@@ -5,6 +5,21 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
+## [Unreleased]
+
+### Changed
+- **`@task` bodies now execute in an isolated subprocess** with a minimal,
+  allowlisted environment — the task process inherits only an explicit allowlist
+  of environment variables plus any values a host passes for that job, never the
+  ambient process environment. Task results are forwarded by the parent worker
+  without being deserialized in-process.
+
+### Added
+- **`MARQOV_SCRUB_ALLOWLIST` environment variable (host↔SDK interface):** a host
+  runner may set this (comma-separated variable names) in the worker process to
+  define the allowlist the SDK uses when building a task's subprocess environment.
+  When unset, the SDK falls back to a minimal, secret-free default and logs a warning.
+
 ## [0.3.0] — 2026-07-20
 
 ### Added
