@@ -2,10 +2,8 @@
 
 All tests mock ``requests.Session.request`` — NO real network calls.
 
-Mock fixture source citations (each body is transcribed from a real route):
-  All error bodies follow the envelope in:
-    platform/src/lib/auth/error-envelope.ts — ``{ error: { code, message, status } }``
-  Named sources below reference specific file:line for each code.
+Mock fixtures reproduce the platform's HTTP API contract: all error bodies
+follow the envelope ``{ error: { code, message, status } }``.
 """
 
 from __future__ import annotations
@@ -64,7 +62,7 @@ class TestAuthentication:
     def test_explicit_key_used_in_bearer_header(self, tmp_path):
         """Transport sends Authorization: Bearer <key> on every request.
 
-        Source: api-key.ts:40 — ``authHeader.startsWith("Bearer marqey_")``
+        The server expects a Bearer token in the Authorization header.
         """
         transport = Transport(api_key="marqey_test_abc123", base_url="http://test")
         mock_resp = _mock_response(200, {"job_id": "j1"})
@@ -132,10 +130,9 @@ class TestErrorMapping:
     def test_401_raises_authentication_error(self, monkeypatch):
         """HTTP 401 unauthorized → AuthenticationError.
 
-        Source: require-auth.ts:70 — ``apiError("unauthorized", "Unauthorized", 401)``
-        Body shape: error-envelope.ts — ``{ error: { code, message, status } }``
+        Server returns error code "unauthorized" with HTTP 401.
+        Body shape: ``{ error: { code, message, status } }``
         """
-        # Source body: require-auth.ts:70
         body = {"error": {"code": "unauthorized", "message": "Unauthorized", "status": 401}}
         transport = Transport(api_key="marqey_test_x", base_url="http://test")
         mock_resp = _mock_response(401, body)
@@ -148,9 +145,8 @@ class TestErrorMapping:
     def test_403_permission_denied_raises_permission_tier_error(self):
         """HTTP 403 permission_denied → PermissionTierError.
 
-        Source: submit/route.ts:173-178 — ``apiError("permission_denied", …, 403)``
+        Server returns error code "permission_denied" with HTTP 403.
         """
-        # Source body: submit/route.ts:175
         body = {
             "error": {
                 "code": "permission_denied",
@@ -170,10 +166,9 @@ class TestErrorMapping:
     def test_422_analysis_required_raises_paid_backend_not_supported_yet(self):
         """HTTP 422 analysis_required → PaidBackendNotSupportedYet.
 
-        Source: submit/route.ts:609-617 — code "analysis_required", status 422
-        Body shape: error-envelope.ts — ``{ error: { code, message, status } }``
+        Server returns error code "analysis_required" with HTTP 422.
+        Body shape: ``{ error: { code, message, status } }``
         """
-        # Source body: submit/route.ts:611-616
         body = {
             "error": {
                 "code": "analysis_required",
@@ -195,17 +190,14 @@ class TestErrorMapping:
 
         CRITICAL: must NOT raise TransportError for an unknown code.
 
-        Source: submit/route.ts:553-560 — spend_limit_exceeded with status 429;
-        here we use the 429 body but respond with an HTTP status that doesn't
-        match 429 to exercise the "unknown code" branch via a different scenario.
-        Actually: spend_limit_exceeded CAN appear on 429 — test it as a 422
-        (hypothetical future unknown code shape) to verify base-class mapping.
-
-        For a cleaner "unknown code" test, use a fabricated code that doesn't
-        appear in the route handlers:
+        The server returns "spend_limit_exceeded" with HTTP 429; here we use
+        that body but respond with an HTTP status that doesn't match 429 to
+        exercise the "unknown code" branch via a different scenario.
+        spend_limit_exceeded CAN appear on 429 — test it as a 422 (hypothetical
+        future unknown code shape) to verify base-class mapping.
         """
-        # Source body shape: error-envelope.ts; code is a plausible future code
-        # not in the current ErrorCode union (tests future-proofing).
+        # Body follows the standard error envelope; code is a plausible future
+        # code not in the current ErrorCode union (tests future-proofing).
         body = {
             "error": {
                 "code": "spend_limit_exceeded",
@@ -234,10 +226,9 @@ class TestErrorMapping:
     def test_spend_limit_exceeded_on_429_raises_rate_limited(self):
         """HTTP 429 spend_limit_exceeded → RateLimited (status code is authoritative).
 
-        Source: submit/route.ts:549-561 — ``finalize(429, { error: { code: "spend_limit_exceeded", … } })``
-        Source: submit/route.ts:135-146 — rate limit 429 also has Retry-After header
+        Server returns error code "spend_limit_exceeded" with HTTP 429.
+        Rate-limit 429 responses also carry a Retry-After header.
         """
-        # Source body: submit/route.ts:553-560
         body = {
             "error": {
                 "code": "spend_limit_exceeded",
@@ -256,11 +247,10 @@ class TestErrorMapping:
     def test_backend_unknown_raises_backend_unavailable(self):
         """HTTP 422 backend_unknown → BackendUnavailable.
 
-        Source: submit/route.ts:211-215 —
-          ``apiError("backend_unknown", "Backend '<slug>' is not in the registry", 422)``
-        Body shape: error-envelope.ts — ``{ error: { code, message, status } }``
+        Server returns error code "backend_unknown" with HTTP 422 and a message
+        of the form "Backend '<slug>' is not in the registry".
+        Body shape: ``{ error: { code, message, status } }``
         """
-        # Transcribed from submit/route.ts:211-215 via apiError() in error-envelope.ts
         body = {
             "error": {
                 "code": "backend_unknown",
@@ -283,11 +273,10 @@ class TestErrorMapping:
     def test_backend_retired_raises_backend_unavailable(self):
         """HTTP 422 backend_retired → BackendUnavailable.
 
-        Source: submit/route.ts:228-232 —
-          ``apiError("backend_retired", "Backend '<slug>' is retired", 422)``
-        Body shape: error-envelope.ts — ``{ error: { code, message, status } }``
+        Server returns error code "backend_retired" with HTTP 422 and a message
+        of the form "Backend '<slug>' is retired".
+        Body shape: ``{ error: { code, message, status } }``
         """
-        # Transcribed from submit/route.ts:228-232 via apiError() in error-envelope.ts
         body = {
             "error": {
                 "code": "backend_retired",
@@ -310,11 +299,10 @@ class TestErrorMapping:
     def test_validation_error_on_400_raises_invalid_program(self):
         """HTTP 400 validation_error → InvalidProgram.
 
-        Source: submit/route.ts:105 — ``apiError("validation_error", "Invalid JSON body", 400)``
-        Source: submit/route.ts:241 — ``apiError("validation_error", "Idempotency-Key …", 400)``
-        Body shape: error-envelope.ts — ``{ error: { code, message, status } }``
+        Server returns error code "validation_error" with HTTP 400 (e.g. an
+        invalid JSON body or a missing Idempotency-Key header).
+        Body shape: ``{ error: { code, message, status } }``
         """
-        # Transcribed from submit/route.ts:241 via apiError() in error-envelope.ts
         body = {
             "error": {
                 "code": "validation_error",
@@ -337,11 +325,10 @@ class TestErrorMapping:
     def test_validation_error_on_422_raises_invalid_program(self):
         """HTTP 422 validation_error → InvalidProgram (structured body shape).
 
-        Source: submit/route.ts:494-500 — ``finalize(422, { error: { code: "validation_error",
-          message: "Script has no inline content to submit", status: 422 } })``
-        Body shape: finalize wraps as-is (not via apiError) but same envelope structure.
+        Server returns error code "validation_error" with HTTP 422 (e.g. a
+        message of "Script has no inline content to submit").
+        Body shape: the standard ``{ error: { code, message, status } }`` envelope.
         """
-        # Transcribed from submit/route.ts:494-500
         body = {
             "error": {
                 "code": "validation_error",
@@ -364,17 +351,14 @@ class TestErrorMapping:
     def test_429_rate_limited_raises_rate_limited(self):
         """HTTP 429 rate_limited from status poll → RateLimited.
 
-        Source: status/route.ts:48-58 — ``{ error: rateLimit.error }, { status: 429, headers: { "Retry-After": … } }``
+        The server returns HTTP 429 with a Retry-After header on rate limit.
 
         NOTE: 429 bodies come in two real shapes:
           - Plain string: ``{ "error": "Rate limit exceeded. 0/60 requests remaining…" }``
-            (rate-limit.ts:317, status/route.ts:48-58, submit/route.ts:135-146)
           - Structured dict: ``{ "error": { "code": "spend_limit_exceeded", … } }``
-            (submit/route.ts:549-561)
         This test uses the structured dict shape; see test_429_rate_limit_plain_string_body
         for the plain-string shape.
         """
-        # Source body: status/route.ts:48-58; error shape from checkRateLimit return
         body = {
             "error": {
                 "code": "rate_limited",
@@ -403,7 +387,7 @@ class TestRetryPolicy:
         """ConnectionError on idempotent_write=True → retried; Idempotency-Key reused.
 
         The same UUID must appear in every attempt so the server can dedupe.
-        Source: submit/route.ts:238-259 — idempotency key check at step 6.
+        The server uses the Idempotency-Key header to detect replays.
         """
         transport = Transport(api_key="marqey_test_x", base_url="http://test")
         success_resp = _mock_response(200, {"job_id": "j1"})
@@ -465,7 +449,7 @@ class TestRetryPolicy:
     def test_read_retries_on_any_transport_failure(self):
         """GET (idempotent_write=False) → retried on any transport failure.
 
-        Source: status/route.ts is a GET endpoint; no Idempotency-Key required.
+        The status endpoint is a GET; no Idempotency-Key is required for reads.
         """
         transport = Transport(api_key="marqey_test_x", base_url="http://test")
         success_resp = _mock_response(200, {"id": "j1", "status": "completed"})
@@ -543,13 +527,13 @@ class TestRetryPolicy:
 class TestWaitParameter:
     """The ``wait`` argument is forwarded as the ``wait`` query param.
 
-    Source: status/route.ts:70 — ``request.nextUrl.searchParams.get("wait")``
+    The server reads the "wait" query param on the status endpoint.
     """
 
     def test_wait_param_sent_as_query_param(self):
         """wait=20 must appear in the URL query string as ``wait=20``."""
         transport = Transport(api_key="marqey_test_x", base_url="http://test")
-        # Source body: status/route.ts response (plain JSON of the job row)
+        # Status response body: plain JSON of the job row.
         body = {
             "id": "abc",
             "status": "pending",
@@ -572,7 +556,7 @@ class TestWaitParameter:
     def test_no_wait_means_no_wait_param(self):
         """When wait is None, no wait param is sent."""
         transport = Transport(api_key="marqey_test_x", base_url="http://test")
-        # Source body: status/route.ts response shape
+        # Status response body shape.
         body = {"id": "abc", "status": "completed", "backend": "sv1",
                 "created_at": "2026-07-01T00:00:00Z", "updated_at": "2026-07-01T00:00:00Z",
                 "estimated_cost_usd": 0, "result": None}
@@ -615,7 +599,7 @@ class TestIdempotencyKey:
     def test_post_includes_idempotency_key_header(self):
         """POST sends an Idempotency-Key header on first attempt."""
         transport = Transport(api_key="marqey_test_x", base_url="http://test")
-        # Source body: submit/route.ts:1100 — ``finalize(200, { job_id: jobId })``
+        # Submit response body: ``{ job_id: <uuid> }``.
         body = {"job_id": "j1"}
         mock_resp = _mock_response(200, body)
 
@@ -630,7 +614,7 @@ class TestIdempotencyKey:
     def test_get_does_not_send_idempotency_key(self):
         """GET requests do not include an Idempotency-Key header."""
         transport = Transport(api_key="marqey_test_x", base_url="http://test")
-        # Source body: status/route.ts response shape
+        # Status response body shape.
         body = {"id": "j1", "status": "completed", "backend": "sv1",
                 "created_at": "2026-07-01T00:00:00Z", "updated_at": "2026-07-01T00:00:00Z",
                 "estimated_cost_usd": 0, "result": None}
@@ -664,8 +648,8 @@ class TestIdempotencyKey:
     def test_same_idempotency_key_reused_across_connection_error_retries(self):
         """ConnectionError retries for a write reuse the SAME Idempotency-Key.
 
-        Source: submit/route.ts:249-259 — idempotency check uses the key to
-        detect replays; a changing key defeats deduplication.
+        The server's idempotency check uses the key to detect replays; a
+        changing key defeats deduplication.
         """
         transport = Transport(api_key="marqey_test_x", base_url="http://test")
         success_resp = _mock_response(200, {"job_id": "j1"})
@@ -704,7 +688,7 @@ class TestSuccessPath:
     def test_200_returns_json_body(self):
         """200 OK → response body returned as dict."""
         transport = Transport(api_key="marqey_test_x", base_url="http://test")
-        # Source body: submit/route.ts:1100 — ``{ job_id: jobId }``
+        # Submit response body: ``{ job_id: <uuid> }``.
         body = {"job_id": "j42"}
         mock_resp = _mock_response(200, body)
 
@@ -744,17 +728,15 @@ class TestSuccessPath:
 class TestRateLimitedBodyShapes:
     """429 responses come in two real shapes; both must raise RateLimited.
 
-    Shape A — plain string error (rate-limit.ts:317, status/route.ts:48-58,
-               submit/route.ts:135-146):
+    Shape A — plain string error:
         ``{ "error": "Rate limit exceeded. 0/60 requests remaining. Try again in 30 seconds." }``
-    Shape B — structured dict (submit/route.ts:549-561, spend_limit_exceeded):
+    Shape B — structured dict (spend_limit_exceeded):
         ``{ "error": { "code": "spend_limit_exceeded", "message": "...", "status": 429 } }``
     """
 
     def test_429_rate_limit_plain_string_body(self):
         """Plain-string error body on 429 → RateLimited; code is None.
 
-        Source: rate-limit.ts:317, status/route.ts:48-58, submit/route.ts:135-146
         Real body: ``{"error": "Rate limit exceeded. 0/60 requests remaining. Try again in 30 seconds."}``
         """
         body = {
@@ -822,7 +804,7 @@ class TestAuthHeaderOnRequest:
         """The merged headers on the actual session.request call include Authorization: Bearer.
 
         Verifies the header reaches the wire, not just the session constructor.
-        Source: api-key.ts:40 — ``authHeader.startsWith("Bearer marqey_")``
+        The server expects a Bearer token in the Authorization header.
         """
         transport = Transport(api_key="marqey_test_bearer_check", base_url="http://test")
         mock_resp = _mock_response(200, {"job_id": "j1"})
@@ -901,7 +883,7 @@ class TestConnectTimeoutRetry:
     The transport's ConnectionError branch (not the Timeout branch) should catch it
     first, making it retryable even on writes, while reusing the same Idempotency-Key.
 
-    Source: submit/route.ts:238-259 — idempotency key required for safe dedup on retry.
+    The server requires the Idempotency-Key for safe dedup on retry.
     """
 
     def test_connect_timeout_on_idempotent_write_is_retried_with_same_key(self):

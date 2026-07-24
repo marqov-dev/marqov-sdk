@@ -3,23 +3,7 @@
 Handles authentication, error mapping, conditional retry with idempotency-key
 reuse, and long-poll parameter injection.
 
-Source citations (real platform routes read before encoding any contract):
-  - Auth/key format:
-      marqov-platform/…/lib/auth/api-key.ts:40 — ``Bearer marqey_…``
-  - Submit error codes / status codes:
-      marqov-platform/…/app/api/jobs/submit/route.ts — ``analysis_required``
-      (422), ``spend_limit_exceeded`` (429), ``permission_denied`` (403),
-      ``unauthorized`` (401), 402 budget errors.
-      ``backend_unknown`` (422): submit/route.ts:211-215
-      ``backend_retired`` (422): submit/route.ts:228-232
-      ``validation_error`` (400/422): submit/route.ts:105, 241, 494-500
-      ``is_available==false`` (400, plain-string body): submit/route.ts:359-362
-  - Status long-poll ``wait`` param name:
-      marqov-platform/…/app/api/jobs/[id]/status/route.ts:70 —
-      ``request.nextUrl.searchParams.get("wait")``.
-  - Rate limit → 429 + ``Retry-After``:
-      marqov-platform/…/app/api/jobs/[id]/status/route.ts:48-58 and
-      marqov-platform/…/app/api/jobs/submit/route.ts:135-146.
+Error codes, status codes, and param names below follow the platform's HTTP API contract.
 """
 
 from __future__ import annotations
@@ -110,7 +94,7 @@ class Transport:
 
         # --- Build session --------------------------------------------------
         self._session = requests.Session()
-        # Source: api-key.ts:40 — platform checks ``authHeader.startsWith("Bearer marqey_")``.
+        # Server expects a Bearer token in the Authorization header.
         self._session.headers.update({"Authorization": f"Bearer {resolved_key}"})
 
     @property
@@ -153,8 +137,8 @@ class Transport:
                               request.  When ``False`` (reads / GETs) any
                               transport failure is retried.
             wait:             If given, appended as the ``wait`` query
-                              parameter (long-poll seconds).  Name confirmed
-                              against ``status/route.ts:70``.
+                              parameter (long-poll seconds).  The server reads
+                              the ``"wait"`` query param on the status endpoint.
 
         Returns:
             Decoded JSON response body as a plain ``dict``.
@@ -174,7 +158,7 @@ class Transport:
         url = self._base_url + path
 
         # Merge wait into query params.
-        # Source: status/route.ts:70 — ``searchParams.get("wait")``
+        # Server reads the "wait" query param on the status endpoint.
         merged_params: dict[str, Any] = dict(params or {})
         if wait is not None:
             merged_params["wait"] = wait
@@ -266,25 +250,25 @@ class Transport:
         elif isinstance(error_obj, str):
             message = error_obj
 
-        # --- Error mapping (source: submit/route.ts + status/route.ts) -----
+        # --- Error mapping -------------------------------------------------
 
         # HTTP 401 → AuthenticationError
-        # Source: require-auth.ts:70 — ``apiError("unauthorized", "Unauthorized", 401)``
+        # Server returns error code "unauthorized" with HTTP 401.
         if status == 401 or code == "unauthorized":
             raise AuthenticationError(message, code=code, status=status)
 
         # HTTP 403 / permission_denied → PermissionTierError
-        # Source: submit/route.ts:175 — ``apiError("permission_denied", …, 403)``
+        # Server returns error code "permission_denied" with HTTP 403.
         if status == 403 or code == "permission_denied":
             raise PermissionTierError(message, code=code, status=status)
 
         # HTTP 422 analysis_required → PaidBackendNotSupportedYet
-        # Source: submit/route.ts:611-617 — code "analysis_required", status 422
+        # Server returns error code "analysis_required" with HTTP 422.
         if code == "analysis_required":
             raise PaidBackendNotSupportedYet(message, code=code, status=status)
 
         # HTTP 429 → RateLimited (when Retry-After present; always for 429)
-        # Source: status/route.ts:48-58 + submit/route.ts:135-146 — 429 + Retry-After header
+        # Server returns HTTP 429 with a Retry-After header on rate limit.
         if status == 429:
             _retry_after_raw = resp.headers.get("Retry-After")
             _retry_after: int | None = None
@@ -296,15 +280,13 @@ class Transport:
             raise RateLimited(message, code=code, status=status, retry_after=_retry_after)
 
         # backend_unknown / backend_retired → BackendUnavailable
-        # Source: submit/route.ts:211-215 — apiError("backend_unknown", …, 422)
-        # Source: submit/route.ts:228-232 — apiError("backend_retired", …, 422)
+        # Server returns error code "backend_unknown" with HTTP 422.
+        # Server returns error code "backend_retired" with HTTP 422.
         if code in ("backend_unknown", "backend_retired"):
             raise BackendUnavailable(message, code=code, status=status)
 
         # validation_error → InvalidProgram
-        # Source: submit/route.ts:105 — apiError("validation_error", "Invalid JSON body", 400)
-        # Source: submit/route.ts:241 — apiError("validation_error", "Idempotency-Key …", 400)
-        # Source: submit/route.ts:494-500 — finalize(422, { error: { code: "validation_error", … } })
+        # Server returns error code "validation_error" with HTTP 400 or 422.
         if code == "validation_error":
             raise InvalidProgram(message, code=code, status=status)
 

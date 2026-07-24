@@ -9,39 +9,30 @@ Usage::
     result = job.result(timeout=120.0)
     print(result.counts)
 
-Source citations (real platform routes verified before encoding any contract):
+Observable API contract notes:
 
-- Submit request body fields (``inline_code``, ``framework``, ``backend``,
-  ``params`` with ``shots``):
-      platform/src/lib/schemas.ts:164-198 — ``submitJobSchema``
-  Note: The server-side field is ``params``, **not** ``parameters``.
+- Submit request body fields: ``inline_code``, ``framework``, ``backend``,
+  and ``params`` (with ``shots``).  Note: the server-side field is ``params``,
+  **not** ``parameters``.
 
-- Submit response shape (``job_id`` field):
-      platform/src/app/api/jobs/submit/route.ts:1100
-      ``return finalize(200, { job_id: jobId })``
+- Submit response shape: ``{ "job_id": "<uuid>" }``.
 
-- Backends endpoint response shape (``backends`` list + ``updatedAt``):
-      platform/src/app/api/backends/route.ts:151-165
-      ``NextResponse.json({ backends, updatedAt: ... })``
+- Backends endpoint response shape: ``{ "backends": [...], "updatedAt": "..." }``.
 
-- Backends item shape (camelCase from server):
-      platform/src/app/api/backends/route.ts:16-40 — ``Backend`` interface
+- Backends item fields (camelCase from server): ``slug``, ``name``,
+  ``provider``, ``deviceType``, ``status``, ``isAvailable``, ``pricing``,
+  ``supportedProgramTypes``.
 
 - ``platform_info()`` — §11 TBC assumption:
       No ``/api/meta``, ``/api/version``, or ``/api/health`` route was found.
-      Grep over ``platform/src/app/api/`` returned no match for any such
-      endpoint.  ``platform_info()`` is implemented against the **mocked
-      path** ``/api/meta`` and marked as a §11 TBC assumption.  When the
-      platform ships a real endpoint, update the path and the response mapping
-      here (and remove the §11 TBC warning in the docstring).
+      ``platform_info()`` is implemented against the **mocked path** ``/api/meta``
+      and marked as a §11 TBC assumption.  When the platform ships a real endpoint,
+      update the path and the response mapping here (and remove the §11 TBC warning
+      in the docstring).
 
-- ``sdk_version`` source:
-      ``marqov/__init__.py:__version__`` (``"0.2.0"``).
-      Imported via ``import marqov``.
-      Note: the server's Zod schema (submitJobSchema) strips unknown keys, so
-      ``sdk_version`` is currently discarded server-side.  It is sent for
-      forward-compat and is **not yet consumed server-side** (reconciliation
-      item — update this note when the server begins reading the field).
+- ``sdk_version``: sourced from ``marqov.__version__`` and sent for
+  forward-compat; not yet consumed server-side (the server strips unknown
+  keys from the submit body — reconciliation item).
 """
 
 from __future__ import annotations
@@ -160,9 +151,10 @@ class MarqovClient:
             :class:`~marqov.platform.errors.MarqovPlatformError`:
                 Any other non-2xx platform error.
 
-        Source citations:
-            - Submit body: platform/src/lib/schemas.ts:164-198 (``submitJobSchema``)
-            - Submit response ``job_id``: platform/src/app/api/jobs/submit/route.ts:1100
+        Wire contract:
+            - Submit body fields: ``inline_code``, ``framework``, ``backend``,
+              ``params`` (with ``shots``).
+            - Submit response: ``{ "job_id": "<uuid>" }``.
         """
         # --- Validate program type and build body --------------------------
         if isinstance(program, str):
@@ -201,8 +193,7 @@ class MarqovClient:
             )
 
         # --- Build request body --------------------------------------------
-        # Body field names mirror the server-side submitJobSchema in
-        # platform/src/lib/schemas.ts:164-198.
+        # Body field names follow the server's submit schema.
         # Note: the server-side field is "params" (not "parameters").
         body: dict = {
             "backend": backend,
@@ -230,7 +221,6 @@ class MarqovClient:
         )
 
         # Response shape: { "job_id": "<uuid>" }
-        # Source: platform/src/app/api/jobs/submit/route.ts:1100
         job_id: str = resp["job_id"]
         return Job(self._transport, job_id)
 
@@ -271,20 +261,17 @@ class MarqovClient:
             :class:`~marqov.platform.errors.MarqovPlatformError`: Any non-2xx
                 platform error.
 
-        Source citation:
-            platform/src/app/api/backends/route.ts:100-131
-            Response: ``{ backends: [...], updatedAt: "..." }``
+        Wire contract:
+            Response: ``{ "backends": [...], "updatedAt": "..." }``
         """
         resp = self._transport.request("GET", "/api/backends")
 
         # Response shape: { "backends": [...], "updatedAt": "..." }
-        # Source: platform/src/app/api/backends/route.ts:151-165
         raw_backends: list[dict] = resp.get("backends", [])
 
         result: list[Backend] = []
         for raw in raw_backends:
             # Map camelCase server fields to snake_case Backend dataclass.
-            # Source: platform/src/app/api/backends/route.ts:16-40 + 100-131
             # Build extra dict from all remaining camelCase keys not mapped
             extra: dict = {}
             for k, v in raw.items():
@@ -314,11 +301,10 @@ class MarqovClient:
 
         .. warning::
             **§11 TBC assumption**: No ``/api/meta``, ``/api/version``,
-            or ``/api/health`` endpoint was found in the platform source tree.
-            Grep over ``platform/src/app/api/`` found no match for any such
-            route.  This method is implemented against the **mocked path**
-            ``/api/meta``.  When the platform ships a real endpoint, update the
-            path and the response-field mapping here (and remove this warning).
+            or ``/api/health`` endpoint has been confirmed in the platform API.
+            This method is implemented against the **mocked path** ``/api/meta``.
+            When the platform ships a real endpoint, update the path and the
+            response-field mapping here (and remove this warning).
 
         Returns:
             :class:`~marqov.platform._models.PlatformInfo` with:

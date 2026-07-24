@@ -157,7 +157,7 @@ class TestIsTerminal:
         assert is_terminal("cancelled") is True
 
     def test_dispatch_failed_is_terminal(self):
-        # 4th server terminal state (status/route.ts TERMINAL_STATES)
+        # 4th server terminal state
         assert is_terminal("dispatch_failed") is True
 
     def test_running_is_not_terminal(self):

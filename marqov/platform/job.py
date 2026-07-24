@@ -5,30 +5,23 @@ quantum job to the platform.  It supports status polling, blocking result
 retrieval (with server long-poll + client-side exponential backoff), job
 cancellation, and cost introspection.
 
-Source citations (real platform routes read before encoding any contract):
-  - Status endpoint response shape and ``wait`` param:
-      platform/src/app/api/jobs/[id]/status/route.ts:152
-      ``selectCols = "id, status, backend, created_at, updated_at, estimated_cost_usd, result"``
-  - Server ``wait`` param name and cap (22 s):
-      platform/src/app/api/jobs/[id]/status/route.ts:70-73
-      ``Math.min(Math.max(parseInt(waitParam, 10) || 0, 0), MAX_WAIT_SECONDS)``
-      ``const MAX_WAIT_SECONDS = 22``
-  - Terminal states (server-side):
-      platform/src/app/api/jobs/[id]/status/route.ts:13-18
-      ``"completed", "failed", "cancelled", "dispatch_failed"``
-  - ``error_message`` field: present in ``job_runs`` table
-      (platform/supabase/migrations/001_initial_schema.sql:74)
-      but **NOT** returned by the status route (not in ``selectCols``).
-      The ``result`` field is also ``null`` for failed jobs (worker stores
-      the error in ``error_message``, not ``result``).  On a ``failed``
-      terminal status the client raises :class:`~marqov.platform.errors.JobFailed`
-      with the best available message from ``result`` if it contains an
-      ``"error"`` key, otherwise a generic message.
+Observable API contract notes:
+
+  - Status endpoint response: the server returns a fixed set of fields
+    (``id``, ``status``, ``backend``, ``created_at``, ``updated_at``,
+    ``estimated_cost_usd``, ``result``) and does **NOT** include an
+    ``error_message`` field.  On a ``failed`` terminal status the client
+    raises :class:`~marqov.platform.errors.JobFailed` with the best
+    available message from ``result`` if it contains an ``"error"`` key,
+    otherwise a generic message.
+  - Server ``wait`` param: the server accepts a ``wait`` query parameter
+    (seconds) and caps it at 22 seconds.  Values below 0 are clamped to 0.
+  - Terminal states: ``"completed"``, ``"failed"``, ``"cancelled"``,
+    ``"dispatch_failed"``.
   - Cancel endpoint: **DOES NOT EXIST** as a user-facing route (§11 TBC).
-      The only job sub-routes under ``app/api/jobs/[id]/`` are ``status`` and
-      ``traces``.  :meth:`Job.cancel` is implemented against the **mocked
-      path** ``/api/jobs/{id}/cancel`` (POST).  Once the platform ships a
-      real cancel endpoint this path must be updated.
+      :meth:`Job.cancel` is implemented against the **mocked path**
+      ``/api/jobs/{id}/cancel`` (POST).  Once the platform ships a real
+      cancel endpoint this path must be updated.
 
 .. note::
     ``dispatch_failed`` is one of the four terminal states (with ``completed``,
@@ -55,8 +48,7 @@ if TYPE_CHECKING:
 # Constants
 # ---------------------------------------------------------------------------
 
-#: Server-enforced cap on ``wait`` in seconds
-#: (platform/src/app/api/jobs/[id]/status/route.ts:22 — ``MAX_WAIT_SECONDS = 22``).
+#: The server caps the long-poll wait at 22 seconds.
 _SERVER_MAX_WAIT_SECONDS = 22
 
 #: Safety margin (seconds) subtracted from the transport's per-request
@@ -220,8 +212,8 @@ class Job:
                     f"Job {self._job_id} did not complete within {timeout}s"
                 )
 
-            # Compute server-side wait: must be < transport.timeout
-            # Source: status/route.ts:70-73 — ``wait`` capped at MAX_WAIT_SECONDS=22
+            # Compute server-side wait: must be < transport.timeout.
+            # The server caps the "wait" param at 22 seconds.
             wait_seconds = int(
                 min(
                     _SERVER_MAX_WAIT_SECONDS,
@@ -317,14 +309,13 @@ class Job:
 
         .. warning::
             **§11 TBC assumption**: The ``/api/jobs/{id}/cancel`` endpoint
-            does **not** currently exist in the platform.  Grepping
-            ``platform/src/app/api/jobs/`` found only ``[id]/status`` and
-            ``[id]/traces`` sub-routes; no user-facing cancel/revoke endpoint
-            was present in main or the ``feat-1319-loud-failures`` worktree.
-            This method is implemented against the mocked path so that
-            test-suite infrastructure and caller code can be written today.
-            When the platform ships a real cancel endpoint, update the path
-            here (and remove this warning).
+            does **not** currently exist in the platform.  The only known
+            job sub-routes are ``status`` and ``traces``; no user-facing
+            cancel/revoke endpoint is present at this revision.  This method
+            is implemented against the mocked path so that test-suite
+            infrastructure and caller code can be written today.  When the
+            platform ships a real cancel endpoint, update the path here (and
+            remove this warning).
 
         Raises:
             :class:`~marqov.platform.errors.MarqovPlatformError`: If the

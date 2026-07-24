@@ -2,16 +2,14 @@
 
 All tests mock the Transport — no real network calls.
 
-Mock fixture source citations:
-  - Status response shape:
-      platform/src/app/api/jobs/[id]/status/route.ts:152
-      ``selectCols = "id, status, backend, created_at, updated_at, estimated_cost_usd, result"``
-  - ``wait`` param name and server cap (22 s):
-      platform/src/app/api/jobs/[id]/status/route.ts:70-73
-  - Terminal states (server-side):
-      platform/src/app/api/jobs/[id]/status/route.ts:13-18
-      ``"completed", "failed", "cancelled", "dispatch_failed"``
-  - Cancel endpoint: §11 TBC — no real endpoint exists; mocked as
+Mock fixtures reproduce the platform's observable HTTP API contract:
+  - Status response returns a fixed set of fields: ``id``, ``status``,
+    ``backend``, ``created_at``, ``updated_at``, ``estimated_cost_usd``,
+    ``result``.
+  - The server reads the ``wait`` query param and caps it at 22 seconds.
+  - Terminal states: ``"completed"``, ``"failed"``, ``"cancelled"``,
+    ``"dispatch_failed"``.
+  - Cancel endpoint: §11 TBC — no real endpoint is confirmed; mocked as
       ``POST /api/jobs/{id}/cancel``.
 """
 
@@ -58,8 +56,7 @@ def _status_payload(
 ) -> dict:
     """Build a minimal status-endpoint response payload.
 
-    Shape mirrors the real server:
-      platform/src/app/api/jobs/[id]/status/route.ts:152
+    Shape mirrors the server's status response fields:
       id, status, backend, created_at, updated_at, estimated_cost_usd, result
     """
     return {

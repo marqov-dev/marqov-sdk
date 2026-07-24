@@ -60,7 +60,7 @@ one way: platform → SDK.
 ## Why an explicit client, not a device or backend
 
 The `ExecutorFactory` already routes to many backends using a uniform `.run()`
-interface. A natural instinct is to add a `"marqov-platform/sv1"` backend and
+interface. A natural instinct is to add a `"platform"` pseudo-backend and
 route it through `ExecutorFactory`. We deliberately chose not to do this.
 
 Platform jobs are **fundamentally different** from local or direct-provider

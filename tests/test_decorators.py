@@ -4,8 +4,8 @@ import pytest
 from marqov import task, workflow
 from marqov.workflows import TransportGraph, TaskProxy
 
-# KNOWN PRE-EXISTING ISSUE (marqov-platform#1259). Approach A has landed: @task no
-# longer cloudpickles at DECORATION time (that import-time landmine is fixed — see
+# KNOWN PRE-EXISTING ISSUE. Approach A has landed: @task no longer cloudpickles at
+# DECORATION time (that import-time landmine is fixed — see
 # tests/test_task_serialization.py, which enforces it). What remains is the RESIDUAL
 # case this marker guards: these tests decorate *local* functions and then build a
 # workflow graph, so the by-value cloudpickle now happens at GRAPH-BUILD; under the
@@ -14,7 +14,7 @@ from marqov.workflows import TransportGraph, TaskProxy
 # work (require importable/module-level task functions; see the alignment spec).
 # strict=False: they pass in isolation, so an unexpected pass must not fail the run.
 pytestmark = pytest.mark.xfail(
-    reason="cloudpickle by-value recursion at graph-build for LOCAL @task fns under heavy imports; see marqov-platform#1259",
+    reason="cloudpickle by-value recursion at graph-build for local @task fns under heavy imports",
     strict=False,
 )
 

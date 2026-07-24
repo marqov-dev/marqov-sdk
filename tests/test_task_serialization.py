@@ -1,14 +1,15 @@
-"""Approach A (marqov-platform#1259): @task must not serialize at decoration time.
+"""Lazy serialization contract: @task must not serialize at decoration time.
 
 These lock in the contract that cloudpickle runs LAZILY at graph-build, never at
 decoration/import — the import-time landmine that overflowed the recursion limit
 (RecursionError on Linux, hard segfault on macOS/musl) under heavy imports.
+This is the cloudpickle by-value recursion bug for local/closure @task functions.
 
 Robustness note: the tests that let *real* cloudpickle run at graph-build pickle a
 MODULE-LEVEL function (`_plain_add`), which cloudpickle serializes by reference
 (cheap — no deep traversal). The tests that assert decoration does NOT pickle use
-local functions (the exact fragile #1259 case) but mock ``cloudpickle.dumps``, so
-no local is ever actually serialized. Net: deterministic and safe to run under the
+local functions (the exact fragile case) but mock ``cloudpickle.dumps``, so no
+local is ever actually serialized. Net: deterministic and safe to run under the
 full ``[all]`` suite that surfaces the underlying bug.
 """
 from unittest.mock import patch
@@ -24,7 +25,7 @@ def _plain_add(x, y):
 
 
 def test_decoration_does_not_serialize():
-    """@task must NOT call cloudpickle at decoration time — the #1259 landmine."""
+    """@task must NOT call cloudpickle at decoration time (import-time landmine)."""
     with patch("marqov.workflows.decorators.cloudpickle.dumps") as dumps:
 
         @task

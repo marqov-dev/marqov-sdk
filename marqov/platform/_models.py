@@ -61,7 +61,7 @@ def is_terminal(status: str) -> bool:
     Returns:
         ``True`` iff the status is one of the four server-side terminal
         states — ``completed``, ``failed``, ``cancelled``, or
-        ``dispatch_failed`` (see ``status/route.ts`` ``TERMINAL_STATES``).
+        ``dispatch_failed``.
     """
     return status in {"completed", "failed", "cancelled", "dispatch_failed"}
 

@@ -127,16 +127,16 @@ def task(
         # Serialize the function LAZILY — only when a task actually builds a graph
         # node, and cache the result so it is computed at most once per task.
         #
-        # Serializing eagerly here (at decoration time) was an import-time landmine
-        # (marqov-platform#1259): cloudpickle serializes local/closure functions BY
-        # VALUE, walking the function's referenced globals and closure by hand. In a
-        # heavy-import environment that deep traversal can overflow the recursion
-        # limit — a catchable RecursionError on Linux, a hard C-stack segfault on
-        # macOS / musl — and it fired for EVERY @task the moment its module was
-        # imported, whether or not the task was ever dispatched. Deferring to
-        # graph-build means importing a module full of @task functions pickles
-        # nothing; the cost (and the residual by-value risk for genuinely local
-        # functions) moves to the point a workflow graph is actually built.
+        # Serializing eagerly here (at decoration time) was an import-time landmine:
+        # cloudpickle serializes local/closure functions BY VALUE, walking the
+        # function's referenced globals and closure by hand. In a heavy-import
+        # environment that deep traversal can overflow the recursion limit — a
+        # catchable RecursionError on Linux, a hard C-stack segfault on macOS / musl
+        # — and it fired for EVERY @task the moment its module was imported, whether
+        # or not the task was ever dispatched. Deferring to graph-build means
+        # importing a module full of @task functions pickles nothing; the cost (and
+        # the residual by-value risk for genuinely local functions) moves to the point
+        # a workflow graph is actually built.
         _func_ref_cache: list[str] = []
 
         def _func_ref() -> str:
@@ -173,7 +173,8 @@ def task(
         # Mark as task for introspection.
         # NB: no eager `_task_func_ref` attribute — it was write-only (zero readers
         # in the SDK or the platform) and computing it here would defeat the lazy
-        # serialization above. Dropped per marqov-platform#1259.
+        # serialization above (cloudpickle by-value recursion at graph-build for
+        # local @task fns under heavy imports).
         wrapper._is_task = True  # type: ignore
         wrapper._task_config = config  # type: ignore
 

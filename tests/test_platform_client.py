@@ -2,16 +2,13 @@
 
 All tests mock the Transport layer — NO real network calls.
 
-Mock source citations (shapes transcribed from real routes):
-  - Submit response ``job_id``:
-      platform/src/app/api/jobs/submit/route.ts:1100
-      ``return finalize(200, { job_id: jobId })``
-  - Backends response ``backends`` array + item shape:
-      platform/src/app/api/backends/route.ts:151-165 (response envelope)
-      platform/src/app/api/backends/route.ts:100-131 (camelCase item mapping)
-  - platform_info mocked path ``/api/meta`` — §11 TBC assumption:
-      No real endpoint exists in platform/src/app/api/; mocked response shape
-      ``{ "api_version": "..." }`` is a §11 TBC assumption.
+Mock fixtures reproduce the platform's observable HTTP API contract:
+  - Submit response: ``{ "job_id": "<uuid>" }``.
+  - Backends response: ``{ "backends": [...], "updatedAt": "..." }`` with
+    camelCase item fields.
+  - platform_info mocked path ``/api/meta`` — §11 TBC assumption: no real
+    endpoint is confirmed; the mocked response shape ``{ "api_version": "..." }``
+    is a §11 TBC assumption.
 """
 
 from __future__ import annotations
@@ -104,7 +101,7 @@ class TestSubmitStringProgram:
     def test_str_with_framework_posts_inline_code(self):
         """str program + framework → POST body has inline_code + framework.
 
-        Source: platform/src/lib/schemas.ts:164-198 — ``submitJobSchema``
+        Submit body fields follow the server's submit schema.
         """
         client = _make_client()
         server_response = {"job_id": "job-uuid-001"}
@@ -123,7 +120,7 @@ class TestSubmitStringProgram:
     def test_str_with_framework_returns_job_with_server_id(self):
         """submit() returns a Job whose id matches the server response job_id.
 
-        Source: platform/src/app/api/jobs/submit/route.ts:1100
+        Submit response body: ``{ "job_id": "<uuid>" }``.
         """
         client = _make_client()
         server_response = {"job_id": "job-uuid-001"}
@@ -346,13 +343,11 @@ class TestJobReconnect:
 class TestBackends:
     """backends() maps the /api/backends payload to Backend dataclasses.
 
-    Mock shape transcribed from:
-      platform/src/app/api/backends/route.ts:100-131 (camelCase item mapping)
-      platform/src/app/api/backends/route.ts:151-165 (response envelope)
+    Mock shape reproduces the observable response contract:
+    ``{ "backends": [...], "updatedAt": "..." }`` with camelCase item fields.
     """
 
     # Minimal camelCase payload matching what the server returns.
-    # Source: platform/src/app/api/backends/route.ts:16-40 + 100-131
     _RAW_BACKEND = {
         "id": "be-001",
         "slug": "dwave-sim",
