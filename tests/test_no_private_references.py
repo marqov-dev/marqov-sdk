@@ -49,6 +49,7 @@ _BARE_ISSUE_REF = re.compile(r"#\d{3,4}\b")
 
 
 def _iter_files():
+    # Directory trees (recursive).
     for d in _SCAN_DIRS:
         base = _ROOT / d
         if not base.exists():
@@ -56,6 +57,12 @@ def _iter_files():
         for path in base.rglob("*"):
             if path.is_file() and path.suffix in _SCAN_SUFFIXES and path.name != _SELF:
                 yield path
+    # Repo-root docs (NON-recursive): README.md, CHANGELOG.md, and the trio
+    # (RELEASING/SECURITY/ARCHITECTURE) — all describe the SDK publicly and are
+    # prime spots to leak platform internals, but live outside the dir trees above.
+    for path in _ROOT.glob("*"):
+        if path.is_file() and path.suffix in _SCAN_SUFFIXES and path.name != _SELF:
+            yield path
 
 
 def test_no_private_references_in_public_sdk():
