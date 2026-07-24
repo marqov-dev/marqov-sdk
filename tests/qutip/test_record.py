@@ -46,14 +46,19 @@ def test_record_rejects_inf_observable():
     with pytest.raises(ValueError, match="non-finite"):
         record(_fake([0.0], [np.array([np.inf])]), observable_names=["sz"])
 
-def test_record_output_is_strict_json_no_nan_tokens():
-    # allow_nan=False guarantees the emitted text is standards-compliant JSON
-    # (json.loads with parse_constant that rejects would also pass).
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        record(_fake([0.0, 1.0], [np.array([1.0, 0.5])]), observable_names=["sz"])
-    text = buf.getvalue()
-    assert "NaN" not in text and "Infinity" not in text
+def test_record_rejects_nonfinite_times():
+    # times gets the same named + indexed validation (a bad tlist/linspace is the
+    # likely source, and it isn't covered by the observable coercion path).
+    with pytest.raises(ValueError, match="times.*index 1"):
+        record(_fake([0.0, np.inf], [np.array([1.0, 0.5])]), observable_names=["sz"])
+
+def test_record_rejects_nonfinite_in_imaginary_part():
+    # Regression: a NaN in the IMAGINARY part must be rejected, not slipped
+    # through the complex gate (NaN > tol is False) and then silently dropped by
+    # taking .real. The finite check runs on the raw complex array first.
+    with pytest.raises(ValueError, match="non-finite"):
+        record(_fake([0.0, 1.0], [np.array([1.0 + 0j, complex(0.5, float("nan"))])]),
+               observable_names=["sz"])
 
 def test_record_real_mesolve_integration():
     pytest.importorskip("qutip")

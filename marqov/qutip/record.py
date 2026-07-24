@@ -30,11 +30,24 @@ def _seed_to_str(s: Any) -> str:
 
 def _coerce_series(arr: Any, name: str) -> list[float]:
     a = np.asarray(arr)
+    # Reject non-finite FIRST, on the raw array — before the complex gate below.
+    # np.isfinite on a complex array is False when EITHER component is non-finite,
+    # so this catches a NaN/Inf hiding in the imaginary part, which would otherwise
+    # slip through the gate (NaN > tol is False) and be silently dropped by taking
+    # a.real. NaN/Inf are also invalid JSON. Fail here, naming the index; never
+    # null-substitute — a decay curve with holes reads as data.
+    nonfinite = np.where(~np.isfinite(a))[0] if a.size else np.empty(0, dtype=int)
+    if nonfinite.size:
+        raise ValueError(
+            f"observable '{name}' has a non-finite value (NaN/Inf) at index "
+            f"{int(nonfinite[0])}; recorded observables must be finite."
+        )
     if np.iscomplexobj(a):
-        # Tolerance is RELATIVE to the max |real| with an absolute floor of 1e-6
-        # (scale >= 1.0). Note: for an observable decaying toward zero the floor
-        # dominates, so this is effectively an absolute 1e-6 there — acceptable
-        # because a true residual imaginary part at that scale is numerical noise.
+        # Tolerance anchor is the SERIES MAXIMUM |real| (global over the series,
+        # not per-point), with an absolute 1e-6 floor. For a curve decaying to
+        # zero the floor holds the tolerance at 1e-6 across all samples rather
+        # than tightening toward the tail and rejecting numerical noise there —
+        # a deliberate choice. Hard-fail on a genuinely complex observable.
         scale = max(1.0, float(np.abs(a.real).max())) if a.size else 1.0
         imag_max = float(np.abs(a.imag).max()) if a.size else 0.0
         if imag_max > 1e-6 * scale:
@@ -43,20 +56,8 @@ def _coerce_series(arr: Any, name: str) -> list[float]:
                 "(non-Hermitian operator). The MVP records real observables only; "
                 "use a Hermitian operator, or await the {re, im} schema decision (OD-2)."
             )
-        real = a.real
-    else:
-        real = a
-    # NaN/Inf are not valid JSON — json.dumps emits bare NaN/Infinity tokens that
-    # no browser JSON parser accepts. Fail at emit, naming the offending index,
-    # rather than shipping an unparseable artifact (a decay curve with holes reads
-    # as data). Never silently substitute null.
-    nonfinite = np.where(~np.isfinite(real))[0] if real.size else np.empty(0, dtype=int)
-    if nonfinite.size:
-        raise ValueError(
-            f"observable '{name}' has a non-finite value (NaN/Inf) at index "
-            f"{int(nonfinite[0])}; recorded observables must be finite."
-        )
-    return [float(x) for x in real]
+        return [float(x.real) for x in a]
+    return [float(x) for x in a]
 
 
 def record(result: Any, observable_names: list[str] | None = None, *,
@@ -81,7 +82,14 @@ def record(result: Any, observable_names: list[str] | None = None, *,
             "not Capsule-reproducible. Reuse a prior result's .seeds."
         )
 
-    times = [float(t) for t in result.times]
+    times_arr = np.asarray(result.times)
+    bad_t = np.where(~np.isfinite(times_arr))[0] if times_arr.size else np.empty(0, dtype=int)
+    if bad_t.size:
+        raise ValueError(
+            f"times has a non-finite value (NaN/Inf) at index {int(bad_t[0])}; "
+            "check the tlist passed to the solver."
+        )
+    times = [float(t) for t in times_arr]
     expect = result.expect if result.expect is not None else []
 
     if observable_names is not None:
