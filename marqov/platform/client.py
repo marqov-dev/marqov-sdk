@@ -310,7 +310,7 @@ class MarqovClient:
             :class:`~marqov.platform._models.PlatformInfo` with:
 
             * ``sdk_version``: the installed ``marqov`` SDK version
-              (from ``marqov.__version__``, currently ``"0.2.0"``).
+              (from ``marqov.__version__``).
             * ``api_version``: the platform API version string, read from the
               ``api_version`` field of the ``/api/meta`` response (TBC).
 

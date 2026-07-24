@@ -5,22 +5,7 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
-## [Unreleased]
-
-### Changed
-- **`@task` bodies now execute in an isolated subprocess** with a minimal,
-  allowlisted environment — the task process inherits only an explicit allowlist
-  of environment variables plus any values a host passes for that job, never the
-  ambient process environment. Task results are forwarded by the parent worker
-  without being deserialized in-process.
-
-### Added
-- **`MARQOV_SCRUB_ALLOWLIST` environment variable (host↔SDK interface):** a host
-  runner may set this (comma-separated variable names) in the worker process to
-  define the allowlist the SDK uses when building a task's subprocess environment.
-  When unset, the SDK falls back to a minimal, secret-free default and logs a warning.
-
-## [0.3.0] — 2026-07-20
+## [0.3.0] — 2026-07-24
 
 ### Added
 
@@ -54,12 +39,49 @@ release.
   the full gate set.  Circuit submission requires a forthcoming platform-side
   change and is not yet active on the server.
 
+- **`CudaqExecutor` — NVIDIA CUDA-Q backend** (`marqov[cudaq]`, Linux-only wheels).
+  Adds three backend slugs: `cudaq-cpu` (CPU statevector, the default — no GPU
+  required), `cudaq-gpu` (GPU statevector via CUDA-Q's `nvidia` target, scaling
+  past the CPU/SV1 simulators), and `cudaq-iqm` (direct IQM Resonance — a
+  lower-latency route than IQM-through-Braket).
+
+- **`MARQOV_SCRUB_ALLOWLIST` (host↔SDK interface).** A host runner may set this
+  (comma-separated variable names) in the worker process to define the allowlist
+  the SDK uses when building a `@task`'s subprocess environment. When unset, the
+  SDK falls back to a minimal, secret-free default and logs a warning.
+
 ### Changed
 
 - **`requests` is now a core dependency** (previously only pulled in
   transitively via the `ionq` and `all` extras).  This means `pip install marqov`
   now installs `requests` unconditionally.  Downstream users who pinned the
   extras to exclude `requests` will pick it up automatically on upgrade.
+
+- **`@task` bodies now run in an isolated subprocess** with a minimal, allowlisted
+  environment (defense-in-depth: a task runs with only what it needs).
+  **What this means for you:** if your `@task` reads an environment variable that
+  was set in the calling process, it will **no longer see it** unless the host
+  passes it through explicitly (via `MARQOV_SCRUB_ALLOWLIST`, or provider
+  credentials the host injects for the job). Pure-compute tasks are unaffected.
+
+### Fixed
+
+- **`@task` no longer serializes at import/decoration time.** Function
+  serialization is deferred (and cached) to workflow-graph build. This resolves
+  the `RecursionError` that could fire when decorating a local/closure `@task`
+  with many heavy backends imported (see 0.2.0 *Known limitations*), and stops
+  serializing tasks that are never dispatched.
+
+- **IonQ Direct is no longer listed twice** by `get_supported_providers()` — the
+  provider list now returns a single, de-duplicated IonQ Direct entry.
+
+### Behavioral change
+
+- **Closure-at-dispatch.** A `@task` is now serialized at dispatch (graph build)
+  rather than at import (decoration), so its closure captures referenced variables
+  **as of dispatch**. **What this means for you:** if your task closes over a
+  variable whose value changes between decoration and dispatch, the task now
+  observes the **dispatch-time** value. Deterministic code behaves identically.
 
 ### Notes
 
