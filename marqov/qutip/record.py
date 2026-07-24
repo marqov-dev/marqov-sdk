@@ -31,16 +31,32 @@ def _seed_to_str(s: Any) -> str:
 def _coerce_series(arr: Any, name: str) -> list[float]:
     a = np.asarray(arr)
     if np.iscomplexobj(a):
+        # Tolerance is RELATIVE to the max |real| with an absolute floor of 1e-6
+        # (scale >= 1.0). Note: for an observable decaying toward zero the floor
+        # dominates, so this is effectively an absolute 1e-6 there — acceptable
+        # because a true residual imaginary part at that scale is numerical noise.
         scale = max(1.0, float(np.abs(a.real).max())) if a.size else 1.0
         imag_max = float(np.abs(a.imag).max()) if a.size else 0.0
-        if imag_max <= 1e-6 * scale:  # max(relative 1e-6, absolute 1e-6 via scale>=1 floor)
-            return [float(x.real) for x in a]
+        if imag_max > 1e-6 * scale:
+            raise ValueError(
+                f"observable '{name}' has genuinely complex expectation values "
+                "(non-Hermitian operator). The MVP records real observables only; "
+                "use a Hermitian operator, or await the {re, im} schema decision (OD-2)."
+            )
+        real = a.real
+    else:
+        real = a
+    # NaN/Inf are not valid JSON — json.dumps emits bare NaN/Infinity tokens that
+    # no browser JSON parser accepts. Fail at emit, naming the offending index,
+    # rather than shipping an unparseable artifact (a decay curve with holes reads
+    # as data). Never silently substitute null.
+    nonfinite = np.where(~np.isfinite(real))[0] if real.size else np.empty(0, dtype=int)
+    if nonfinite.size:
         raise ValueError(
-            f"observable '{name}' has genuinely complex expectation values "
-            "(non-Hermitian operator). The MVP records real observables only; "
-            "use a Hermitian operator, or await the {re, im} schema decision (OD-2)."
+            f"observable '{name}' has a non-finite value (NaN/Inf) at index "
+            f"{int(nonfinite[0])}; recorded observables must be finite."
         )
-    return [float(x) for x in a]
+    return [float(x) for x in real]
 
 
 def record(result: Any, observable_names: list[str] | None = None, *,
@@ -94,4 +110,6 @@ def record(result: Any, observable_names: list[str] | None = None, *,
     if states_artifact_path is not None:
         payload["states_artifact"] = states_artifact_path
 
-    print(json.dumps(payload))
+    # allow_nan=False: any non-finite that slipped through (e.g. in `times`)
+    # raises here rather than emitting invalid JSON.
+    print(json.dumps(payload, allow_nan=False))

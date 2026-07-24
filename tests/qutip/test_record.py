@@ -36,6 +36,25 @@ def test_record_coerces_near_real_complex():
         record(_fake([0.0], [np.array([1.0 + 1e-9j])]), observable_names=["sz"])
     assert json.loads(buf.getvalue())["observables"]["sz"] == [1.0]
 
+def test_record_rejects_nonfinite_observable():
+    # NaN/Inf are invalid JSON; must fail at emit, naming the offending index,
+    # never silently substitute null.
+    with pytest.raises(ValueError, match="non-finite.*index 1"):
+        record(_fake([0.0, 1.0], [np.array([1.0, np.nan])]), observable_names=["sz"])
+
+def test_record_rejects_inf_observable():
+    with pytest.raises(ValueError, match="non-finite"):
+        record(_fake([0.0], [np.array([np.inf])]), observable_names=["sz"])
+
+def test_record_output_is_strict_json_no_nan_tokens():
+    # allow_nan=False guarantees the emitted text is standards-compliant JSON
+    # (json.loads with parse_constant that rejects would also pass).
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        record(_fake([0.0, 1.0], [np.array([1.0, 0.5])]), observable_names=["sz"])
+    text = buf.getvalue()
+    assert "NaN" not in text and "Infinity" not in text
+
 def test_record_real_mesolve_integration():
     pytest.importorskip("qutip")
     from qutip import basis, sigmaz, sigmam, mesolve
