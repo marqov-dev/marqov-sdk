@@ -5,6 +5,14 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
+## [0.3.1] — 2026-07-25
+
+### Fixed
+- **Platform client default endpoint.** `MarqovClient` defaulted to a
+  `platform.marqov.com` host that does not resolve — so callers who didn't set
+  `base_url` or `MARQOV_PLATFORM_URL` hit a dead host. The default is now
+  `https://app.marqov.ai`. Explicit overrides were unaffected.
+
 ## [0.3.0] — 2026-07-24
 
 ### Added

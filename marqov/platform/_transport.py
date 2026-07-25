@@ -34,7 +34,7 @@ from .errors import (
 
 #: Production API base URL — override with ``MARQOV_PLATFORM_URL`` env var or
 #: the ``base_url`` constructor argument.
-_DEFAULT_BASE_URL = "https://platform.marqov.com"
+_DEFAULT_BASE_URL = "https://app.marqov.ai"
 
 #: Maximum retry attempts for retryable failures.
 _MAX_RETRIES = 3

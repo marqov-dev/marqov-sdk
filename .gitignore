@@ -6,6 +6,9 @@
 .*-venv/
 # Claude Code local tooling / worktrees — never ship in the sdist.
 .claude/
+.playwright-mcp/
+# Blog drafts live on the website, not in the package/sdist.
+docs/blog/
 __pycache__/
 *.pyc
 *.pyo

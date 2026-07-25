@@ -32,7 +32,7 @@ client = MarqovClient(
 If neither is set, `AuthenticationError` is raised immediately.
 
 **Base URL resolution:** `base_url` takes precedence over `MARQOV_PLATFORM_URL`,
-then the built-in production endpoint (`https://platform.marqov.com`).
+then the built-in production endpoint (`https://app.marqov.ai`).
 
 **`timeout`** is the per-request HTTP timeout in seconds (not the overall
 `result()` poll timeout — those are separate).

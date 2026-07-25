@@ -58,7 +58,7 @@ class MarqovClient:
                   ``MARQOV_PLATFORM_KEY`` environment variable when ``None``.
         base_url: Override the default production endpoint.  Falls back to the
                   ``MARQOV_PLATFORM_URL`` env var, then the built-in default
-                  (``https://platform.marqov.com``).
+                  (``https://app.marqov.ai``).
         timeout:  Per-request HTTP timeout in seconds.  Default is 30 seconds.
 
     Raises:

@@ -27,6 +27,13 @@ step (PyPI never lets a version be reused), so validate hard and tag last.
       Traps: use SEPARATE `--extra` flags (a comma-list is read as one nonexistent
       extra and prunes the venv); `cudaq` is Linux-only, omit it off Linux;
       `--reinstall-package marqov` refreshes editable metadata so `test_version` matches.
+- [ ] **URLs resolve** — `python tools/check_urls.py` (must exit 0).
+      A wrong/dead URL in shipped source or docs is caught by no unit test (nothing
+      fetches a prose URL). The tool greps every URL and hits it. It **fails only on
+      non-resolving hosts** (DNS failure — the class that shipped `platform.marqov.com`
+      in 0.3.0; the real platform base is `app.marqov.ai`). A 4xx from an auth-gated
+      provider API, or a transient timeout, is a **WARN**, not a failure — eyeball
+      each so an outage on release day doesn't block the tag.
 
 ## 3. Build, inspect, dry-run to TestPyPI
 - [ ] Look inside the artifact before any upload:
