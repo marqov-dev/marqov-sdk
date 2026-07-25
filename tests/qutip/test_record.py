@@ -16,6 +16,7 @@ def test_record_emits_times_and_observables():
         record(_fake([0.0, 1.0], [np.array([1.0, 0.5])]), observable_names=["sz"])
     out = json.loads(buf.getvalue())
     assert out["result_type"] == "open-system-dynamics"
+    assert out["schema_version"] == 1  # required for the platform chart renderer
     assert out["observables"]["sz"] == [1.0, 0.5]
 
 def test_record_rejects_states_without_offload():

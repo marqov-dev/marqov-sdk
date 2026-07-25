@@ -110,6 +110,7 @@ def record(result: Any, observable_names: list[str] | None = None, *,
 
     payload: dict[str, Any] = {
         "result_type": "open-system-dynamics",
+        "schema_version": 1,
         "times": times,
         "observables": observables,
     }
