@@ -3,6 +3,15 @@
 Everything before the `v*` tag push is reversible; the tag is the irreversible
 step (PyPI never lets a version be reused), so validate hard and tag last.
 
+> **How the tag publishes:** pushing a `v*` tag triggers
+> `.github/workflows/release.yml`, which builds the package and publishes it to
+> PyPI via **OIDC trusted publishing** (`id-token: write` + the `pypi`
+> environment — there is no stored API token). The tag is only the trigger and
+> the version source (hatchling reads `marqov/__init__.py`). The manual "Run
+> workflow" dispatch runs the same build but publishes to TestPyPI. If publishing
+> fails at the auth step, it's the PyPI trusted-publisher config
+> (project / repo / workflow / environment), not a token.
+
 ## 0. Scope
 - [ ] `git log --oneline vLAST..main` — everything merged since the last tag.
 - [ ] Confirm what's in vs. still in flight. Unmerged branches / open PRs are NOT
