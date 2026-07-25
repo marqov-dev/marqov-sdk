@@ -78,7 +78,11 @@ def test_record_mcsolve_seeds_round_trip_reproduces():
     from qutip import basis, sigmaz, sigmam, mcsolve
     from numpy.random import SeedSequence
     args = (sigmaz(), basis(2, 0), np.linspace(0, 1, 3))
-    kw = dict(c_ops=[0.1 * sigmam()], e_ops=[sigmaz()], ntraj=4)
+    # map=serial is REQUIRED here, not test hygiene: seed->trajectory assignment is
+    # NOT stable under the parallel map, so seeded mcsolve reproduces bit-identically
+    # ONLY serially. Measured on qutip 5.3: serial max|Δ|=0 every run; parallel max|Δ|
+    # up to 2.0 (a different trajectory set). See the caveat in record.py.
+    kw = dict(c_ops=[0.1 * sigmam()], e_ops=[sigmaz()], ntraj=4, options={"map": "serial"})
     res = mcsolve(*args, **kw)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):

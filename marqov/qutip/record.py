@@ -115,6 +115,11 @@ def record(result: Any, observable_names: list[str] | None = None, *,
         "observables": observables,
     }
     if seeds:
+        # REPRODUCIBILITY CAVEAT (verified qutip 5.3): these seeds reproduce mcsolve
+        # bit-identically ONLY under options={"map": "serial"}. The parallel map does
+        # not preserve seed->trajectory assignment, so a re-run with the same seeds
+        # produces a DIFFERENT trajectory set (max|Δ| up to 2.0). A Capsule re-run of a
+        # stochastic open-system result must force serial to actually reproduce.
         payload["seeds"] = [_seed_to_str(s) for s in seeds]
     if states_artifact_path is not None:
         payload["states_artifact"] = states_artifact_path
