@@ -5,6 +5,21 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
+## [Unreleased]
+
+### Added
+
+- **`marqov.qutip.record` — open-system-dynamics result capture.** New optional
+  helper that serialises a QuTiP solver `Result` (`mesolve`/`sesolve`/`mcsolve`)
+  into the platform's `open-system-dynamics` v1 stdout-JSON contract with a
+  single call: `record(result, ["sigma_z", "sigma_x"])`. Test-only qutip
+  dependency — `record.py` duck-types the `Result` and never imports qutip at
+  runtime. Enforces the contract's guardrails so a hand-built dict can't get
+  them wrong: density-matrix `.states` are refused on stdout (offload by
+  reference), unseeded `mcsolve` runs are rejected as non-reproducible (seeds
+  emitted as strings to survive JSON float precision), and non-finite / genuinely
+  complex expectation values are rejected rather than silently coerced.
+
 ## [0.3.1] — 2026-07-25
 
 ### Fixed

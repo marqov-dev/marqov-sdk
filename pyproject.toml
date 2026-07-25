@@ -48,6 +48,10 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "ruff>=0.1.0",
     "mypy>=1.8.0",
+    # Test-only: exercises marqov.qutip.record's mesolve/mcsolve integration
+    # tests (tests/qutip/test_record.py). Not a runtime dependency — record.py
+    # duck-types the qutip Result and never imports qutip itself.
+    "qutip>=5.3.0,<6.0.0",
 ]
 qiskit = [
     "qiskit>=1.0.0",
