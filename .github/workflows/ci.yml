@@ -42,3 +42,26 @@ jobs:
         run: uv pip install --system -e ".[cudaq,dev]"
       - name: CUDA-Q executor tests (incl. real qpp-cpu run)
         run: pytest tests/test_cudaq_executor.py -q
+
+  # Single required status check — the ruleset requires only "CI Success", so the
+  # required context stays stable if the job set ever changes.
+  #
+  # INVARIANT: every job above must be listed in `needs:` here. A job missing here
+  # can fail while CI Success stays green and the ruleset stays satisfied — its
+  # failures become invisible. Add new jobs to `needs:` in the same PR.
+  #
+  # `if: always()` runs this even when an upstream job fails; the step then fails
+  # unless EVERY needed result is 'success'. A naive `success()` gate would go
+  # GREEN when an upstream job was skipped.
+  ci-success:
+    name: CI Success
+    if: always()
+    needs: [test, test-cudaq]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail unless every required job succeeded
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+        run: |
+          echo "::error::A required job did not succeed — results: ${{ join(needs.*.result, ', ') }}"
+          exit 1
