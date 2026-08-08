@@ -18,6 +18,16 @@ release.
   CZ/XY) and raises `ValueError` otherwise. Addresses the verbatim gap
   identified in the device/executor parity audit (marqov-sdk#66).
 
+### Fixed
+
+- **`MarqovDevice.run` is now event-loop-safe on real QPUs.** Braket's
+  `AwsQuantumTask.result()` polls via `run_until_complete()`, which raised
+  *"This event loop is already running"* when `run()` was called from within a
+  running event loop (e.g. an async experiment runner driving a real QPU). The
+  blocking Braket call is now offloaded to a worker thread that has its own
+  event loop when a running loop is detected. Simulators were unaffected.
+  (marqov-sdk#67)
+
 ## [0.3.1] — 2026-07-25
 
 ### Fixed

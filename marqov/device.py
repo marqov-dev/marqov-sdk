@@ -2,8 +2,40 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from marqov.backends import is_azure, is_braket, is_ibm, is_simulator
 from marqov.circuits import Circuit
+
+
+def _run_loop_safe(fn):
+    """Run a blocking callable safely regardless of the caller's async context.
+
+    Braket's ``AwsQuantumTask.result()`` drives its polling via
+    ``asyncio.get_event_loop().run_until_complete(...)``, which raises
+    "This event loop is already running" when called from within a running loop
+    (e.g. an async experiment runner). If a loop is running in this thread, run
+    ``fn`` in a worker thread that has its own event loop; otherwise call it
+    directly. See marqov-sdk#67.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return fn()  # no running loop — safe to call directly
+
+    import concurrent.futures
+
+    def _worker():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return fn()
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(_worker).result()
 
 
 class MarqovDevice:
@@ -281,11 +313,17 @@ class MarqovDevice:
 
             try:
                 disable_rewiring = kwargs.get("disable_qubit_rewiring", False)
-                task = device.run(
-                    native_circuit, s3_folder, shots=shots,
-                    disable_qubit_rewiring=disable_rewiring,
-                )
-                result = task.result()
+
+                def _submit_and_wait():
+                    task = device.run(
+                        native_circuit, s3_folder, shots=shots,
+                        disable_qubit_rewiring=disable_rewiring,
+                    )
+                    return task.result()
+
+                # Braket's result() polls via run_until_complete; run it
+                # loop-safe so this works from an async runner too (marqov-sdk#67).
+                result = _run_loop_safe(_submit_and_wait)
                 counts = dict(result.measurement_counts)
                 if not counts:
                     # Some QPU backends (e.g. IonQ Forte-1) return measurement_probabilities
