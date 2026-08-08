@@ -1,5 +1,7 @@
 """Integration tests for MarqovDevice type conversion and execution."""
 
+import asyncio
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -222,3 +224,46 @@ class TestBraketVerbatim:
         with patch.object(MarqovDevice, "_get_provider_device", return_value=mock_aws):
             device.run(circuit, shots=100)
         assert "StartVerbatimBox" not in self._submitted_op_types(mock_aws)
+
+
+class _LoopBoundTask:
+    """Mimics Braket's AwsQuantumTask.result(): drives a coroutine via
+    asyncio.get_event_loop().run_until_complete — which raises inside a running
+    loop unless the caller offloads to a worker thread with its own loop.
+    """
+
+    def result(self):
+        async def _poll():
+            return SimpleNamespace(measurement_counts={"0": 100})
+
+        return asyncio.get_event_loop().run_until_complete(_poll())
+
+
+class TestBraketEventLoopSafety:
+    """MarqovDevice.run must be callable from within a running event loop on a
+    real-QPU backend, where Braket's result() uses run_until_complete internally
+    (marqov-sdk#67). Simulators don't hit this — only real Braket QPU tasks.
+    """
+
+    def _rigetti_device(self) -> MarqovDevice:
+        return MarqovDevice(
+            "rigetti-cepheus-1",
+            {
+                "backend": "rigetti-cepheus-1",
+                "device_arn": (
+                    "arn:aws:braket:us-west-1::device/qpu/rigetti/Cepheus-1-108Q"
+                ),
+                "s3_bucket": "my-bucket",
+                "s3_prefix": "my-prefix",
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_is_safe_from_within_running_loop(self) -> None:
+        device = self._rigetti_device()
+        mock_aws = MagicMock()
+        mock_aws.run.return_value = _LoopBoundTask()
+        # Called synchronously from inside this async test — i.e. a running loop.
+        with patch.object(MarqovDevice, "_get_provider_device", return_value=mock_aws):
+            counts = device.run(Circuit().rx(0.5, 0), shots=100)
+        assert counts == {"0": 100}
