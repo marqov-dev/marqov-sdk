@@ -187,8 +187,13 @@ class MarqovDevice:
             circuit: Any supported circuit (Braket, Qiskit, Cirq, PennyLane,
                      QASM string, or marqov.Circuit).
             shots: Number of measurement shots.
-            **kwargs: Backend-specific options. Braket backends accept
-                      disable_qubit_rewiring (bool) to prevent qubit remapping.
+            **kwargs: Backend-specific options. Braket backends accept:
+                      - disable_qubit_rewiring (bool): prevent qubit remapping.
+                      - verbatim (bool): submit under a verbatim box so the
+                        compiler runs the gates exactly as given (required for
+                        randomized benchmarking on Rigetti, or the compiler
+                        optimizes the sequence away). Requires native gates only
+                        (1Q: Rx/Rz, 2Q: CZ/XY); raises ValueError otherwise.
 
         Returns:
             Dictionary mapping bitstring outcomes to their counts.
@@ -248,6 +253,32 @@ class MarqovDevice:
                     raise ValueError(
                         "s3_destination_folder or s3_bucket+s3_prefix required for AWS device execution"
                     )
+            # Wrap in a verbatim box for devices that require it (e.g. Rigetti
+            # QPUs), mirroring BraketExecutor. Without it, the compiler folds
+            # Clifford-plus-inverse sequences to identity and survival ≈ 1.0 at
+            # every length. The circuit must already use only native gates —
+            # e.g. clifford_to_circuit_native() / SRBConfig.use_native_gates=True.
+            # The allowed set is Rigetti-specific; make this a device-aware
+            # lookup when IQM or other verbatim providers are added.
+            if kwargs.get("verbatim"):
+                from braket.circuits import Circuit as BraketCircuit
+
+                _RIGETTI_VERBATIM_ALLOWED = {"rx", "rz", "cz", "xy", "measure"}
+                non_native = [
+                    instr.operator.name
+                    for instr in native_circuit.instructions
+                    if instr.operator.name.lower() not in _RIGETTI_VERBATIM_ALLOWED
+                ]
+                if non_native:
+                    raise ValueError(
+                        f"verbatim=True requires Rigetti native gates only "
+                        f"(1Q: Rx/Rz, 2Q: CZ/XY, plus Measure). "
+                        f"Found non-native gates: {sorted(set(non_native))}. "
+                        f"Use clifford_to_circuit_native() or set "
+                        f"SRBConfig.use_native_gates=True."
+                    )
+                native_circuit = BraketCircuit().add_verbatim_box(native_circuit)
+
             try:
                 disable_rewiring = kwargs.get("disable_qubit_rewiring", False)
                 task = device.run(

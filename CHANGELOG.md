@@ -5,6 +5,19 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
+## [0.4.0] — Unreleased
+
+### Added
+
+- **Verbatim compilation on `MarqovDevice`.** `MarqovDevice.run(circuit,
+  verbatim=True)` now wraps Braket circuits in a verbatim box (mirroring
+  `BraketExecutor`), so the provider compiler executes the gates exactly as
+  given. Required for randomized benchmarking on Rigetti — without it, the
+  compiler folds Clifford-plus-inverse sequences to identity and survival is
+  flat at every sequence length. Requires native gates only (1Q: Rx/Rz, 2Q:
+  CZ/XY) and raises `ValueError` otherwise. Addresses the verbatim gap
+  identified in the device/executor parity audit (marqov-sdk#66).
+
 ## [0.3.1] — 2026-07-25
 
 ### Fixed
