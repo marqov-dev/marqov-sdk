@@ -50,6 +50,10 @@ class DeviceStatus:
     status: str  # "online" | "offline" | "maintenance"
     queue_depth: int | None
     queue_time_seconds: int | None
+    # Device execution windows (when the backend reports them), as a portable JSON-friendly shape:
+    # [{"executionDay": <ExecutionDay.value>, "windowStartHour": "HH:MM:SS", "windowEndHour": "HH:MM:SS"}], UTC.
+    # None = unknown / not-applicable / serialize-error; [] = device reported none.
+    execution_windows: list[dict[str, str]] | None = None
 
     @staticmethod
     def always_online() -> "DeviceStatus":

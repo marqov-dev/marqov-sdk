@@ -76,6 +76,30 @@ class BraketExecutorConfig:
     timeout_seconds: float | None = None
 
 
+def _serialize_execution_windows(device: "AwsDevice") -> list[dict[str, str]] | None:
+    """Serialize a Braket device's executionWindows into a portable, JSON-friendly shape.
+
+    Shape: ``[{"executionDay": <ExecutionDay .value, e.g. "Everyday">, "windowStartHour": "HH:MM:SS",
+    "windowEndHour": "HH:MM:SS"}]`` — always ``.value`` (never ``.name``), sub-second truncated via
+    strftime, times UTC. ``[]`` (device reports no windows) is preserved distinct from ``None``.
+
+    Fail-safe: ANY failure (missing property, unexpected shape) returns ``None``, so a malformed payload
+    can never blank a device's availability downstream. Reads the already-fetched ``device`` — no extra
+    GetDevice call. Deliberately does NOT feed ``is_device_available`` (advisory data only).
+    """
+    try:
+        return [
+            {
+                "executionDay": w.executionDay.value,
+                "windowStartHour": w.windowStartHour.strftime("%H:%M:%S"),
+                "windowEndHour": w.windowEndHour.strftime("%H:%M:%S"),
+            }
+            for w in device.properties.service.executionWindows
+        ]
+    except Exception:
+        return None
+
+
 class BraketExecutor(BaseExecutor):
     """Execute circuits on AWS Braket devices.
 
@@ -322,7 +346,12 @@ class BraketExecutor(BaseExecutor):
             except Exception:
                 pass
 
-            return DeviceStatus(status=status, queue_depth=queue_depth, queue_time_seconds=queue_time_seconds)
+            return DeviceStatus(
+                status=status,
+                queue_depth=queue_depth,
+                queue_time_seconds=queue_time_seconds,
+                execution_windows=_serialize_execution_windows(device),
+            )
         except Exception:
             return DeviceStatus(status="maintenance", queue_depth=None, queue_time_seconds=None)
 
