@@ -5,9 +5,18 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
-## [Unreleased]
+## [0.4.0] — Unreleased
 
 ### Added
+
+- **Verbatim compilation on `MarqovDevice`.** `MarqovDevice.run(circuit,
+  verbatim=True)` now wraps Braket circuits in a verbatim box (mirroring
+  `BraketExecutor`), so the provider compiler executes the gates exactly as
+  given. Required for randomized benchmarking on Rigetti — without it, the
+  compiler folds Clifford-plus-inverse sequences to identity and survival is
+  flat at every sequence length. Requires native gates only (1Q: Rx/Rz, 2Q:
+  CZ/XY) and raises `ValueError` otherwise. Addresses the verbatim gap
+  identified in the device/executor parity audit (marqov-sdk#66).
 
 - **`marqov.qutip.record` — open-system-dynamics result capture.** New optional
   helper that serialises a QuTiP solver `Result` (`mesolve`/`sesolve`/`mcsolve`)
@@ -19,6 +28,24 @@ release.
   reference), unseeded `mcsolve` runs are rejected as non-reproducible (seeds
   emitted as strings to survive JSON float precision), and non-finite / genuinely
   complex expectation values are rejected rather than silently coerced.
+
+- **Device execution windows on `DeviceStatus`.** `BraketExecutor.get_status()`
+  now serializes a Braket device's advertised execution windows to
+  `DeviceStatus.execution_windows` — a portable
+  `[{"executionDay", "windowStartHour", "windowEndHour"}]` list (UTC). Fail-safe
+  (returns `None` on any error, never blanking availability); `[]` (reported none)
+  stays distinct from `None` (unknown); `is_device_available()` is unchanged.
+  (marqov-sdk#70)
+
+### Fixed
+
+- **`MarqovDevice.run` is now event-loop-safe on real QPUs.** Braket's
+  `AwsQuantumTask.result()` polls via `run_until_complete()`, which raised
+  *"This event loop is already running"* when `run()` was called from within a
+  running event loop (e.g. an async experiment runner driving a real QPU). The
+  blocking Braket call is now offloaded to a worker thread that has its own
+  event loop when a running loop is detected. Simulators were unaffected.
+  (marqov-sdk#67)
 
 ## [0.3.1] — 2026-07-25
 

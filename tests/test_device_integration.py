@@ -1,5 +1,9 @@
 """Integration tests for MarqovDevice type conversion and execution."""
 
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from marqov.circuits import Circuit
@@ -165,3 +169,101 @@ class TestRunIntegration:
         )
         counts = local_device.run(qasm, shots=100)
         self._assert_bell_state(counts, 100)
+
+
+class TestBraketVerbatim:
+    """verbatim=True must mirror BraketExecutor: validate native gates and wrap
+    the circuit in add_verbatim_box before submitting. Without it, Rigetti's
+    compiler folds RB sequences to identity and survival comes back flat.
+    """
+
+    def _rigetti_device(self) -> MarqovDevice:
+        return MarqovDevice(
+            "rigetti-cepheus-1",
+            {
+                "backend": "rigetti-cepheus-1",
+                "device_arn": (
+                    "arn:aws:braket:us-west-1::device/qpu/rigetti/Cepheus-1-108Q"
+                ),
+                "s3_bucket": "my-bucket",
+                "s3_prefix": "my-prefix",
+            },
+        )
+
+    def _mock_aws_device(self) -> MagicMock:
+        task = MagicMock()
+        task.result.return_value.measurement_counts = {"0": 100}
+        dev = MagicMock()
+        dev.run.return_value = task
+        return dev
+
+    def _submitted_op_types(self, mock_aws: MagicMock) -> list[str]:
+        submitted = mock_aws.run.call_args[0][0]
+        return [type(instr.operator).__name__ for instr in submitted.instructions]
+
+    def test_verbatim_wraps_native_circuit_in_verbatim_box(self) -> None:
+        device = self._rigetti_device()
+        mock_aws = self._mock_aws_device()
+        circuit = Circuit().rx(0.5, 0).rz(0.3, 0)  # native gates only
+        with patch.object(MarqovDevice, "_get_provider_device", return_value=mock_aws):
+            device.run(circuit, shots=100, verbatim=True)
+        assert "StartVerbatimBox" in self._submitted_op_types(mock_aws)
+
+    def test_verbatim_rejects_non_native_gates(self) -> None:
+        device = self._rigetti_device()
+        mock_aws = self._mock_aws_device()
+        circuit = Circuit().h(0)  # H is not a Rigetti native gate
+        with patch.object(MarqovDevice, "_get_provider_device", return_value=mock_aws):
+            with pytest.raises(ValueError, match="native"):
+                device.run(circuit, shots=100, verbatim=True)
+
+    def test_no_verbatim_box_by_default(self) -> None:
+        device = self._rigetti_device()
+        mock_aws = self._mock_aws_device()
+        circuit = Circuit().rx(0.5, 0).rz(0.3, 0)
+        with patch.object(MarqovDevice, "_get_provider_device", return_value=mock_aws):
+            device.run(circuit, shots=100)
+        assert "StartVerbatimBox" not in self._submitted_op_types(mock_aws)
+
+
+class _LoopBoundTask:
+    """Mimics Braket's AwsQuantumTask.result(): drives a coroutine via
+    asyncio.get_event_loop().run_until_complete — which raises inside a running
+    loop unless the caller offloads to a worker thread with its own loop.
+    """
+
+    def result(self):
+        async def _poll():
+            return SimpleNamespace(measurement_counts={"0": 100})
+
+        return asyncio.get_event_loop().run_until_complete(_poll())
+
+
+class TestBraketEventLoopSafety:
+    """MarqovDevice.run must be callable from within a running event loop on a
+    real-QPU backend, where Braket's result() uses run_until_complete internally
+    (marqov-sdk#67). Simulators don't hit this — only real Braket QPU tasks.
+    """
+
+    def _rigetti_device(self) -> MarqovDevice:
+        return MarqovDevice(
+            "rigetti-cepheus-1",
+            {
+                "backend": "rigetti-cepheus-1",
+                "device_arn": (
+                    "arn:aws:braket:us-west-1::device/qpu/rigetti/Cepheus-1-108Q"
+                ),
+                "s3_bucket": "my-bucket",
+                "s3_prefix": "my-prefix",
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_is_safe_from_within_running_loop(self) -> None:
+        device = self._rigetti_device()
+        mock_aws = MagicMock()
+        mock_aws.run.return_value = _LoopBoundTask()
+        # Called synchronously from inside this async test — i.e. a running loop.
+        with patch.object(MarqovDevice, "_get_provider_device", return_value=mock_aws):
+            counts = device.run(Circuit().rx(0.5, 0), shots=100)
+        assert counts == {"0": 100}

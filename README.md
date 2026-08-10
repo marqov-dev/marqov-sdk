@@ -263,6 +263,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the executor interface spec, canonica
 
 Bounty issues are open through [unitaryHACK 2026](https://unitaryhack.dev) — see the [issues page](https://github.com/marqov-dev/marqov-sdk/issues) for what's available.
 
+## Authors
+
+This project was created by **David Ryan** ([@ddri](https://github.com/ddri)) and **Anastasia Marchenkova** ([@amarchenkova](https://github.com/amarchenkova)), with contributions from the [community](https://github.com/marqov-dev/marqov-sdk/graphs/contributors).
+
+See [AUTHORS.md](AUTHORS.md) for details.
+
 ## License
 
 [Apache 2.0](LICENSE)
