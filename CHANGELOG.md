@@ -5,7 +5,7 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
-## [0.4.0] — Unreleased
+## [0.4.0] — 2026-08-11
 
 ### Added
 
