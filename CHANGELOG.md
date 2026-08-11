@@ -18,6 +18,25 @@ release.
   CZ/XY) and raises `ValueError` otherwise. Addresses the verbatim gap
   identified in the device/executor parity audit (marqov-sdk#66).
 
+- **`marqov.qutip.record` — open-system-dynamics result capture.** New optional
+  helper that serialises a QuTiP solver `Result` (`mesolve`/`sesolve`/`mcsolve`)
+  into the platform's `open-system-dynamics` v1 stdout-JSON contract with a
+  single call: `record(result, ["sigma_z", "sigma_x"])`. Test-only qutip
+  dependency — `record.py` duck-types the `Result` and never imports qutip at
+  runtime. Enforces the contract's guardrails so a hand-built dict can't get
+  them wrong: density-matrix `.states` are refused on stdout (offload by
+  reference), unseeded `mcsolve` runs are rejected as non-reproducible (seeds
+  emitted as strings to survive JSON float precision), and non-finite / genuinely
+  complex expectation values are rejected rather than silently coerced.
+
+- **Device execution windows on `DeviceStatus`.** `BraketExecutor.get_status()`
+  now serializes a Braket device's advertised execution windows to
+  `DeviceStatus.execution_windows` — a portable
+  `[{"executionDay", "windowStartHour", "windowEndHour"}]` list (UTC). Fail-safe
+  (returns `None` on any error, never blanking availability); `[]` (reported none)
+  stays distinct from `None` (unknown); `is_device_available()` is unchanged.
+  (marqov-sdk#70)
+
 ### Fixed
 
 - **`MarqovDevice.run` is now event-loop-safe on real QPUs.** Braket's
