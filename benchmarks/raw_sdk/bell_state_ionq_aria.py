@@ -9,8 +9,6 @@ COST: IonQ Aria is cheaper than Forte!
 - Per-task: $0.30
 - Per-shot: $0.03 (vs $0.08 for Forte)
 - 100 shots = $0.30 + $3.00 = $3.30 per circuit
-
-Issue: #173
 """
 
 import os

@@ -29,7 +29,7 @@ import re
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
-_SCAN_DIRS = ("marqov", "docs", "tests")
+_SCAN_DIRS = ("marqov", "docs", "tests", "benchmarks")
 _SCAN_SUFFIXES = {".py", ".md", ".rst", ".txt"}
 # This gate file legitimately contains the banned patterns (as regexes), so it must
 # not scan itself.

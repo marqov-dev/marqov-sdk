@@ -7,8 +7,6 @@ Runs on real Rigetti superconducting quantum hardware.
 
 COST WARNING: ~$1.20 per circuit (1000 shots)
 Total estimated cost for 5 runs: ~$6.00
-
-Issue: #171
 """
 
 import os

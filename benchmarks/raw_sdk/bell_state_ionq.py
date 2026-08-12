@@ -9,8 +9,6 @@ COST WARNING: IonQ Forte is expensive!
 - Per-task: $0.30
 - Per-shot: $0.08
 - 100 shots = $0.30 + $8.00 = $8.30 per circuit
-
-Issue: #173
 """
 
 import os
