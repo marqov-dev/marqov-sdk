@@ -89,6 +89,7 @@ a backend slug:
 
 ```python
 script = """
+import asyncio
 from marqov import task
 
 @task
@@ -100,7 +101,11 @@ async def bell(shots):
     )
     return result.counts
 
-bell(1000)
+# @task's non-lattice call path runs `fn(*args, **kwargs)` directly (see
+# marqov/workflows/decorators.py) — for an async `@task` that returns an
+# unawaited coroutine unless the caller drives it, so wrap the call in
+# asyncio.run() rather than calling bell(1000) bare.
+asyncio.run(bell(1000))
 """
 
 job = client.submit(script, backend="dwave-sim", framework="marqov", shots=1000)

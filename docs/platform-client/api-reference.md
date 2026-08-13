@@ -289,8 +289,13 @@ Wraps the raw result field from the job status response.
 | `counts` | `dict[str, int] \| None` | Measurement outcome counts, or `None` if absent in the response |
 | `probabilities` | `dict[str, float]` | Probabilities derived from `counts`; empty dict if counts are absent or sum to zero |
 
-Both `counts` and `probabilities` are `@property` accessors (no parentheses),
-consistent with `marqov.executors.base.ExecutionResult`.
+Both `counts` and `probabilities` are `@property` accessors on
+`PlatformResult` (no parentheses) — `counts` reads from `raw`, and
+`probabilities` is derived from `counts` each time it's read. This differs
+from `marqov.executors.base.ExecutionResult`, where `counts` is a plain
+field (always present, never `None`) and only `probabilities` is a
+`@property`; `PlatformResult.counts` is a property specifically so it can
+be `None` when the server response omits it.
 
 ---
 

@@ -52,7 +52,7 @@ With backend-specific extras:
 
 ```bash
 # IBM Quantum
-pip install "marqov[qiskit]"
+pip install "marqov[ibm]"
 
 # All extras
 pip install "marqov[all]"
@@ -189,6 +189,7 @@ from marqov.platform import MarqovClient
 client = MarqovClient()
 
 script = """
+import asyncio
 from marqov import task
 
 @task
@@ -200,7 +201,10 @@ async def bell(shots):
     )
     return result.counts
 
-bell(1000)
+# @task's non-lattice call path runs fn(*args, **kwargs) directly, so an
+# async @task called bare returns an unawaited coroutine — drive it with
+# asyncio.run() instead of calling bell(1000) on its own.
+asyncio.run(bell(1000))
 """
 
 job = client.submit(script, backend="dwave-sim", framework="marqov", shots=1000)
