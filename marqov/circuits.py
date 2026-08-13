@@ -357,8 +357,10 @@ class Circuit:
         """Import from a Qiskit QuantumCircuit.
 
         Unsupported gates are automatically decomposed into the supported
-        basis set via Qiskit's transpiler, so any valid Qiskit circuit
-        can be converted.
+        basis set via Qiskit's transpiler. This covers any circuit built from
+        Qiskit's standard gate set, but a circuit containing an opaque custom
+        gate (no `_define`) makes the transpiler itself raise — that error is
+        not caught here and propagates to the caller.
 
         Requires Qiskit to be installed (``pip install marqov[qiskit]``).
 
@@ -372,6 +374,8 @@ class Circuit:
             ImportError: If Qiskit is not installed.
             TypeError: If the input is not a Qiskit QuantumCircuit.
             ValueError: If a gate cannot be mapped after decomposition.
+            qiskit.transpiler.exceptions.TranspilerError: If the transpiler
+                cannot decompose a gate (e.g. an opaque custom gate).
         """
         try:
             from qiskit import QuantumCircuit, transpile
@@ -865,8 +869,11 @@ class Circuit:
     def to_dict(self) -> dict:
         """Serialize circuit to a dictionary.
 
-        The dictionary contains the gate sequence for reconstruction.
-        This enables passing circuits through Temporal activities.
+        The dictionary contains the gate sequence for reconstruction. Not used
+        by Temporal activities today — those serialize `Circuit` (and
+        everything else) opaquely via cloudpickle, not through this method
+        (see `marqov/workflows/activity.py`). This is a plain gate-sequence
+        dump for callers who want a JSON-friendly representation.
 
         Returns:
             Dictionary representation of the circuit.

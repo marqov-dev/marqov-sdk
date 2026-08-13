@@ -5,7 +5,7 @@ Marqov provides:
 - @task/@workflow decorators for defining workflows
 - Automatic parallelization of independent tasks
 - Temporal-backed workflow durability and scheduling
-- Multi-vendor execution (Braket, IBM, IonQ, Rigetti)
+- Multi-vendor execution (Braket, IBM, IonQ, Rigetti, Azure, Quantinuum, CUDA-Q)
 
 Quick Start with @task/@workflow:
     >>> from marqov import task, workflow, Circuit
