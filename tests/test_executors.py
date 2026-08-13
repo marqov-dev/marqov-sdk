@@ -362,6 +362,45 @@ class TestBraketExecutor:
                         with pytest.raises(ValueError, match="non-native gates"):
                             await executor.execute(circuit, shots=100, verbatim=True)
 
+    @pytest.mark.asyncio
+    async def test_verbatim_mode_rejects_explicit_measure(self, mock_braket: dict) -> None:
+        """verbatim=True raises OUR ValueError for an explicit Measure instruction.
+
+        Braket refuses to box a subcircuit containing a measurement — `add_verbatim_box`
+        raises `ValueError: cannot measure a subcircuit inside a verbatim box.`
+        (braket/circuits/circuit.py). So Measure must NOT be in our allowed set: if it
+        is, the caller clears our validator and then hits Braket's opaque error instead
+        of our actionable one. Braket applies measurement implicitly via `shots`, so an
+        explicit Measure is never needed for SRB anyway.
+        """
+        config = BraketExecutorConfig(
+            device_arn="arn:aws:braket:us-west-1::device/qpu/rigetti/Cepheus-1-108Q",
+            s3_bucket="my-bucket",
+        )
+
+        # Native 1Q/2Q gates plus an explicit Measure — previously allow-listed.
+        names = ["Rx", "Rz", "CZ", "Measure"]
+        mock_instrs = []
+        for name in names:
+            instr = MagicMock()
+            instr.operator.name = name
+            mock_instrs.append(instr)
+        mock_braket_circuit = MagicMock()
+        mock_braket_circuit.instructions = mock_instrs
+
+        with patch("marqov.executors.braket.AwsDevice", return_value=mock_braket["device"]):
+            with patch("marqov.executors.braket.boto3.Session"):
+                with patch("marqov.executors.braket.AwsSession"):
+                    executor = BraketExecutor(config)
+                    circuit = Circuit().rx(0.5, 0)
+                    with patch.object(circuit, "to_braket", return_value=mock_braket_circuit):
+                        with pytest.raises(ValueError, match="non-native gates") as exc:
+                            await executor.execute(circuit, shots=100, verbatim=True)
+        assert "Measure" in str(exc.value), (
+            "the error should name Measure as the offending instruction"
+        )
+
+
 class TestQuantinuumExecutor:
     """Tests for QuantinuumExecutor."""
 

@@ -5,6 +5,57 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
+## [Unreleased] — 0.4.1
+
+### Fixed
+
+- **Verbatim compilation no longer allow-lists an explicit `Measure`.** 0.4.0's
+  allowed native set was `{Rx, Rz, CZ, XY, Measure}` and both the error message and
+  the changelog advertised "plus Measure". Braket rejects it: `add_verbatim_box`
+  raises *"cannot measure a subcircuit inside a verbatim box"*. So a caller passing an
+  explicit measurement with `verbatim=True` cleared our validator and then hit an
+  opaque Braket error instead of our actionable one. `Measure` is now excluded in both
+  paths (`MarqovDevice.run` and `BraketExecutor.execute`), and the error names the
+  offending instruction. Braket applies measurement implicitly via `shots`, so an
+  explicit `Measure` was never needed — for randomized benchmarking in particular.
+  (marqov-sdk#66)
+
+- **`marqov.qutip.record` emitted `mcsolve` seeds that did not reproduce the run.**
+  Seeds were serialised as `SeedSequence.entropy` alone. Every trajectory of a
+  single `mcsolve` call is a *spawned child* of one root `SeedSequence`: they all
+  share `entropy` and differ only by `spawn_key`. So the recorded seeds were
+  identical to one another, and a replay collapsed the Monte Carlo ensemble to a
+  single trajectory repeated `ntraj` times — measured **0/20** reproduction on runs
+  containing a collapse.
+
+  Seeds are now serialised as the full `SeedSequence.state` (numpy's own round-trip
+  contract), one JSON object per trajectory:
+
+  ```json
+  {"entropy": "179663937626102255308327548008974693620",
+   "spawn_key": [3], "pool_size": 4, "n_children_spawned": 0}
+  ```
+
+  `entropy` stays a string (128-bit; would lose precision in JS/`jsonb` float64) and
+  `spawn_key` is a list (JSON has no tuple). New public helper
+  **`marqov.qutip.record.seed_from_json`** rebuilds a `SeedSequence` for replay, so
+  callers do not reimplement those conversions. Reproduction is now **20/20** on runs
+  with collapses.
+
+  **Breaking, deliberately:** the `seeds` field changes from `list[str]` to
+  `list[object]`. Records written by **0.4.0 cannot be replayed** — their seeds were
+  never sufficient to reproduce the run, so nothing correct is lost. Re-record any
+  affected `mcsolve` runs. The platform stores this field in flexible `jsonb` and does
+  not destructure it.
+
+  This was masked by a test whose collapse rate was so low that most runs had no
+  quantum jumps at all — a degenerate seed set reproduces a jump-free run trivially.
+  With the old fixture (`0.1 * sigmam()`, `ntraj=4`), 57/60 runs were jump-free and
+  passed vacuously; the 3 that jumped failed 3/3, which read as CI flake. The test now
+  uses `0.4 * sigmam()`/`ntraj=8`, loops until a trajectory actually collapses, and
+  asserts exact reproduction — plus a one-line guard that the seeds are distinct from
+  each other, which is what would have caught this immediately.
+
 ## [0.4.0] — 2026-08-11
 
 ### Added

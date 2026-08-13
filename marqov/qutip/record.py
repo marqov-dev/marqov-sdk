@@ -2,7 +2,7 @@
 
 Invariants (spec §7): .states NEVER go through stdout (offload or hard-fail);
 stochastic (mcsolve) runs MUST carry seeds or they are not Capsule-reproducible.
-Verified on qutip 5.3.0 — see plan header for the API facts this relies on.
+Verified on qutip 5.3.0 and 5.3.1 — see plan header for the API facts this relies on.
 """
 from __future__ import annotations
 
@@ -18,14 +18,45 @@ def _is_stochastic(result: Any) -> bool:
     return hasattr(result, "num_trajectories")
 
 
-def _seed_to_str(s: Any) -> str:
-    # result.seeds are numpy SeedSequence; int(s) raises. The reusable value is
-    # s.entropy (128-bit int) — emit as a STRING to survive JS/jsonb float64.
-    # Verified 5.3.0: seeds=[int(entropy)] reproduces mcsolve exactly.
-    entropy = getattr(s, "entropy", None)
-    if entropy is None:  # not a SeedSequence -> fail clearly, don't int() it
+def _seed_to_json(s: Any) -> dict[str, Any]:
+    """Serialise one numpy SeedSequence to a JSON-safe dict, losslessly.
+
+    The whole state is required, NOT just `entropy`. The trajectories of a single
+    mcsolve call are spawned children of one root SeedSequence: they all share the
+    same `entropy` and differ ONLY by `spawn_key`. Emitting `entropy` alone writes
+    the same value ntraj times, and a replay then collapses the ensemble to one
+    trajectory repeated — measured 0/20 reproduction on runs containing a collapse.
+
+    `SeedSequence.state` is exactly the reconstruction kwargs (numpy's own
+    round-trip contract: `SeedSequence(**s.state)` regenerates an identical
+    stream), so we round-trip it whole rather than cherry-picking fields.
+    `entropy` becomes a STRING because it is a 128-bit int and would lose
+    precision in JS/jsonb float64; `spawn_key` becomes a list because JSON has
+    no tuple. Inverse: `seed_from_json`.
+    """
+    state = getattr(s, "state", None)
+    if state is None:  # not a SeedSequence -> fail clearly, don't int() it
         raise ValueError(f"cannot serialise seed of type {type(s).__name__}")
-    return str(entropy)
+    out = dict(state)
+    out["entropy"] = str(out["entropy"])
+    out["spawn_key"] = list(out.get("spawn_key", ()))
+    return out
+
+
+def seed_from_json(d: dict[str, Any]) -> Any:
+    """Rebuild a numpy SeedSequence from `_seed_to_json` output.
+
+    Inverse of the serialiser, exposed publicly so replay callers do not have to
+    reimplement the entropy-string / spawn_key-tuple conversions themselves.
+    """
+    from numpy.random import SeedSequence
+
+    return SeedSequence(
+        entropy=int(d["entropy"]),
+        spawn_key=tuple(d.get("spawn_key", ())),
+        pool_size=d.get("pool_size", 4),
+        n_children_spawned=d.get("n_children_spawned", 0),
+    )
 
 
 def _coerce_series(arr: Any, name: str) -> list[float]:
@@ -115,12 +146,16 @@ def record(result: Any, observable_names: list[str] | None = None, *,
         "observables": observables,
     }
     if seeds:
+        # One object per trajectory, each the full SeedSequence state — see
+        # _seed_to_json for why `entropy` alone is NOT sufficient. Rebuild with
+        # seed_from_json() and pass the list to mcsolve(seeds=...) to replay.
+        #
         # REPRODUCIBILITY CAVEAT (verified qutip 5.3): these seeds reproduce mcsolve
         # bit-identically ONLY under options={"map": "serial"}. The parallel map does
         # not preserve seed->trajectory assignment, so a re-run with the same seeds
         # produces a DIFFERENT trajectory set (max|Δ| up to 2.0). A Capsule re-run of a
         # stochastic open-system result must force serial to actually reproduce.
-        payload["seeds"] = [_seed_to_str(s) for s in seeds]
+        payload["seeds"] = [_seed_to_json(s) for s in seeds]
     if states_artifact_path is not None:
         payload["states_artifact"] = states_artifact_path
 

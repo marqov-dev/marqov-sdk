@@ -73,28 +73,56 @@ def test_record_real_mesolve_integration():
     assert len(out["times"]) == 5 and len(out["observables"]["sz"]) == 5
     assert "seeds" not in out
 
-def test_record_mcsolve_seeds_round_trip_reproduces():
+def test_record_mcsolve_seeds_are_distinct_per_trajectory():
+    """Each trajectory needs its OWN seed. The trajectories of one mcsolve call are
+    spawned children of one root SeedSequence: they share `entropy` and differ ONLY
+    by `spawn_key`. Serialising `entropy` alone emits the same value ntraj times, so
+    a replay collapses the ensemble to one trajectory repeated. This one-line
+    distinctness check is the cheapest possible guard against that."""
     pytest.importorskip("qutip")
     from qutip import basis, sigmaz, sigmam, mcsolve
-    from numpy.random import SeedSequence
     args = (sigmaz(), basis(2, 0), np.linspace(0, 1, 3))
-    # map=serial: seed->trajectory assignment is not stable under the parallel map.
-    kw = dict(c_ops=[0.1 * sigmam()], e_ops=[sigmaz()], ntraj=4, options={"map": "serial"})
+    kw = dict(c_ops=[0.4 * sigmam()], e_ops=[sigmaz()], ntraj=8, options={"map": "serial"})
     res = mcsolve(*args, **kw)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         record(res, observable_names=["sz"])
     seeds_json = json.loads(buf.getvalue())["seeds"]
-    # record()'s contract: emit one 128-bit seed per trajectory as a JSON string
-    # (survives JS/jsonb float64), each round-tripping to a valid SeedSequence that
-    # drives a re-run. Bit-exact reproduction is qutip's property, NOT record()'s,
-    # and is not guaranteed run-to-run on qutip 5.3.1 (measured: ~29/30 exact, the
-    # remainder a single-trajectory divergence up to max|Δ|≈0.5 — a different
-    # collapse, not numerical drift, so tolerance-loosening would be wrong). Assert
-    # what record() actually owns: faithful seed capture + a finite, same-shape re-run.
     assert len(seeds_json) == len(res.seeds)
-    assert all(isinstance(s, str) for s in seeds_json)  # 128-bit-safe as strings
-    reused = [SeedSequence(int(s)) for s in seeds_json]
-    res2 = mcsolve(*args, seeds=reused, **kw)
-    assert np.asarray(res2.expect[0]).shape == np.asarray(res.expect[0]).shape
-    assert np.all(np.isfinite(res2.expect[0]))
+    canonical = [json.dumps(s, sort_keys=True) for s in seeds_json]
+    assert len(set(canonical)) == len(canonical), (
+        f"seeds must be distinct per trajectory; got {len(set(canonical))} "
+        f"distinct of {len(canonical)}"
+    )
+
+
+def test_record_mcsolve_seeds_round_trip_reproduces():
+    """Replaying from recorded seeds must reproduce `expect` exactly.
+
+    The collapse rate and ntraj are chosen so that trajectories actually JUMP: with
+    a weak c_op nearly every trajectory is jump-free, in which case a degenerate
+    (all-identical) seed set coincidentally reproduces and the test proves nothing.
+    Measured with 0.1*sigmam/ntraj=4: 57/60 runs jump-free -> passed trivially;
+    the 3 that jumped failed 3/3. With 0.4*sigmam/ntraj=8 roughly 80% of runs jump.
+
+    map=serial: seed->trajectory assignment is not stable under the parallel map.
+    """
+    pytest.importorskip("qutip")
+    from qutip import basis, sigmaz, sigmam, mcsolve
+    from marqov.qutip.record import seed_from_json
+    args = (sigmaz(), basis(2, 0), np.linspace(0, 1, 3))
+    kw = dict(c_ops=[0.4 * sigmam()], e_ops=[sigmaz()], ntraj=8, options={"map": "serial"})
+    # Loop until we get a run with at least one collapse — a jump-free run does not
+    # exercise the seed round-trip at all. Bounded so a pathological RNG can't hang.
+    for _ in range(25):
+        res = mcsolve(*args, **kw)
+        if not np.allclose(res.expect[0], 1.0):
+            break
+    else:
+        pytest.skip("no trajectory collapsed in 25 attempts; nothing to reproduce")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        record(res, observable_names=["sz"])
+    seeds_json = json.loads(buf.getvalue())["seeds"]
+    res2 = mcsolve(*args, seeds=[seed_from_json(s) for s in seeds_json], **kw)
+    np.testing.assert_allclose(res.expect[0], res2.expect[0])

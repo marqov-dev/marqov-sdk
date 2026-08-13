@@ -295,7 +295,10 @@ class MarqovDevice:
             if kwargs.get("verbatim"):
                 from braket.circuits import Circuit as BraketCircuit
 
-                _RIGETTI_VERBATIM_ALLOWED = {"rx", "rz", "cz", "xy", "measure"}
+                # Measure is deliberately NOT allowed — see BraketExecutor.execute:
+                # Braket refuses to box a measured subcircuit and adds measurement
+                # implicitly via `shots`.
+                _RIGETTI_VERBATIM_ALLOWED = {"rx", "rz", "cz", "xy"}
                 non_native = [
                     instr.operator.name
                     for instr in native_circuit.instructions
@@ -304,7 +307,8 @@ class MarqovDevice:
                 if non_native:
                     raise ValueError(
                         f"verbatim=True requires Rigetti native gates only "
-                        f"(1Q: Rx/Rz, 2Q: CZ/XY, plus Measure). "
+                        f"(1Q: Rx/Rz, 2Q: CZ/XY; no explicit Measure — Braket cannot box a "
+                        f"measured subcircuit and adds measurement implicitly via shots). "
                         f"Found non-native gates: {sorted(set(non_native))}. "
                         f"Use clifford_to_circuit_native() or set "
                         f"SRBConfig.use_native_gates=True."

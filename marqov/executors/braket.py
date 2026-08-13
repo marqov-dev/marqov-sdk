@@ -207,7 +207,12 @@ class BraketExecutor(BaseExecutor):
         # device-aware lookup when IQM or other verbatim providers are added.
         # IQM native set is {Rz, SX, CZ} — different from Rigetti.
         if kwargs.get("verbatim"):
-            _RIGETTI_VERBATIM_ALLOWED = {"rx", "rz", "cz", "xy", "measure"}
+            # Measure is deliberately NOT allowed: Braket refuses to box a subcircuit
+            # containing a measurement (`add_verbatim_box` -> "cannot measure a
+            # subcircuit inside a verbatim box"). Allow-listing it would let the caller
+            # clear this check and then hit Braket's opaque error instead of ours.
+            # Braket applies measurement implicitly via `shots`.
+            _RIGETTI_VERBATIM_ALLOWED = {"rx", "rz", "cz", "xy"}
             non_native = [
                 instr.operator.name
                 for instr in braket_circuit.instructions
@@ -216,7 +221,8 @@ class BraketExecutor(BaseExecutor):
             if non_native:
                 raise ValueError(
                     f"verbatim=True requires Rigetti native gates only "
-                    f"(1Q: Rx/Rz, 2Q: CZ/XY, plus Measure). "
+                    f"(1Q: Rx/Rz, 2Q: CZ/XY; no explicit Measure — Braket cannot box a "
+                    f"measured subcircuit and adds measurement implicitly via shots). "
                     f"Found non-native gates: {sorted(set(non_native))}. "
                     f"Use clifford_to_circuit_native() or set SRBConfig.use_native_gates=True."
                 )
