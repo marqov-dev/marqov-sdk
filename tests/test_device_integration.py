@@ -217,6 +217,28 @@ class TestBraketVerbatim:
             with pytest.raises(ValueError, match="native"):
                 device.run(circuit, shots=100, verbatim=True)
 
+    def test_verbatim_rejects_explicit_measure(self) -> None:
+        """Parity with BraketExecutor: an explicit Measure must raise OUR error.
+
+        Braket refuses to box a measured subcircuit, so allow-listing Measure would
+        let the caller past this check and into Braket's opaque error. Measurement is
+        applied implicitly via `shots`.
+        """
+        device = self._rigetti_device()
+        mock_aws = self._mock_aws_device()
+        # marqov.Circuit has no measure(); inject at the Braket-conversion boundary,
+        # which is where an explicit Measure could realistically arrive.
+        instr = MagicMock()
+        instr.operator.name = "Measure"
+        braket_circuit = MagicMock()
+        braket_circuit.instructions = [instr]
+        circuit = Circuit().rx(0.5, 0)
+        with patch.object(MarqovDevice, "_get_provider_device", return_value=mock_aws):
+            with patch.object(MarqovDevice, "_to_backend_format", return_value=braket_circuit):
+                with pytest.raises(ValueError, match="native") as exc:
+                    device.run(circuit, shots=100, verbatim=True)
+        assert "Measure" in str(exc.value)
+
     def test_no_verbatim_box_by_default(self) -> None:
         device = self._rigetti_device()
         mock_aws = self._mock_aws_device()
