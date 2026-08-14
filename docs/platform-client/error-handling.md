@@ -43,7 +43,7 @@ follows:
 - Otherwise `.message` is a generic fallback string (e.g. *"Job \<id\> failed
   (status='failed'). The server error_message is not returned by the status
   endpoint; check the platform dashboard for details."*) — this behaviour is
-  pinned by `tests/test_platform_job.py::test_job_failed_generic_message_when_no_result_error`.
+  pinned by `tests/test_platform_job.py::TestJobResultFailed::test_job_failed_generic_message_when_no_result_error`.
 
 Do not assume `.message` always carries the server's actual failure reason —
 check the platform dashboard for full detail when it doesn't.
@@ -90,14 +90,40 @@ except TimeoutError:
 
 ## Cancellation behaviour
 
-`job.cancel()` sends a best-effort cancellation request to the server and
-returns immediately without confirming the outcome. The server may have
-already moved the job to a terminal state, in which case the cancel request
-is a no-op.
+`job.cancel()` sends a cancellation request to the server. It does **not**
+swallow failures: any non-2xx response raises `MarqovPlatformError`, same as
+any other API call.
 
-A cancelled job ends in the `cancelled` state. When `result()` polls and
-encounters `cancelled`, it raises `JobFailed` (the job reached a terminal
-state that produced no result).
+> **The cancel endpoint is not yet confirmed on the platform.** `cancel()` is
+> implemented against a provisional path (see `job.cancel()` in
+> [`api-reference.md`](api-reference.md)) — until the platform ships a
+> confirmed cancellation route, calling it against the real service will
+> typically raise `MarqovPlatformError` rather than cancel the job.
+
+This matters for cleanup code. A pattern like:
+
+```python
+try:
+    result = job.result(timeout=120.0)
+finally:
+    job.cancel()
+```
+
+lets a raised `MarqovPlatformError` from `cancel()` escape the `finally`
+block and mask whatever exception (if any) was already propagating. If you
+want fire-and-forget cleanup, catch it explicitly:
+
+```python
+finally:
+    try:
+        job.cancel()
+    except MarqovPlatformError:
+        pass  # best-effort — cancellation isn't guaranteed to reach the server
+```
+
+If cancellation does succeed server-side, the job ends in the `cancelled`
+state. When `result()` polls and encounters `cancelled`, it raises
+`JobFailed` (the job reached a terminal state that produced no result).
 
 ---
 
