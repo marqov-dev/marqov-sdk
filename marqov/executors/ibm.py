@@ -192,7 +192,7 @@ class IBMExecutor(BaseExecutor):
         Args:
             circuit: The quantum circuit to execute.
             shots: Number of measurement shots.
-            **kwargs: Additional options (e.g., optimization_level override).
+            **kwargs: Additional backend-specific options (currently unused).
 
         Returns:
             ExecutionResult with measurement counts and metadata.

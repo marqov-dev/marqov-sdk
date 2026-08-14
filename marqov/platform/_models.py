@@ -137,7 +137,7 @@ class PlatformInfo:
 class PlatformResult:
     """Measurement result for a completed platform job.
 
-    Wraps the raw JSON response body from the job-result endpoint.  The
+    Wraps the raw ``result`` field from the job status response.  The
     interface is intentionally consistent with
     :class:`marqov.executors.base.ExecutionResult` so SDK users see a
     familiar surface:
@@ -151,7 +151,8 @@ class PlatformResult:
       ``counts`` is ``None`` (server variance) rather than raising.
 
     Attributes:
-        raw: The unmodified JSON response dict from the server.
+        raw: The unmodified ``result`` dict from the job status response
+            (``resp["result"]``, or ``{}`` if absent).
     """
 
     raw: dict
