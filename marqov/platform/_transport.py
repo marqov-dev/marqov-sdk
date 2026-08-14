@@ -8,10 +8,12 @@ Error codes, status codes, and param names below follow the platform's HTTP API 
 
 from __future__ import annotations
 
+import datetime
 import os
 import time
 import typing
 import uuid
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import requests
@@ -41,6 +43,37 @@ _MAX_RETRIES = 3
 
 #: Initial backoff (seconds) between retries; doubles each attempt.
 _RETRY_BACKOFF_BASE = 0.5
+
+
+def _parse_retry_after(raw: str) -> int | None:
+    """Parse a ``Retry-After`` header value into whole seconds.
+
+    RFC 7231 §7.1.3 allows two forms:
+      - delta-seconds — a plain integer, e.g. ``"30"``.
+      - HTTP-date — e.g. ``"Wed, 21 Oct 2026 07:28:00 GMT"``, converted to a
+        delta against the current time and clamped to ``>= 0`` (a date in
+        the past never yields a negative wait).
+
+    Returns ``None`` if `raw` is neither a valid delta-seconds value nor a
+    parseable HTTP-date.
+    """
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        pass
+
+    try:
+        target = parsedate_to_datetime(raw)
+    except (ValueError, TypeError):
+        return None
+    # A malformed date without timezone info parses to a naive datetime;
+    # without a timezone we can't compute a reliable delta against an
+    # aware "now", so treat it as unparseable.
+    if target is None or target.tzinfo is None:
+        return None
+
+    delta = target - datetime.datetime.now(datetime.timezone.utc)
+    return max(0, int(delta.total_seconds()))
 
 
 # ---------------------------------------------------------------------------
@@ -149,8 +182,14 @@ class Transport:
             PaidBackendNotSupportedYet:  HTTP 422 ``analysis_required``.
             RateLimited:                 HTTP 429. ``retry_after`` is parsed
                                          from the ``Retry-After`` header when
-                                         present, else ``None`` — the header
-                                         is not required for this to raise.
+                                         present — either delta-seconds or an
+                                         RFC 7231 HTTP-date (converted to a
+                                         delta, clamped to ``>= 0``) — else
+                                         ``None``. The header is not required
+                                         for this to raise.
+            BackendUnavailable:          HTTP 422 ``backend_unknown`` /
+                                         ``backend_retired``.
+            InvalidProgram:              HTTP 400 or 422 ``validation_error``.
             MarqovPlatformError:         Any other non-2xx with an error body
                                          (``code`` preserved; never coerced to
                                          ``TransportError``).
@@ -276,10 +315,7 @@ class Transport:
             _retry_after_raw = resp.headers.get("Retry-After")
             _retry_after: int | None = None
             if _retry_after_raw is not None:
-                try:
-                    _retry_after = int(_retry_after_raw)
-                except (ValueError, TypeError):
-                    _retry_after = None
+                _retry_after = _parse_retry_after(_retry_after_raw)
             raise RateLimited(message, code=code, status=status, retry_after=_retry_after)
 
         # backend_unknown / backend_retired → BackendUnavailable

@@ -779,17 +779,61 @@ class TestRateLimitedBodyShapes:
 
         assert exc_info.value.retry_after is None
 
-    def test_retry_after_non_numeric_gives_none(self):
-        """Non-numeric Retry-After header (e.g. HTTP-date) → exc.retry_after is None."""
+    def test_retry_after_garbage_gives_none(self):
+        """Garbage Retry-After header (neither delta-seconds nor an HTTP-date)
+        → exc.retry_after is None.
+        """
         body = {"error": "Too many requests"}
         transport = Transport(api_key="marqey_test_x", base_url="http://test")
-        mock_resp = _mock_response(429, body, headers={"Retry-After": "Fri, 01 Aug 2026 00:00:00 GMT"})
+        mock_resp = _mock_response(429, body, headers={"Retry-After": "not-a-valid-value"})
 
         with patch.object(transport._session, "request", return_value=mock_resp):
             with pytest.raises(RateLimited) as exc_info:
                 transport.request("GET", "/api/jobs/abc/status")
 
         assert exc_info.value.retry_after is None
+
+    def test_retry_after_http_date_parsed_to_delta_seconds(self):
+        """RFC 7231 HTTP-date Retry-After header → parsed via
+        email.utils.parsedate_to_datetime and converted to a delta-seconds int.
+
+        e.g. ``Retry-After: Wed, 21 Oct 2026 07:28:00 GMT``.
+        """
+        import datetime
+        from email.utils import format_datetime
+
+        future = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=120)
+        http_date = format_datetime(future, usegmt=True)
+
+        body = {"error": "Too many requests"}
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        mock_resp = _mock_response(429, body, headers={"Retry-After": http_date})
+
+        with patch.object(transport._session, "request", return_value=mock_resp):
+            with pytest.raises(RateLimited) as exc_info:
+                transport.request("GET", "/api/jobs/abc/status")
+
+        retry_after = exc_info.value.retry_after
+        assert retry_after is not None
+        # Allow a little slack for test-execution time between computing
+        # `future` and the delta being computed inside the transport.
+        assert 115 <= retry_after <= 120
+
+    def test_retry_after_http_date_in_past_clamped_to_zero(self):
+        """An HTTP-date Retry-After header already in the past is clamped to
+        0, never a negative number of seconds.
+        """
+        body = {"error": "Too many requests"}
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        mock_resp = _mock_response(
+            429, body, headers={"Retry-After": "Fri, 01 Aug 2025 00:00:00 GMT"}
+        )
+
+        with patch.object(transport._session, "request", return_value=mock_resp):
+            with pytest.raises(RateLimited) as exc_info:
+                transport.request("GET", "/api/jobs/abc/status")
+
+        assert exc_info.value.retry_after == 0
 
 
 # ---------------------------------------------------------------------------

@@ -110,9 +110,12 @@ class RateLimited(MarqovPlatformError):
     Back off and retry.  The :attr:`status` attribute will be ``429``.
 
     Attributes:
-        retry_after: Value of the ``Retry-After`` response header parsed as an
-            integer (seconds), or ``None`` if the header was absent or
-            non-numeric.
+        retry_after: Value of the ``Retry-After`` response header, in whole
+            seconds.  Accepts both the delta-seconds form (e.g. ``"30"``) and
+            the RFC 7231 HTTP-date form (e.g. ``"Wed, 21 Oct 2026 07:28:00
+            GMT"``) — the latter is converted to a delta against the current
+            time, clamped to ``>= 0``.  ``None`` if the header was absent or
+            unparseable.
     """
 
     def __init__(
