@@ -219,7 +219,10 @@ class MarqovDevice:
             circuit: Any supported circuit (Braket, Qiskit, Cirq, PennyLane,
                      QASM string, or marqov.Circuit).
             shots: Number of measurement shots.
-            **kwargs: Backend-specific options. Braket backends accept:
+            **kwargs: Backend-specific options, honored only on the cloud
+                      AWS Braket path (`is_braket(self._params)` below) — the
+                      local/`marqov-sim` path (a Braket `LocalSimulator`) does
+                      not read `**kwargs` at all and silently ignores it:
                       - disable_qubit_rewiring (bool): prevent qubit remapping.
                       - verbatim (bool): submit under a verbatim box so the
                         compiler runs the gates exactly as given (required for

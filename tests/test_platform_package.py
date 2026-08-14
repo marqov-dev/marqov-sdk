@@ -10,8 +10,11 @@ Verifies that:
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
+from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -172,4 +175,49 @@ class TestLaziness:
             f"Laziness check failed (returncode={result.returncode}).\n"
             f"stdout: {result.stdout}\n"
             f"stderr: {result.stderr}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 4. Boundary: core SDK files never import marqov.platform (the other
+#    direction of the laziness guarantee — see docs/design/platform-client-
+#    boundary.md's "two-direction rule"). Mirrors the grep-gate pattern in
+#    tests/test_no_private_references.py.
+# ---------------------------------------------------------------------------
+
+_CORE_PATHS = (
+    "marqov/circuits.py",
+    "marqov/device.py",
+    "marqov/backends.py",
+    "marqov/executors",
+    "marqov/workflows",
+)
+_PLATFORM_IMPORT = re.compile(r"^\s*(from\s+marqov\.platform\s+import|import\s+marqov\.platform)")
+
+
+def _iter_core_files() -> Iterator[Path]:
+    root = Path(__file__).resolve().parent.parent
+    for rel in _CORE_PATHS:
+        base = root / rel
+        if base.is_file():
+            yield base
+        elif base.is_dir():
+            yield from base.rglob("*.py")
+
+
+class TestCoreDoesNotImportPlatform:
+    """Confirm marqov.platform never leaks into the core SDK (the reverse
+    direction of TestLaziness above)."""
+
+    def test_core_files_never_import_platform(self) -> None:
+        offenders: list[str] = []
+        for path in _iter_core_files():
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                if _PLATFORM_IMPORT.match(line):
+                    offenders.append(f"{path}:{lineno}: {line.strip()}")
+        assert not offenders, (
+            f"{len(offenders)} core-SDK import(s) of marqov.platform found — this "
+            "breaks the boundary documented in docs/design/platform-client-boundary.md "
+            "(platform is a consumer of the core, never a dependency of it):\n  "
+            + "\n  ".join(offenders)
         )

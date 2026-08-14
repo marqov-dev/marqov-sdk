@@ -150,11 +150,12 @@ def record(result: Any, observable_names: list[str] | None = None, *,
         # _seed_to_json for why `entropy` alone is NOT sufficient. Rebuild with
         # seed_from_json() and pass the list to mcsolve(seeds=...) to replay.
         #
-        # REPRODUCIBILITY CAVEAT (verified qutip 5.3): these seeds reproduce mcsolve
-        # bit-identically ONLY under options={"map": "serial"}. The parallel map does
-        # not preserve seed->trajectory assignment, so a re-run with the same seeds
-        # produces a DIFFERENT trajectory set (max|Δ| up to 2.0). A Capsule re-run of a
-        # stochastic open-system result must force serial to actually reproduce.
+        # Reproducibility: verified on qutip 5.3.1 that a replay reproduces the
+        # original run's expect values bit-identically (max|Δ| == 0.0) under both
+        # options={"map": "serial"} and the default "parallel" map, now that seeds
+        # round-trip the full SeedSequence.state (see _seed_to_json above — the
+        # earlier entropy-only serialisation was what made parallel replay
+        # diverge). No need to force serial to reproduce.
         payload["seeds"] = [_seed_to_json(s) for s in seeds]
     if states_artifact_path is not None:
         payload["states_artifact"] = states_artifact_path

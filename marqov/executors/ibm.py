@@ -43,8 +43,12 @@ class IBMExecutorConfig:
         token: IBM Quantum API token. If None, uses saved credentials
                from QiskitRuntimeService.save_account().
         optimization_level: Transpiler optimization level (0-3).
-        resilience_level: Error mitigation level for Sampler (0-2).
-        poll_interval_seconds: Polling interval for job completion.
+        resilience_level: Recorded in the execution result's metadata for
+                           traceability, but NOT currently passed to
+                           SamplerV2 — it has no effect on error mitigation.
+        poll_interval_seconds: Currently unused. `execute()` blocks
+                                synchronously on `job.result()` rather than
+                                polling.
         timeout_seconds: Maximum time to wait for job completion.
     """
 
@@ -194,7 +198,11 @@ class IBMExecutor(BaseExecutor):
             ExecutionResult with measurement counts and metadata.
 
         Raises:
-            RuntimeError: If job fails or backend is unavailable.
+            TimeoutError: If `timeout_seconds` is set and elapses before the
+                job completes.
+            Exception: Whatever `qiskit_ibm_runtime` raises on a failed job
+                or unavailable backend propagates unchanged — not wrapped or
+                normalized to a `marqov`-specific exception type.
         """
         circuit = self._validate_circuit(circuit)
 

@@ -23,10 +23,30 @@ message.
 | `PaidBackendNotSupportedYet` | The backend requires a pre-run cost analysis (paid backends); v1.0 only routes free backends | No — choose a free backend (e.g. `dwave-sim`) |
 | `BackendUnavailable` | The requested backend is known but currently offline or unrecognised | Maybe — retry with back-off or choose another backend |
 | `InvalidProgram` | The submitted program was rejected by the server (bad QASM, unsupported gates, too many qubits, malformed body) | No — fix the program |
-| `JobFailed` | The job reached the `failed` or `dispatch_failed` terminal state | Depends — inspect `message` for the server reason |
+| `JobFailed` | The job reached the `failed` or `dispatch_failed` terminal state | Depends — inspect `message`, but see caveat below |
 | `RateLimited` | HTTP 429 — too many requests | Yes — back off by `retry_after` seconds |
 | `TransportError` | Low-level network failure: connection refused, TLS error, or unrecognised non-2xx with no structured error body | Yes for reads; conditional for writes (see below) |
 | `MarqovPlatformError` | Any other structured server error not mapped to a subclass above | Depends on `code` |
+
+---
+
+## `JobFailed.message` is best-effort, not a guaranteed server reason
+
+The status endpoint's response does **not** include an `error_message`
+field — the server only ever returns `id`, `status`, `backend`,
+`created_at`, `updated_at`, `estimated_cost_usd`, and `result`. When a job
+reaches `failed` or `dispatch_failed`, the client builds `.message` as
+follows:
+
+- If `result` is present and contains an `"error"` key, that value becomes
+  `.message`.
+- Otherwise `.message` is a generic fallback string (e.g. *"Job \<id\> failed
+  (status='failed'). The server error_message is not returned by the status
+  endpoint; check the platform dashboard for details."*) — this behaviour is
+  pinned by `tests/test_platform_job.py::test_job_failed_generic_message_when_no_result_error`.
+
+Do not assume `.message` always carries the server's actual failure reason —
+check the platform dashboard for full detail when it doesn't.
 
 ---
 

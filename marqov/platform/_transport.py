@@ -147,7 +147,10 @@ class Transport:
             AuthenticationError:         HTTP 401.
             PermissionTierError:         HTTP 403 / ``permission_denied``.
             PaidBackendNotSupportedYet:  HTTP 422 ``analysis_required``.
-            RateLimited:                 HTTP 429 with ``Retry-After`` header.
+            RateLimited:                 HTTP 429. ``retry_after`` is parsed
+                                         from the ``Retry-After`` header when
+                                         present, else ``None`` — the header
+                                         is not required for this to raise.
             MarqovPlatformError:         Any other non-2xx with an error body
                                          (``code`` preserved; never coerced to
                                          ``TransportError``).

@@ -51,9 +51,9 @@ Inside `marqov.platform`:
 - Error classes — the full server error taxonomy.
 - `backends()`, `platform_info()` — platform-side metadata.
 
-**Nothing in the core SDK (`marqov/circuits/`, `marqov/executors/`,
-`marqov/workflows/`) imports from `marqov/platform/`.** The dependency only runs
-one way: platform → SDK.
+**Nothing in the core SDK (`marqov/circuits.py`, `marqov/device.py`,
+`marqov/backends.py`, `marqov/executors/`, `marqov/workflows/`) imports from
+`marqov/platform/`.** The dependency only runs one way: platform → SDK.
 
 ---
 
@@ -86,22 +86,33 @@ Every change to the SDK or the platform client should be checked against this
 rule:
 
 1. **Core SDK changes must not require a platform account.** If a new feature
-   in `marqov/circuits/` or `marqov/executors/` only makes sense with a
+   in `marqov/circuits.py` or `marqov/executors/` only makes sense with a
    `MARQOV_PLATFORM_KEY`, it belongs in `marqov.platform`, not in core.
 
 2. **`marqov.platform` must not leak into the core.** No import of
-   `marqov.platform` anywhere in `marqov/circuits/`, `marqov/executors/`, or
-   `marqov/workflows/`. The platform sub-package is a *consumer* of the core,
-   not a dependency of it.
+   `marqov.platform` anywhere in `marqov/circuits.py`, `marqov/device.py`,
+   `marqov/backends.py`, `marqov/executors/`, or `marqov/workflows/`. The
+   platform sub-package is a *consumer* of the core, not a dependency of it.
 
-Both directions are checked by the existing test suite's import-isolation tests.
+**Direction 1** (core doesn't require a platform account) is enforced by
+inspection, not a test — there's no mechanical way to check "does this
+feature only make sense with a `MARQOV_PLATFORM_KEY`."
+
+**Direction 2** (platform doesn't leak into core) is only half machine-checked
+today: `tests/test_platform_package.py::TestLaziness` confirms `import marqov`
+never pulls in `marqov.platform`, but nothing currently asserts the reverse —
+that core files never contain `from marqov.platform import ...` — as a lint
+rule or CI guard. Until that guard exists, treat this rule as enforced by code
+review, not by the test suite.
 
 ---
 
 ## The dependency direction in practice
 
 ```
-marqov/circuits/        <── standalone IR; no network
+marqov/circuits.py      <── standalone IR; no network
+marqov/device.py        <── sync device wrapper
+marqov/backends.py      <── backend registry
 marqov/executors/       <── BYOK, direct-to-provider
 marqov/workflows/       <── @task/@workflow; self-hosted Temporal
          ↑
@@ -121,8 +132,9 @@ the core.
 
 Concrete anti-patterns to watch for during code review:
 
-- Adding `from marqov.platform import ...` to any file in `marqov/circuits/`,
-  `marqov/executors/`, or `marqov/workflows/`.
+- Adding `from marqov.platform import ...` to any file in `marqov/circuits.py`,
+  `marqov/device.py`, `marqov/backends.py`, `marqov/executors/`, or
+  `marqov/workflows/`.
 - Making `pip install marqov` pull in a platform credential (even as optional).
 - Designing a new `Circuit` or executor feature that only works if
   `MARQOV_PLATFORM_KEY` is set.

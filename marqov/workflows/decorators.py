@@ -19,10 +19,6 @@ Example:
     >>>
     >>> dispatch = vqe_step(0.5)
     >>> result = await dispatch.run(client)
-
-Note:
-    `electron` and `lattice` are deprecated aliases for `task` and `workflow`.
-    They will be removed in a future version.
 """
 
 from __future__ import annotations
@@ -91,7 +87,13 @@ def task(
     inside a @workflow function, they don't execute immediately - instead they
     return a proxy that registers the call in the transport graph.
 
-    When called outside a workflow, tasks execute normally.
+    When called outside a workflow, the wrapper just calls the decorated
+    function directly (`fn(*args, **kwargs)`) — it does not special-case
+    coroutine functions. For a sync function that means "executes normally
+    and returns its result." For an `async def` function it does NOT await
+    it: calling it bare returns an unawaited coroutine and nothing runs. If
+    you need to call an async @task outside a workflow, drive it yourself
+    with `asyncio.run(...)` (see the second example below).
 
     Args:
         func: The function to decorate.
@@ -114,6 +116,11 @@ def task(
         >>> @task(executor="braket", timeout=600)
         ... async def measure(circuit):
         ...     return await executor.run(circuit)
+        >>>
+        >>> # Outside workflow, an async @task must be driven explicitly —
+        >>> # measure(circuit) alone would return an unawaited coroutine.
+        >>> import asyncio
+        >>> result = asyncio.run(measure(circuit))
     """
 
     def decorator(fn: F) -> F:
