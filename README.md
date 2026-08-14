@@ -201,9 +201,9 @@ async def bell(shots):
     )
     return result.counts
 
-# @task's non-lattice call path runs fn(*args, **kwargs) directly, so an
-# async @task called bare returns an unawaited coroutine — drive it with
-# asyncio.run() instead of calling bell(1000) on its own.
+# An async @task called outside a @workflow isn't awaited automatically
+# (see marqov/workflows/decorators.py for details) — drive it with
+# asyncio.run() rather than calling bell(1000) bare.
 asyncio.run(bell(1000))
 """
 

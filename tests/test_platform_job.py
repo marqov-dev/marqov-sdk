@@ -223,7 +223,14 @@ class TestJobResultFailed:
         assert "circuit exceeds qubit limit" in str(exc_info.value)
 
     def test_job_failed_generic_message_when_no_result_error(self):
-        """JobFailed still raised even when result field has no error key."""
+        """JobFailed carries the generic fallback message when result has no error key.
+
+        Pins the exact fallback string quoted in
+        docs/platform-client/error-handling.md — this test is that doc's
+        cited provenance, so a wording change in
+        ``marqov/platform/job.py``'s fallback message must be a deliberate
+        edit to both.
+        """
         t = _make_transport()
         t.request.return_value = _status_payload("failed", result=None)
         job = _make_job(t)
@@ -231,8 +238,12 @@ class TestJobResultFailed:
         with pytest.raises(JobFailed) as exc_info:
             job.result()
 
-        # Confirm it raised JobFailed (the message may be generic)
         assert isinstance(exc_info.value, JobFailed)
+        assert exc_info.value.message == (
+            "Job job-abc failed (status='failed'). The server error_message "
+            "is not returned by the status endpoint; check the platform "
+            "dashboard for details."
+        )
 
     def test_raises_job_failed_on_dispatch_failed(self):
         """dispatch_failed is a server terminal state treated as JobFailed."""
