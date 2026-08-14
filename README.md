@@ -126,6 +126,8 @@ result = await executor.execute(circuit, shots=1000)
 | IonQ Direct | Available |
 | Rigetti QCS | Available |
 | Quantinuum | Available |
+| Quantum Brilliance | Available |
+| CUDA-Q | Available — not in `[all]` (GPU-heavy); install separately with `pip install "marqov[cudaq]"` |
 
 ---
 
