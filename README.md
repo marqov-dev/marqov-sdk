@@ -126,7 +126,7 @@ result = await executor.execute(circuit, shots=1000)
 | IonQ Direct | Available |
 | Rigetti QCS | Available |
 | Quantinuum | Available |
-| Quantum Brilliance | Available |
+| Quantum Brilliance | Available — requires `qristal` installed separately (not on PyPI, no `marqov[...]` extra); build from source or use the Docker image: https://qristal.readthedocs.io/ |
 | CUDA-Q | Available — not in `[all]` (GPU-heavy); install separately with `pip install "marqov[cudaq]"` |
 
 ---

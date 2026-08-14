@@ -10,7 +10,11 @@ from marqov.executors.factory import ExecutorFactory
 from marqov.simulation.backends import SIMULATION_BACKENDS
 from marqov.simulation.circuit_converter import convert_counts, count_qubits, ensure_measurements
 from marqov.simulation.config import SimulationConfig
-from marqov.simulation.executor import SimulationExecutor, _validate_qubit_limit
+from marqov.simulation.executor import (
+    SimulationExecutor,
+    _import_qristal_core,
+    _validate_qubit_limit,
+)
 from marqov.executors.quantinuum import QuantinuumExecutor
 
 
@@ -260,6 +264,25 @@ class TestGpuBackendRegistry:
         from marqov.simulation.backends import GPU_SIMULATION_BACKENDS
 
         assert "qb-sim-density-matrix" in GPU_SIMULATION_BACKENDS
+
+
+class TestQristalImportError:
+    """Tests for the actionable ImportError when qristal isn't installed."""
+
+    def test_import_error_is_actionable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When qristal.core is missing, _import_qristal_core gives install guidance."""
+        import importlib
+
+        real_import_module = importlib.import_module
+
+        def fake_import_module(name: str, *args, **kwargs):
+            if name == "qristal.core":
+                raise ModuleNotFoundError("No module named 'qristal'")
+            return real_import_module(name, *args, **kwargs)
+
+        monkeypatch.setattr(importlib, "import_module", fake_import_module)
+        with pytest.raises(ImportError, match="not distributed on PyPI"):
+            _import_qristal_core()
 
 
 class TestSimulationExecutor:
