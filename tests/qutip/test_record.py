@@ -105,7 +105,12 @@ def test_record_mcsolve_seeds_round_trip_reproduces():
     Measured with 0.1*sigmam/ntraj=4: 57/60 runs jump-free -> passed trivially;
     the 3 that jumped failed 3/3. With 0.4*sigmam/ntraj=8 roughly 80% of runs jump.
 
-    map=serial: seed->trajectory assignment is not stable under the parallel map.
+    map=serial: forces bit-exact reproduction (and is qutip's own default).
+    Seed->trajectory assignment is stable under map=parallel too, but summation
+    order is not, so
+    parallel replay reproduces only to floating-point tolerance (~1 ULP on a
+    minority of collapsing runs) rather than bit-identically — see the caveat
+    in record.py.
     """
     pytest.importorskip("qutip")
     from qutip import basis, sigmaz, sigmam, mcsolve
@@ -126,3 +131,36 @@ def test_record_mcsolve_seeds_round_trip_reproduces():
     seeds_json = json.loads(buf.getvalue())["seeds"]
     res2 = mcsolve(*args, seeds=[seed_from_json(s) for s in seeds_json], **kw)
     np.testing.assert_allclose(res.expect[0], res2.expect[0])
+
+
+def test_record_mcsolve_seeds_round_trip_reproduces_parallel_to_tolerance():
+    """Companion to test_record_mcsolve_seeds_round_trip_reproduces: same setup,
+    but under the parallel map, replay reproduces `expect` only to
+    floating-point tolerance, not bit-identically.
+
+    Seed->trajectory assignment is stable under the parallel map too (that's
+    what the seed round-trip owns), but summation order is not: measured
+    max|Δ| ~1e-16 (1 ULP) from nondeterministic parallel reduction, on a
+    minority of collapsing runs. atol=1e-12 leaves ~4 orders of magnitude of
+    margin over that measured noise while still catching a real seed-replay
+    regression, which collapses to a genuinely DIFFERENT trajectory (max|Δ| up
+    to 2.0 — see the entropy-only-serialisation bug this seed round-trip
+    guards against, and the caveat in record.py).
+    """
+    pytest.importorskip("qutip")
+    from qutip import basis, sigmaz, sigmam, mcsolve
+    from marqov.qutip.record import seed_from_json
+    args = (sigmaz(), basis(2, 0), np.linspace(0, 1, 3))
+    kw = dict(c_ops=[0.4 * sigmam()], e_ops=[sigmaz()], ntraj=8, options={"map": "parallel"})
+    for _ in range(25):
+        res = mcsolve(*args, **kw)
+        if not np.allclose(res.expect[0], 1.0):
+            break
+    else:
+        pytest.skip("no trajectory collapsed in 25 attempts; nothing to reproduce")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        record(res, observable_names=["sz"])
+    seeds_json = json.loads(buf.getvalue())["seeds"]
+    res2 = mcsolve(*args, seeds=[seed_from_json(s) for s in seeds_json], **kw)
+    np.testing.assert_allclose(res.expect[0], res2.expect[0], atol=1e-12, rtol=0)
