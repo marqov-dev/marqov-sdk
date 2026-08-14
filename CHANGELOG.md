@@ -5,7 +5,7 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
-## [Unreleased] — 0.4.1
+## [0.4.1] — 2026-08-14
 
 ### Fixed
 
@@ -55,6 +55,65 @@ release.
   uses `0.4 * sigmam()`/`ntraj=8`, loops until a trajectory actually collapses, and
   asserts exact reproduction — plus a one-line guard that the seeds are distinct from
   each other, which is what would have caught this immediately.
+
+- **`RateLimited.retry_after` no longer drops HTTP-date `Retry-After` headers.**
+  Only the integer delta-seconds form was parsed; the RFC 7231 HTTP-date form
+  (`Wed, 21 Oct 2026 07:28:00 GMT`) silently became `None`, so a caller doing
+  `time.sleep(e.retry_after)` on the documented "parsed when present" contract
+  crashed with `TypeError`. Both header forms now parse (dates convert to a
+  delta against the current time, clamped to `>= 0`); `None` is reserved for
+  absent or unparseable values. The transport docstring's `Raises` block also
+  gained the two mapped exceptions it omitted (`BackendUnavailable`,
+  `InvalidProgram`). (marqov-sdk#86)
+
+- **`create_executor`'s unsupported-provider error no longer omits providers.**
+  The message was a hand-written list that had drifted from the registry:
+  Quantinuum was wired up but missing from it, so a caller with a case typo was
+  told a supported provider did not exist. The message is now built from
+  `get_supported_providers()` at raise time, the package docstring and README
+  backend table are synced to all nine providers, and new tests pin each of
+  those surfaces to the registry so the next provider added without updating
+  them fails CI. (marqov-sdk#85)
+
+- **Quantum Brilliance without qristal now fails with instructions, not a bare
+  `ModuleNotFoundError`.** `qristal` is not distributed on PyPI, so no
+  `marqov[...]` extra can exist for it, but nothing said so:
+  `create_executor(provider="Quantum Brilliance")` succeeded and `execute()`
+  then died deep inside the simulation path. The import failure now raises an
+  actionable `ImportError` pointing at Quantum Brilliance's source-build and
+  Docker install paths, and the factory docstring and README backend table
+  document the external requirement. (marqov-sdk#84)
+
+### Documentation
+
+- **Every prose claim in the docs and docstrings was traced to code, and the
+  drift fixed.** Two passes (doc files, then all inline docstrings) plus a
+  post-merge review of the result: the broken quickstart examples, the
+  `marqov[qiskit]` vs `marqov[ibm]` extra mix-up, stale provider lists, a test
+  citation in `error-handling.md` that did not collect, the `job.cancel()`
+  contract (it raises on any non-2xx; the server route is still provisional),
+  `PlatformResult.raw`'s description, and `ibm.py`'s advertised-but-unread
+  `**kwargs` options. (marqov-sdk#81, marqov-sdk#87, marqov-sdk#88,
+  marqov-sdk#89, marqov-sdk#90)
+
+- **The mcsolve replay contract is now stated precisely.** Bit-exact
+  reproduction (`max|Δ| == 0.0`) holds under `options={"map": "serial"}`,
+  which is also qutip's own default. Under an explicit parallel map,
+  seed-to-trajectory assignment is stable but summation order is not: replay
+  reproduces to floating-point tolerance (measured deviations of 1 ULP on a
+  minority of collapsing runs). A new tolerance-based test covers the parallel
+  path. (marqov-sdk#83)
+
+### Internal
+
+- **The core-to-platform import boundary is now enforced by an AST scan.** The
+  previous regex guard missed submodule, relative, aliased, and dynamic import
+  forms, scanned an incomplete hand-maintained path list, and could pass
+  vacuously if a path was renamed. The scan now parses every file under
+  `marqov/` except `marqov/platform/`, resolves relative imports against each
+  file's package, treats type-only (`if TYPE_CHECKING:`) imports as
+  violations, and asserts a minimum scan size so a moved tree fails loudly.
+  (marqov-sdk#82)
 
 ## [0.4.0] — 2026-08-11
 
