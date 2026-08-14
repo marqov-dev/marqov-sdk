@@ -136,8 +136,7 @@ class ExecutorFactory:
 
         raise ValueError(
             f"Unsupported provider: {provider}. "
-            f"Supported providers: AWS Braket, IBM Quantum, Azure Quantum, "
-            f"IonQ Direct, Rigetti QCS, Quantum Brilliance, CUDA-Q, Local."
+            f"Supported providers: {', '.join(cls.get_supported_providers())}."
         )
 
     @classmethod

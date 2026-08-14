@@ -1,5 +1,6 @@
 """Tests for marqov.executors module."""
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -877,3 +878,40 @@ class TestExecutorFactory:
             "Azure Quantum", "IonQ Direct", "Rigetti QCS", "Quantum Brilliance",
             "CUDA-Q",
         }
+
+    def test_unsupported_provider_error_lists_all_supported_providers(self) -> None:
+        """Regression (#85): the error message is built from get_supported_providers() at
+        raise time, so it can't silently drop a provider (it previously omitted
+        Quantinuum even though the Quantinuum branch was wired up)."""
+        with pytest.raises(ValueError, match="Unsupported provider") as exc_info:
+            ExecutorFactory.create_executor("nope", {"provider": "Not A Real Provider"})
+        message = str(exc_info.value)
+        for provider in ExecutorFactory.get_supported_providers():
+            assert provider in message, f"{provider!r} missing from error message: {message!r}"
+
+
+class TestProviderListDocSync:
+    """Regression (#85): the provider registry is the single source of truth, but the
+    package docstring and README table are hand-written prose that can't be generated
+    from it. Pin them here so the next provider added to the registry without updating
+    these surfaces fails CI instead of silently diverging."""
+
+    def test_package_docstring_mentions_every_provider(self) -> None:
+        """marqov/__init__.py's module docstring must name every supported provider."""
+        import marqov
+
+        doc = marqov.__doc__ or ""
+        for provider in ExecutorFactory.get_supported_providers():
+            assert provider in doc, f"{provider!r} missing from marqov/__init__.py docstring"
+
+    def test_readme_supported_backends_table_mentions_every_provider(self) -> None:
+        """README.md's "Supported Backends" table must have a row for every provider."""
+        readme_path = Path(__file__).resolve().parent.parent / "README.md"
+        readme = readme_path.read_text()
+
+        start = readme.index("## Supported Backends")
+        end = readme.index("\n---", start)
+        table = readme[start:end]
+
+        for provider in ExecutorFactory.get_supported_providers():
+            assert provider in table, f"{provider!r} missing from README Supported Backends table"
