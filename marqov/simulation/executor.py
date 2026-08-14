@@ -56,13 +56,33 @@ class SimulationExecutor(BaseExecutor):
         )
 
 
+def _import_qristal_core() -> Any:
+    """Import ``qristal.core`` with an actionable error if it isn't installed.
+
+    ``qristal`` is not published on PyPI — there is no ``pip install
+    marqov[...]`` remedy. It must be built from source or run via Quantum
+    Brilliance's Docker image; see https://qristal.readthedocs.io/.
+    """
+    import importlib
+
+    try:
+        return importlib.import_module("qristal.core")
+    except ImportError as exc:
+        raise ImportError(
+            "qristal is required for Quantum Brilliance simulation backends "
+            "but is not installed. qristal is not distributed on PyPI, so "
+            "there is no 'pip install marqov[...]' extra for it — build it "
+            "from source or use the official Docker image. See Quantum "
+            "Brilliance's install instructions: "
+            "https://qristal.readthedocs.io/en/latest/rst/getting_started.html"
+        ) from exc
+
+
 def _run_simulation(
     qasm_str: str, shots: int, config: SimulationConfig
 ) -> ExecutionResult:
     """Execute simulation in a thread (blocking C++ call)."""
-    import importlib
-
-    qristal_core = importlib.import_module("qristal.core")
+    qristal_core = _import_qristal_core()
     session = qristal_core.session()
     session.init()
     session.acc = config.backend_id

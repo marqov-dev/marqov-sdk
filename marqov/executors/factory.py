@@ -49,7 +49,10 @@ class ExecutorFactory:
         - Quantinuum: Quantinuum devices and emulators (via pytket-quantinuum)
         - Rigetti QCS: Native pyQuil submission to Rigetti QPUs or the local QVM
         - CUDA-Q: NVIDIA GPU/CPU simulation, or IQM hardware via CUDA-Q's IQM target
-        - Quantum Brilliance: routed through the local simulation backend
+        - Quantum Brilliance: routed through the local simulation backend.
+          Requires ``qristal`` to be installed separately — it is not on
+          PyPI and has no ``marqov[...]`` extra. Build it from source or use
+          the official Docker image; see https://qristal.readthedocs.io/.
         - Local: QuantumFlow simulator (no cloud required)
         - IonQ Direct: Native IonQ REST API (no AWS/Braket intermediary)
 
