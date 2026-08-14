@@ -98,12 +98,24 @@ rule:
 inspection, not a test — there's no mechanical way to check "does this
 feature only make sense with a `MARQOV_PLATFORM_KEY`."
 
-**Direction 2** (platform doesn't leak into core) is only half machine-checked
-today: `tests/test_platform_package.py::TestLaziness` confirms `import marqov`
-never pulls in `marqov.platform`, but nothing currently asserts the reverse —
-that core files never contain `from marqov.platform import ...` — as a lint
-rule or CI guard. Until that guard exists, treat this rule as enforced by code
-review, not by the test suite.
+**Direction 2** (platform doesn't leak into core) is machine-checked in both
+halves. `tests/test_platform_package.py::TestLaziness` confirms `import marqov`
+never pulls in `marqov.platform` at runtime;
+`tests/test_platform_package.py::TestCoreDoesNotImportPlatform` asserts the
+reverse statically — it parses the AST of **every module under `marqov/` except
+`marqov/platform/` itself** and fails on any reference to the platform package.
+The enumerated file lists elsewhere in this document are illustrative; that
+exclusion rule is the enforced scope, so a new core module is covered the moment
+it lands.
+
+The guard catches plain, aliased, submodule, and relative imports
+(`from ..platform import ...`), `from marqov import platform`, imports nested
+inside a function body, and string literals passed to `importlib.import_module`.
+Type-only imports under `if TYPE_CHECKING:` are **not** exempt — the boundary is
+absolute; if a core module ever genuinely needs a platform type, use a string
+annotation or a platform-free protocol. Only a module name assembled
+dynamically at runtime escapes the check, which is a deliberate best-effort
+limit rather than a supported way through the boundary.
 
 ---
 
