@@ -151,11 +151,16 @@ def record(result: Any, observable_names: list[str] | None = None, *,
         # seed_from_json() and pass the list to mcsolve(seeds=...) to replay.
         #
         # Reproducibility: verified on qutip 5.3.1 that a replay reproduces the
-        # original run's expect values bit-identically (max|Δ| == 0.0) under both
-        # options={"map": "serial"} and the default "parallel" map, now that seeds
-        # round-trip the full SeedSequence.state (see _seed_to_json above — the
-        # earlier entropy-only serialisation was what made parallel replay
-        # diverge). No need to force serial to reproduce.
+        # original run's expect values bit-identically (max|Δ| == 0.0) under
+        # options={"map": "serial"}, now that seeds round-trip the full
+        # SeedSequence.state (see _seed_to_json above — the earlier entropy-only
+        # serialisation was what made parallel replay diverge). Under
+        # options={"map": "parallel"} (qutip's own default is "serial"),
+        # seed->trajectory assignment is stable too, but summation
+        # order is not: measured 24/27 collapsing runs bit-exact, the other 3
+        # deviating by 1 ULP (~1.11e-16) — replay reproduces to floating-point
+        # tolerance, not bit-identically. Force map="serial" if a consumer needs
+        # bit-exact equality.
         payload["seeds"] = [_seed_to_json(s) for s in seeds]
     if states_artifact_path is not None:
         payload["states_artifact"] = states_artifact_path
