@@ -63,7 +63,10 @@ step (PyPI never lets a version be reused), so validate hard and tag last.
       python -c "import marqov; print(marqov.__version__)"
       ```
       (`--extra-index-url` because dependencies aren't on TestPyPI.)
-- [ ] CI (full suite) green on the branch.
+- [ ] CI (full suite) green on the branch. `ci.yml` only triggers on pull
+      requests and pushes to `main`, not on a bare branch push, so open a PR
+      from the release branch to `main` to get a run (do not merge it yet;
+      it exists to trigger CI on the exact release SHA).
 
 ## 4. Cut the release
 - [ ] Fast-forward `main` to the release commit and push.
@@ -79,6 +82,10 @@ git tag -a vX.Y.Z <validated-sha> -m "marqov X.Y.Z"
 git push origin vX.Y.Z
 ```
 
+- [ ] `publish-pypi` requires a manual approval on the `pypi` GitHub
+      Environment (Settings → Environments → pypi → required reviewers). The
+      run will sit in "Waiting" until a reviewer approves it from the Actions
+      run page or via `gh api`.
 - [ ] Watch `release.yml` → `publish-pypi` green.
 - [ ] `gh release create vX.Y.Z --title "vX.Y.Z" --notes-file NOTES.md`
 - [ ] Verify: real PyPI shows X.Y.Z, and a clean-venv `pip install marqov==X.Y.Z` imports.
