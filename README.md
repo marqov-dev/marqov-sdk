@@ -271,9 +271,7 @@ Bounty issues are open through [unitaryHACK 2026](https://unitaryhack.dev) — s
 
 ## Authors
 
-This project was created by **David Ryan** ([@ddri](https://github.com/ddri)) and **Anastasia Marchenkova** ([@amarchenkova](https://github.com/amarchenkova)), with contributions from the [community](https://github.com/marqov-dev/marqov-sdk/graphs/contributors).
-
-See [AUTHORS.md](AUTHORS.md) for details.
+This project was created by **David Ryan** ([@ddri](https://github.com/ddri)), with contributions from the [community](https://github.com/marqov-dev/marqov-sdk/graphs/contributors).
 
 ## License
 
