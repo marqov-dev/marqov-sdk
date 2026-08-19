@@ -92,6 +92,24 @@ class TestToBackendFormat:
         result = local_device._to_backend_format(mc)
         assert isinstance(result, BraketCircuit)
 
+    def test_local_ignores_stray_ibm_credentials(self):
+        """backend='local' must win over leftover IBM/Azure params.
+
+        _get_provider_device() and run() both check backend in
+        ("local", "marqov-sim") before is_ibm/is_azure; this method must
+        agree, or a Qiskit circuit ends up fed to the Braket
+        LocalSimulator the other two methods build.
+        """
+        from braket.circuits import Circuit as BraketCircuit
+
+        device = MarqovDevice(
+            "local",
+            {"backend": "local", "ibm_token": "stale-token"},
+        )
+        mc = Circuit().h(0).cnot(0, 1)
+        result = device._to_backend_format(mc)
+        assert isinstance(result, BraketCircuit)
+
     def test_azure_produces_qiskit_with_measurements(self):
         from qiskit import QuantumCircuit
 
@@ -125,6 +143,21 @@ class TestRunIntegration:
     def test_run_marqov_circuit(self, local_device):
         circuit = Circuit().h(0).cnot(0, 1)
         counts = local_device.run(circuit, shots=100)
+        self._assert_bell_state(counts, 100)
+
+    def test_run_local_with_stray_ibm_credentials(self):
+        """End-to-end regression test for the local+stray-IBM-token bug.
+
+        A user switching backend to "local" for a smoke test, with
+        ibm_token still set from an earlier run, must still execute on the
+        local simulator rather than crash on a format/device mismatch.
+        """
+        device = MarqovDevice(
+            "local",
+            {"backend": "local", "ibm_token": "stale-token"},
+        )
+        circuit = Circuit().h(0).cnot(0, 1)
+        counts = device.run(circuit, shots=100)
         self._assert_bell_state(counts, 100)
 
     def test_run_braket_circuit(self, local_device):

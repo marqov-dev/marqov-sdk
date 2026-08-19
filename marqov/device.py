@@ -200,6 +200,15 @@ class MarqovDevice:
         - Braket backends (local, AWS): .to_braket() — auto-measures all qubits
         - IBM/Azure backends: .to_qiskit() + measure_all() if no measurements present
         """
+        # Local/marqov-sim always run on the Braket LocalSimulator (see
+        # _get_provider_device and run()), regardless of any stray
+        # ibm_token/azure_subscription_id left in params — this must be
+        # checked before is_ibm/is_azure or the two other dispatch sites
+        # disagree with this one, feeding a Qiskit circuit to Braket's
+        # simulator.
+        if self._backend in ("local", "marqov-sim"):
+            return marqov_circuit.to_braket()
+
         if is_ibm(self._params) or is_azure(self._params):
             qc = marqov_circuit.to_qiskit()
             if not qc.cregs:

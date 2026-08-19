@@ -35,10 +35,9 @@ def multi_shot_study(shot_counts):
 
 dispatch = multi_shot_study([100, 500, 1000, 5000])
 # dispatch.run(client) — needs a Temporal worker
-# Use the Marqov platform or run your own: see marqov/workflows/
 ```
 
-Independent tasks execute in parallel automatically. Marqov handles scheduling, retries, and result collection across any supported backend.
+Independent tasks execute in parallel automatically. Marqov handles scheduling, retries, and result collection across any supported backend. Run your own Temporal worker (see `marqov/workflows/`) — or skip the infrastructure entirely with the hosted [Marqov Platform](https://marqov.ai).
 
 ---
 
@@ -267,13 +266,11 @@ For the full error taxonomy and retry guidance see
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the executor interface spec, canonical gate set, factory registration steps, and local QVM setup for Rigetti development.
 
-Bounty issues are open through [unitaryHACK 2026](https://unitaryhack.dev) — see the [issues page](https://github.com/marqov-dev/marqov-sdk/issues) for what's available.
+The bounty issues that were open through [unitaryHACK 2026](https://unitaryhack.dev) — have been claimed, but follow the [issues page](https://github.com/marqov-dev/marqov-sdk/issues) as we will be looking at ongoing and rolling issue bounties to support and encourage community participation.
 
 ## Authors
 
-This project was created by **David Ryan** ([@ddri](https://github.com/ddri)) and **Anastasia Marchenkova** ([@amarchenkova](https://github.com/amarchenkova)), with contributions from the [community](https://github.com/marqov-dev/marqov-sdk/graphs/contributors).
-
-See [AUTHORS.md](AUTHORS.md) for details.
+This project was created by **David Ryan** ([@ddri](https://github.com/ddri)), with contributions from the [community](https://github.com/marqov-dev/marqov-sdk/graphs/contributors).
 
 ## License
 
