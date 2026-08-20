@@ -102,6 +102,9 @@ ionq = [
 rigetti = [
     "pyquil>=4.0.0",
 ]
+qilisdk = [
+    "qilisdk>=0.2.1",
+]
 all = [
     "qiskit>=1.0.0",
     "qiskit-ibm-runtime>=0.20.0",
