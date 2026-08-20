@@ -17,22 +17,20 @@ Example:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorConfig
 from marqov.executors.base import BaseExecutor
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
-from marqov.executors.cudaq import CudaqExecutor, CudaqExecutorConfig, _SLUG_TO_TARGET
+from marqov.executors.cudaq import _SLUG_TO_TARGET, CudaqExecutor, CudaqExecutorConfig
 from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
 from marqov.executors.local import LocalExecutor
+from marqov.executors.qilisdk import QiliSDKExecutor, QiliSDKExecutorConfig
+from marqov.executors.quantinuum import QuantinuumExecutor, QuantinuumExecutorConfig
 from marqov.executors.rigetti import RigettiExecutor, RigettiExecutorConfig
 from marqov.simulation.config import SimulationConfig
 from marqov.simulation.executor import SimulationExecutor
-from marqov.executors.quantinuum import QuantinuumExecutor, QuantinuumExecutorConfig
-
-if TYPE_CHECKING:
-    pass
 
 
 class ExecutorFactory:
@@ -55,6 +53,9 @@ class ExecutorFactory:
           the official Docker image; see https://qristal.readthedocs.io/.
         - Local: QuantumFlow simulator (no cloud required)
         - IonQ Direct: Native IonQ REST API (no AWS/Braket intermediary)
+        - Qilimanjaro: qilisdk local simulators (QiliSim or QutipBackend, no
+          cloud required). Requires ``qilisdk`` — see
+          ``pip install marqov[qilisdk]``.
 
     Example:
         >>> from marqov.executors.factory import ExecutorFactory
@@ -104,6 +105,10 @@ class ExecutorFactory:
         # Handle local simulator
         if backend_slug == "local" or provider == "Local":
             return LocalExecutor()
+
+        # Qilimanjaro qilisdk (local simulator only — QiliSim or QutipBackend)
+        if provider == "Qilimanjaro":
+            return cls._create_qilisdk_executor(backend_slug, backend_config)
 
         # NVIDIA CUDA-Q (GPU/CPU statevector, direct IQM)
         if provider == "CUDA-Q" or backend_slug in _SLUG_TO_TARGET:
@@ -410,6 +415,28 @@ class ExecutorFactory:
         return CudaqExecutor(CudaqExecutorConfig(**config_kwargs))
 
     @classmethod
+    def _create_qilisdk_executor(
+        cls,
+        backend_slug: str,
+        backend_config: dict[str, Any],
+    ) -> QiliSDKExecutor:
+        """Create a Qilimanjaro qilisdk local-simulator executor from configuration.
+
+        No field is strictly required: the simulator falls back to "qilisim"
+        (qilisdk's own C++ simulator, ships in the base package) unless
+        "qutip" is requested, which needs the `qilisdk[qutip]` extra.
+
+        Args:
+            backend_slug: Backend slug (e.g. "qilisdk-qilisim", "qilisdk-qutip").
+            backend_config: Optional ``simulator`` ("qilisim" | "qutip").
+
+        Returns:
+            Configured QiliSDKExecutor instance.
+        """
+        simulator = backend_config.get("simulator", "qilisim")
+        return QiliSDKExecutor(QiliSDKExecutorConfig(simulator=simulator))
+
+    @classmethod
     def _create_simulation_executor(
         cls,
         backend_slug: str,
@@ -448,6 +475,7 @@ class ExecutorFactory:
             "CUDA-Q",
             "Local",
             "Quantinuum",
+            "Qilimanjaro",
         ]
 
     @classmethod

@@ -11,6 +11,7 @@ Available executors:
 - IBMExecutor: IBM Quantum (Heron r2, Eagle, etc. via Qiskit Runtime)
 - IonQExecutor: IonQ Direct API (native REST, no Braket intermediary)
 - RigettiExecutor: Rigetti QCS QPUs and the local QVM (via pyquil)
+- QiliSDKExecutor: Qilimanjaro qilisdk local simulators (QiliSim/QutipBackend)
 
 Example:
     >>> from marqov.executors import LocalExecutor
@@ -29,6 +30,7 @@ from marqov.executors.factory import ExecutorFactory
 from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
 from marqov.executors.local import LocalExecutor
+from marqov.executors.qilisdk import QiliSDKExecutor, QiliSDKExecutorConfig
 from marqov.executors.quantinuum import QuantinuumExecutor, QuantinuumExecutorConfig
 from marqov.executors.rigetti import RigettiExecutor, RigettiExecutorConfig
 from marqov.simulation.executor import SimulationExecutor
@@ -49,6 +51,8 @@ __all__ = [
     "IonQExecutor",
     "IonQExecutorConfig",
     "LocalExecutor",
+    "QiliSDKExecutor",
+    "QiliSDKExecutorConfig",
     "QuantinuumExecutor",
     "QuantinuumExecutorConfig",
     "RigettiExecutor",
