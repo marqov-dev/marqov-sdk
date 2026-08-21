@@ -127,7 +127,7 @@ result = await executor.execute(circuit, shots=1000)
 | Quantinuum | Available |
 | Quantum Brilliance | Available — requires `qristal` installed separately (not on PyPI, no `marqov[...]` extra); build from source or use the Docker image: https://qristal.readthedocs.io/ |
 | CUDA-Q | Available — not in `[all]` (GPU-heavy); install separately with `pip install "marqov[cudaq]"` |
-| Qilimanjaro (qilisdk local simulators) | Available — not in `[all]`; install separately with `pip install "marqov[qilisdk]"` |
+| Qilimanjaro (qilisdk local simulators) | Available — not on PyPI as a `marqov[...]` extra (like Quantum Brilliance): `qilisdk`'s numpy floor is incompatible with marqov's own numpy ceiling outside a narrow macOS overlap window. Install separately: `pip install qilisdk`. |
 
 ---
 

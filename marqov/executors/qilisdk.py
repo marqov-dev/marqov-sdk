@@ -4,6 +4,12 @@ Runs circuits on qilisdk's own open-source simulator stack — QiliSim (their
 C++ simulator, ships in the base `qilisdk` package) or QutipBackend (pure-
 Python reference sim). No SpeQtrum account or network call required.
 
+`qilisdk` is installed separately (``pip install qilisdk``), not via a
+`marqov[...]` extra: its numpy floor (>=2.3 on macOS, >=2.4.1 elsewhere)
+is incompatible with marqov's own numpy<2.4 core pin outside a narrow
+macOS overlap window, which makes it unresolvable as a formal extra in
+marqov's own dependency lock.
+
 See https://github.com/qilimanjaro-tech/qilisdk.
 """
 
@@ -25,8 +31,9 @@ class QiliSDKExecutorConfig:
 
     Attributes:
         simulator: Which qilisdk backend to run on — "qilisim" (their C++
-            simulator, ships in the base `qilisdk` package) or "qutip"
-            (pure-Python reference sim, requires `pip install "qilisdk[qutip]"`).
+            simulator, ships in the base `qilisdk` package, `pip install
+            qilisdk`) or "qutip" (pure-Python reference sim, `pip install
+            "qilisdk[qutip]"`).
     """
 
     simulator: Literal["qilisim", "qutip"] = "qilisim"
@@ -77,7 +84,7 @@ class QiliSDKExecutor(BaseExecutor):
             extra = _SIMULATOR_EXTRA.get(self.config.simulator, "")
             raise ImportError(
                 f"qilisdk is required for QiliSDKExecutor. "
-                f"Install with: pip install marqov[qilisdk]{extra}"
+                f"Install with: pip install qilisdk{extra}"
             ) from exc
 
     async def execute(
