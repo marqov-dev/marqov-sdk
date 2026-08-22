@@ -226,6 +226,81 @@ class TestFromQiskit:
         assert np.isclose(np.abs(amps[0]) ** 2, 0.5, atol=0.01)
         assert np.isclose(np.abs(amps[3]) ** 2, 0.5, atol=0.01)
 
+    def test_terminal_measurement_skipped(self) -> None:
+        """A measurement with nothing after it is silently skipped."""
+        from qiskit import QuantumCircuit
+
+        qc = QuantumCircuit(2, 2)
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure(0, 0)
+        qc.measure(1, 1)
+
+        imported = Circuit.from_qiskit(qc)
+        assert imported.num_qubits == 2
+
+    def test_mid_circuit_measurement_raises(self) -> None:
+        """A measurement followed by another op on the same qubit raises."""
+        from qiskit import QuantumCircuit
+
+        qc = QuantumCircuit(1, 1)
+        qc.h(0)
+        qc.measure(0, 0)
+        qc.x(0)
+
+        with pytest.raises(ValueError, match="mid-circuit measurement"):
+            Circuit.from_qiskit(qc)
+
+    def test_classically_conditioned_measurement_raises(self) -> None:
+        """A measurement whose classical bit conditions a later op (even on a
+        different qubit, as in teleportation) is not terminal and raises."""
+        from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister
+
+        qr = QuantumRegister(2)
+        cr = ClassicalRegister(1)
+        qc = QuantumCircuit(qr, cr)
+        qc.h(0)
+        qc.measure(0, 0)
+        with qc.if_test((cr[0], 1)):
+            qc.x(1)
+
+        with pytest.raises(ValueError, match="mid-circuit measurement"):
+            Circuit.from_qiskit(qc)
+
+    def test_reset_raises(self) -> None:
+        """A reset instruction is never implicit and always raises."""
+        from qiskit import QuantumCircuit
+
+        qc = QuantumCircuit(1)
+        qc.h(0)
+        qc.reset(0)
+
+        with pytest.raises(ValueError, match="reset"):
+            Circuit.from_qiskit(qc)
+
+    def test_delay_raises(self) -> None:
+        """A delay instruction is meaningful for timing and always raises."""
+        from qiskit import QuantumCircuit
+
+        qc = QuantumCircuit(1)
+        qc.h(0)
+        qc.delay(100, 0)
+
+        with pytest.raises(ValueError, match="delay"):
+            Circuit.from_qiskit(qc)
+
+    def test_barrier_after_terminal_measurement_still_skipped(self) -> None:
+        """A trailing barrier doesn't make a terminal measurement look mid-circuit."""
+        from qiskit import QuantumCircuit
+
+        qc = QuantumCircuit(1, 1)
+        qc.h(0)
+        qc.measure(0, 0)
+        qc.barrier(0)
+
+        imported = Circuit.from_qiskit(qc)
+        assert imported.num_qubits == 1
+
 
 class TestFromCirq:
     """Tests for Circuit.from_cirq()."""
@@ -339,6 +414,67 @@ class TestFromCirq:
         # Bell state: equal probability on |00⟩ and |11⟩
         assert np.isclose(np.abs(amps[0]) ** 2, 0.5, atol=0.01)
         assert np.isclose(np.abs(amps[3]) ** 2, 0.5, atol=0.01)
+
+    def test_mid_circuit_measurement_raises(self) -> None:
+        """A measurement followed by another op on the same qubit raises."""
+        import cirq
+
+        q0 = cirq.LineQubit(0)
+        cc = cirq.Circuit([
+            cirq.H(q0),
+            cirq.measure(q0, key="m"),
+            cirq.X(q0),
+        ])
+
+        with pytest.raises(ValueError, match="mid-circuit measurement"):
+            Circuit.from_cirq(cc)
+
+    def test_classically_controlled_measurement_raises(self) -> None:
+        """A measurement whose key conditions a later op (even on a
+        different qubit, as in teleportation) is not terminal and raises."""
+        import cirq
+
+        q0, q1 = cirq.LineQubit.range(2)
+        cc = cirq.Circuit([
+            cirq.H(q0),
+            cirq.measure(q0, key="m"),
+            cirq.X(q1).with_classical_controls("m"),
+        ])
+
+        with pytest.raises(ValueError, match="mid-circuit measurement"):
+            Circuit.from_cirq(cc)
+
+    def test_reset_raises(self) -> None:
+        """A reset instruction is never implicit and always raises."""
+        import cirq
+
+        q0 = cirq.LineQubit(0)
+        cc = cirq.Circuit([cirq.H(q0), cirq.reset(q0)])
+
+        with pytest.raises(ValueError, match="[Rr]eset"):
+            Circuit.from_cirq(cc)
+
+    def test_delay_raises(self) -> None:
+        """A wait/delay instruction is meaningful for timing and always raises."""
+        import cirq
+
+        q0 = cirq.LineQubit(0)
+        cc = cirq.Circuit([cirq.H(q0), cirq.wait(q0, nanos=10)])
+
+        with pytest.raises(ValueError, match="delay"):
+            Circuit.from_cirq(cc)
+
+    def test_terminal_measurement_inside_subcircuit_still_skipped(self) -> None:
+        """A measurement nested in a CircuitOperation subcircuit, with nothing
+        after it, is terminal and must not be flagged as mid-circuit."""
+        import cirq
+
+        q0 = cirq.LineQubit(0)
+        sub = cirq.FrozenCircuit([cirq.H(q0), cirq.measure(q0, key="m")])
+        cc = cirq.Circuit([cirq.CircuitOperation(sub)])
+
+        imported = Circuit.from_cirq(cc)
+        assert imported.num_qubits == 1
 
 
 class TestFromPennylane:
@@ -598,6 +734,20 @@ class TestFromPyquil:
 
         assert np.isclose(np.abs(amps[0]) ** 2, 0.5, atol=0.01)
         assert np.isclose(np.abs(amps[3]) ** 2, 0.5, atol=0.01)
+
+    def test_mid_circuit_measurement_raises(self) -> None:
+        """A measurement followed by another gate on the same qubit raises."""
+        from pyquil import Program
+        from pyquil.gates import H, MEASURE, X
+
+        program = Program()
+        ro = program.declare("ro", "BIT", 1)
+        program += H(0)
+        program += MEASURE(0, ro[0])
+        program += X(0)
+
+        with pytest.raises(NotImplementedError, match="mid-circuit measurement"):
+            Circuit.from_pyquil(program)
 
 
 class TestOpenQASM:

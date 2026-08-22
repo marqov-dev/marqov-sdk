@@ -349,8 +349,29 @@ class Circuit:
     # Gates that take rotation angle parameters.
     _ROTATION_GATES: set[str] = {"rx", "ry", "rz"}
 
-    # Non-gate instructions to skip silently.
-    _SKIP_INSTRUCTIONS: set[str] = {"barrier", "measure", "reset", "delay"}
+    # Non-gate instructions to skip silently. `measure` is handled separately
+    # since it is only implicit (and thus safe to skip) when terminal; `reset`
+    # and `delay` are never implicit and always raise (see
+    # `_qiskit_measurement_is_terminal`).
+    _SKIP_INSTRUCTIONS: set[str] = {"barrier"}
+
+    @classmethod
+    def _qiskit_measurement_is_terminal(cls, data, index: int, qubit, clbit) -> bool:
+        """Whether a measurement at ``data[index]`` is terminal.
+
+        A measurement is terminal iff nothing after it touches its qubit and
+        nothing after it reads its classical bit — the latter check catches
+        classically-conditioned operations on a *different* qubit (e.g.
+        teleportation's correction step), not just gates on the same qubit.
+        Compiler-hint instructions (e.g. `barrier`) are skipped since they
+        carry no computational meaning.
+        """
+        for later in data[index + 1 :]:
+            if later.operation.name in cls._SKIP_INSTRUCTIONS:
+                continue
+            if qubit in later.qubits or clbit in later.clbits:
+                return False
+        return True
 
     @classmethod
     def from_qiskit(cls, qiskit_circuit) -> "Circuit":
@@ -373,7 +394,12 @@ class Circuit:
         Raises:
             ImportError: If Qiskit is not installed.
             TypeError: If the input is not a Qiskit QuantumCircuit.
-            ValueError: If a gate cannot be mapped after decomposition.
+            ValueError: If a gate cannot be mapped after decomposition, or if
+                the circuit contains a mid-circuit measurement, a `reset`, or
+                a `delay` — none of these are implicit under this SDK's
+                gate-only circuit model, and only a terminal measurement
+                (nothing after it touches its qubit or reads its classical
+                bit) can be safely dropped.
             qiskit.transpiler.exceptions.TranspilerError: If the transpiler
                 cannot decompose a gate (e.g. an opaque custom gate).
         """
@@ -399,11 +425,31 @@ class Circuit:
 
         circuit = cls()
 
-        for instruction in decomposed.data:
+        for index, instruction in enumerate(decomposed.data):
             name = instruction.operation.name
 
             if name in cls._SKIP_INSTRUCTIONS:
                 continue
+
+            if name == "measure":
+                qubit = instruction.qubits[0]
+                clbit = instruction.clbits[0]
+                if cls._qiskit_measurement_is_terminal(decomposed.data, index, qubit, clbit):
+                    continue
+                raise ValueError(
+                    f"Circuit.from_qiskit() does not support mid-circuit measurement "
+                    f"(qubit {decomposed.find_bit(qubit).index}): a later instruction "
+                    "touches this qubit or reads its classical bit, so dropping the "
+                    "measurement would silently change what the circuit computes."
+                )
+
+            if name in ("reset", "delay"):
+                qubit = instruction.qubits[0]
+                raise ValueError(
+                    f"Circuit.from_qiskit() does not support '{name}' "
+                    f"(qubit {decomposed.find_bit(qubit).index}): it is never implicit "
+                    "under this SDK's gate-only circuit model."
+                )
 
             if name not in cls._QISKIT_GATE_MAP:
                 raise ValueError(
@@ -425,6 +471,76 @@ class Circuit:
         return circuit
 
     @classmethod
+    def _flatten_cirq_operations(cls, operations) -> list:
+        """Flatten operations exactly as the mapping pass will consume them.
+
+        Unrolls `CircuitOperation` subcircuits and decomposes unmappable
+        gates recursively, without mutating a real `Circuit` (a throwaway
+        instance absorbs `_map_cirq_operation`'s side effects). This must run
+        before terminal-measurement detection so "what comes after a
+        measurement" is checked against the same flat sequence the mapping
+        pass sees — otherwise a measurement nested in a subcircuit, with
+        nothing following it, would be invisible to that check and wrongly
+        treated as mid-circuit.
+
+        Measurement and wait/delay gates are kept as opaque leaves: they must
+        never be decomposed (`decompose_once` on a `WaitGate` returns an
+        empty list, not `None`, which would otherwise make it silently
+        disappear during flattening).
+        """
+        import cirq
+
+        scratch = cls()
+        flat: list = []
+
+        def _walk(ops) -> None:
+            for op in ops:
+                if isinstance(op.gate, (cirq.MeasurementGate, cirq.WaitGate)):
+                    flat.append(op)
+                    continue
+                if cls._map_cirq_operation(op, scratch):
+                    flat.append(op)
+                    continue
+                decomposed = cirq.decompose_once(op, default=None)
+                if decomposed is not None:
+                    _walk(decomposed)
+                    continue
+                flat.append(op)
+
+        _walk(operations)
+        return flat
+
+    @classmethod
+    def _cirq_terminal_measurement_ids(cls, operations: list) -> set[int]:
+        """Return ``id()`` of each measurement operation that is terminal.
+
+        A measurement is terminal iff nothing after it touches its qubits and
+        nothing after it is classically controlled on its key — the latter
+        check catches conditioning on a *different* qubit (e.g.
+        teleportation's correction step), not just gates on the same qubit.
+        """
+        import cirq
+
+        terminal_ids = set()
+        for index, op in enumerate(operations):
+            if not isinstance(op.gate, cirq.MeasurementGate):
+                continue
+
+            qubits = set(op.qubits)
+            key = op.gate.key
+            is_terminal = True
+            for later in operations[index + 1 :]:
+                if qubits & set(later.qubits):
+                    is_terminal = False
+                    break
+                if any(getattr(cond, "key", None) == key for cond in later.classical_controls):
+                    is_terminal = False
+                    break
+            if is_terminal:
+                terminal_ids.add(id(op))
+        return terminal_ids
+
+    @classmethod
     def _map_cirq_operation(cls, op, circuit: "Circuit") -> bool:
         """Try to map a single Cirq operation to a Circuit method.
 
@@ -443,10 +559,6 @@ class Circuit:
             return False
 
         qubits = [q.x for q in op.qubits]
-
-        # Measurement — skip silently.
-        if isinstance(gate, cirq.MeasurementGate):
-            return True
 
         # Single-qubit fixed gates.
         if isinstance(gate, cirq.HPowGate) and gate.exponent == 1:
@@ -507,7 +619,12 @@ class Circuit:
         Raises:
             ImportError: If Cirq is not installed.
             TypeError: If the input is not a Cirq Circuit or uses non-LineQubit qubits.
-            ValueError: If a gate cannot be mapped after decomposition.
+            ValueError: If a gate cannot be mapped after decomposition, or if
+                the circuit contains a mid-circuit measurement, a `reset`, or
+                a `wait`/delay — none of these are implicit under this SDK's
+                gate-only circuit model, and only a terminal measurement
+                (nothing after it touches its qubits or is classically
+                controlled on its key) can be safely dropped.
         """
         try:
             import cirq
@@ -532,37 +649,47 @@ class Circuit:
                 )
 
         circuit = cls()
+        flat_operations = cls._flatten_cirq_operations(list(cirq_circuit.all_operations()))
+        terminal_measurement_ids = cls._cirq_terminal_measurement_ids(flat_operations)
 
-        def _process_operations(operations) -> None:
-            """Map operations, decomposing unknowns recursively."""
-            for op in operations:
-                if cls._map_cirq_operation(op, circuit):
+        for op in flat_operations:
+            if isinstance(op.gate, cirq.MeasurementGate):
+                if id(op) in terminal_measurement_ids:
                     continue
-
-                # Unknown gate — try decomposing.
-                decomposed = cirq.decompose_once(op, default=None)
-                if decomposed is not None:
-                    _process_operations(decomposed)
-                    continue
-
-                # Decomposition failed — log to Sentry and raise.
-                gate_type = type(op.gate).__name__ if op.gate else type(op).__name__
-                try:
-                    import sentry_sdk
-                    sentry_sdk.capture_message(
-                        f"Circuit.from_cirq(): unmappable gate '{gate_type}'",
-                        level="warning",
-                    )
-                except ImportError:
-                    pass
-
                 raise ValueError(
-                    f"Unsupported Cirq gate '{gate_type}' could not be decomposed. "
-                    f"Decompose it manually before calling from_cirq(), or file an "
-                    f"issue at https://github.com/marqov-dev/marqov-sdk/issues"
+                    f"Circuit.from_cirq() does not support mid-circuit measurement "
+                    f"(qubits {[q.x for q in op.qubits]}): a later operation touches "
+                    "these qubits or is classically controlled on this measurement's "
+                    "key, so dropping it would silently change what the circuit computes."
                 )
 
-        _process_operations(cirq_circuit.all_operations())
+            if isinstance(op.gate, cirq.WaitGate):
+                raise ValueError(
+                    f"Circuit.from_cirq() does not support 'wait'/delay "
+                    f"(qubits {[q.x for q in op.qubits]}): it is never implicit "
+                    "under this SDK's gate-only circuit model."
+                )
+
+            if cls._map_cirq_operation(op, circuit):
+                continue
+
+            # Leaf op that survived flattening unmapped and undecomposable.
+            gate_type = type(op.gate).__name__ if op.gate else type(op).__name__
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_message(
+                    f"Circuit.from_cirq(): unmappable gate '{gate_type}'",
+                    level="warning",
+                )
+            except ImportError:
+                pass
+
+            raise ValueError(
+                f"Unsupported Cirq gate '{gate_type}' could not be decomposed. "
+                f"Decompose it manually before calling from_cirq(), or file an "
+                f"issue at https://github.com/marqov-dev/marqov-sdk/issues"
+            )
+
         return circuit
 
     # PennyLane gate name -> Circuit fluent method mapping.
@@ -703,9 +830,25 @@ class Circuit:
 
     _PYQUIL_ROTATION_GATES: set[str] = {"RX", "RY", "RZ"}
 
-    # Classical declarations and measurement instructions do not affect the
-    # unitary circuit representation imported by this SDK.
-    _PYQUIL_SKIP_INSTRUCTIONS: set[str] = {"Declare", "Measurement", "Halt", "Pragma"}
+    # Classical declarations do not affect the unitary circuit representation
+    # imported by this SDK. `Measurement` is handled separately since it is
+    # only implicit (and thus safe to skip) when terminal.
+    _PYQUIL_SKIP_INSTRUCTIONS: set[str] = {"Declare", "Halt", "Pragma"}
+
+    @classmethod
+    def _pyquil_measurement_is_terminal(cls, instructions: list, index: int, qubits: set[int]) -> bool:
+        """Whether a Measurement at ``instructions[index]`` is terminal.
+
+        Terminal iff nothing after it touches the measured qubit. (Any
+        classical control-flow reading the measured bit already raises
+        `NotImplementedError` on its own, as an unrecognized instruction type,
+        before this check would even matter.)
+        """
+        for later in instructions[index + 1 :]:
+            get_qubit_indices = getattr(later, "get_qubit_indices", None)
+            if get_qubit_indices is not None and qubits & set(get_qubit_indices()):
+                return False
+        return True
 
     @classmethod
     def _pyquil_float_param(cls, value) -> float:
@@ -759,9 +902,10 @@ class Circuit:
         Known gates in the Marqov canonical gate set are mapped directly.
         SWAP is accepted either as a native ``SWAP`` instruction or as the
         standard three-``CNOT`` decomposition. Classical declarations and
-        measurements are skipped. Quil-native gates outside the canonical set
-        raise ``NotImplementedError`` so callers can decompose them explicitly
-        before importing.
+        terminal measurements (nothing after them touches the measured qubit)
+        are skipped. Quil-native gates outside the canonical set, and
+        mid-circuit measurements, raise ``NotImplementedError`` so callers can
+        decompose them explicitly before importing.
 
         Requires PyQuil to be installed (``pip install marqov[pyquil]``).
 
@@ -778,7 +922,7 @@ class Circuit:
         """
         try:
             from pyquil import Program
-            from pyquil.quilbase import Gate
+            from pyquil.quilbase import Gate, Measurement
         except ImportError:
             raise ImportError(
                 "PyQuil is required for Circuit.from_pyquil(). "
@@ -801,9 +945,21 @@ class Circuit:
                 continue
 
             instruction = instructions[index]
+            this_index = index
             index += 1
 
             if not isinstance(instruction, Gate):
+                if isinstance(instruction, Measurement):
+                    measured_qubits = set(instruction.get_qubit_indices())
+                    if cls._pyquil_measurement_is_terminal(instructions, this_index, measured_qubits):
+                        continue
+                    raise NotImplementedError(
+                        f"Circuit.from_pyquil() does not support mid-circuit measurement "
+                        f"(qubits {sorted(measured_qubits)}): a later instruction touches "
+                        "these qubits, so dropping the measurement would silently change "
+                        "what the circuit computes."
+                    )
+
                 instruction_type = type(instruction).__name__
                 if instruction_type in cls._PYQUIL_SKIP_INSTRUCTIONS:
                     continue
