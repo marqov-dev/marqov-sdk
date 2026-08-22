@@ -78,6 +78,43 @@ status. Job polling (queued → running → completed) is handled internally ins
 The default `BaseExecutor.get_status()` returns `DeviceStatus.always_online()`.
 Cloud backends should override this to query the provider's device status endpoint.
 
+### Exceptions to the shape
+
+Two executors deliberately deviate from "just implement `execute()`." If you're
+building something that might need a similar deviation, read these first rather
+than reinventing the reasoning.
+
+**`QiliSDKExecutor.execute_analog()`** (`marqov/executors/qilisdk.py`) — an
+additional method, outside the `BaseExecutor` contract, for running analog
+Hamiltonian evolution (`qilisdk.analog.Hamiltonian`/`Schedule`) rather than a
+gate-based `Circuit`. This isn't a shortcut — analog Hamiltonians and digital
+circuits are different mathematical objects, and every major platform (AWS
+Braket, Azure Quantum, NVIDIA CUDA-Q) keeps them as separate program types for
+the same reason, unifying only at the job-submission/result layer. If you add
+another analog-capable backend (D-Wave, QuEra), give it its own
+`execute_analog()`-shaped method rather than forcing a shared analog input type
+across backends — there's no portable representation for analog programs the
+way `Circuit` is portable across digital ones. `execute_analog()` still returns
+the same `ExecutionResult` as `execute()`, so only the input side is special.
+
+**`CUNQAExecutor`** (`marqov/executors/cunqa.py`) — implements `execute()`
+exactly like every other executor, but as of this writing is not wired into
+`ExecutorFactory.create_executor()`'s provider dispatch. Construct it directly
+until that's done; check `factory.py` for whether this note is still accurate
+before relying on it.
+
+**`qilisdk` and `qristal` aren't `marqov[...]` extras.** Both are installed
+separately (`pip install qilisdk`, or build `qristal` from source/Docker for
+Quantum Brilliance) rather than declared in `[project.optional-dependencies]`.
+For `qristal` it's simply not on PyPI. For `qilisdk`, a formal extra was tried
+and reverted: `uv` locks the union of all declared extras together, so
+`qilisdk`'s numpy floor conflicting with marqov's own numpy ceiling made the
+*entire* `uv.lock` unresolvable — even scoped with a `sys_platform == "darwin"`
+marker, and even for developers who never requested the extra. If a new
+backend's own dependencies don't nest cleanly inside marqov's core pins across
+every platform `uv` resolves for, don't fight `uv`'s marker-forking behavior —
+document a manual `pip install` instead.
+
 ## §3 — Adding a New Executor
 
 1. Create `marqov/executors/<name>.py` with a config dataclass and executor class:

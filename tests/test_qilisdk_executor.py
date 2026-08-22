@@ -4,9 +4,9 @@ import pytest
 
 qilisdk = pytest.importorskip("qilisdk")
 
-from marqov.circuits import Circuit, bell_state, ghz_state  # noqa: E402
-from marqov.executors import ExecutionResult, ExecutorFactory, QiliSDKExecutor  # noqa: E402
-from marqov.executors.qilisdk import QiliSDKExecutorConfig  # noqa: E402
+from marqov.circuits import Circuit, bell_state, ghz_state
+from marqov.executors import ExecutionResult, ExecutorFactory, QiliSDKExecutor
+from marqov.executors.qilisdk import QiliSDKExecutorConfig
 
 
 class TestQiliSDKExecutor:

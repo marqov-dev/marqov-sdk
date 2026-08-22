@@ -13,12 +13,18 @@ marqov's own dependency lock.
 See https://github.com/qilimanjaro-tech/qilisdk.
 """
 
+from __future__ import annotations
+
 import time
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from marqov.circuits import Circuit
 from marqov.executors.base import BaseExecutor, ExecutionResult
+
+if TYPE_CHECKING:
+    from qilisdk.analog import Schedule
+    from qilisdk.core.qtensor import InitialState, QTensor
 
 # Extra pip-install hint appended to the ImportError for backends with their
 # own optional dependency beyond the base `qilisdk` package.
@@ -53,6 +59,22 @@ class QiliSDKExecutor(BaseExecutor):
 
     For the pure-Python reference simulator instead of QiliSim:
         >>> executor = QiliSDKExecutor(QiliSDKExecutorConfig(simulator="qutip"))
+
+    `execute_analog()` additionally exposes qilisdk's analog/annealing mode
+    (`Hamiltonian`/`Schedule`/`AnalogEvolution`) — Qilimanjaro's actual
+    hardware differentiator (fluxonium quantum annealing), simulated locally.
+    This is deliberately qilisdk-specific, not part of the shared
+    `BaseExecutor` contract: analog Hamiltonians don't have a Marqov-canonical
+    representation the way digital gate circuits do, and no other Marqov
+    backend has an analog capability yet to unify against. See
+    `qilisdk.analog.Hamiltonian`/`Schedule` for the program-building API.
+
+        >>> from qilisdk.analog import Hamiltonian, Schedule, PauliX, PauliZ
+        >>> driver = Hamiltonian({(PauliX(0),): 1.0, (PauliX(1),): 1.0})
+        >>> problem = Hamiltonian({(PauliZ(0), PauliZ(1)): 1.0})
+        >>> schedule = Schedule.linear(driver, problem, total_time=5.0, dt=0.05)
+        >>> result = await executor.execute_analog(schedule, shots=500)
+        >>> print(result.counts)  # ground-state-biased, e.g. {"00": ~250, "11": ~250, ...}
     """
 
     def __init__(self, config: QiliSDKExecutorConfig | None = None) -> None:
@@ -126,6 +148,60 @@ class QiliSDKExecutor(BaseExecutor):
             shots=shots,
             raw_result=result,
             metadata={"simulator": self.config.simulator},
+        )
+
+    async def execute_analog(
+        self,
+        schedule: Schedule,
+        shots: int = 1000,
+        initial_state: InitialState | QTensor | None = None,
+        **kwargs: Any,
+    ) -> ExecutionResult:
+        """Run a qilisdk analog (Hamiltonian-evolution) program on a local simulator.
+
+        Unlike `execute()`, this takes a qilisdk `Schedule` directly — there's
+        no Marqov-canonical analog representation to translate from. Build
+        the schedule with `qilisdk.analog.Hamiltonian`/`Schedule` (e.g.
+        `Schedule.linear(driver, problem, total_time, dt)` for a standard
+        anneal) and pass it straight through.
+
+        Args:
+            schedule: A qilisdk `Schedule` describing the time-dependent
+                Hamiltonian to evolve under.
+            shots: Number of measurement shots.
+            initial_state: Starting state — a qilisdk `InitialState` enum
+                value or an explicit `QTensor`. Defaults to
+                `InitialState.UNIFORM` (equal superposition), the standard
+                starting point for a transverse-field-driver anneal.
+            **kwargs: Additional options (ignored today).
+
+        Returns:
+            ExecutionResult with measurement counts.
+        """
+        from qilisdk.core.qtensor import InitialState as _InitialState
+        from qilisdk.functionals import AnalogEvolution
+        from qilisdk.readout import Readout
+
+        if initial_state is None:
+            initial_state = _InitialState.UNIFORM
+
+        start_time = time.perf_counter()
+
+        evolution = AnalogEvolution(schedule=schedule, initial_state=initial_state)
+        readout = Readout().with_sampling(nshots=shots)
+
+        result = self._backend.execute(evolution, readout)
+        counts = result.get_samples()
+
+        execution_time_ms = (time.perf_counter() - start_time) * 1000
+
+        return ExecutionResult(
+            counts=counts,
+            backend=f"qilisdk-{self.config.simulator}",
+            execution_time_ms=execution_time_ms,
+            shots=shots,
+            raw_result=result,
+            metadata={"simulator": self.config.simulator, "mode": "analog"},
         )
 
     def _to_qilisdk_circuit(self, circuit: Circuit) -> Any:
