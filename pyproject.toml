@@ -107,6 +107,16 @@ ionq = [
 rigetti = [
     "pyquil>=4.0.0",
 ]
+# Deliberately NOT part of `all` below. qiskit-alice-bob-provider pins
+# qiskit<2.0; confirmed by testing that installing it alongside `all`
+# force-downgrades the shared qiskit install and breaks pytket-qiskit
+# (ImportError — its current release needs qiskit>=2.x), which `all` and
+# the `quantinuum`/`pytket` extras depend on. Install standalone, or accept
+# that combining it with pytket-based extras in the same environment isn't
+# supported today.
+alicebob = [
+    "qiskit-alice-bob-provider>=1.2.0,<2.0",
+]
 all = [
     "qiskit>=1.0.0",
     "qiskit-ibm-runtime>=0.20.0",

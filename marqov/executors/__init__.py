@@ -13,6 +13,7 @@ Available executors:
 - IonQExecutor: IonQ Direct API (native REST, no Braket intermediary)
 - RigettiExecutor: Rigetti QCS QPUs and the local QVM (via pyquil)
 - QiliSDKExecutor: Qilimanjaro qilisdk local simulators (QiliSim/QutipBackend)
+- AliceBobExecutor: Alice & Bob local cat-qubit emulators (physical + logical/error-corrected tiers)
 
 Example:
     >>> from marqov.executors import LocalExecutor
@@ -23,6 +24,7 @@ Example:
     >>> print(result.counts)
 """
 
+from marqov.executors.alice_bob import AliceBobExecutor, AliceBobExecutorConfig
 from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorConfig
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
@@ -38,6 +40,8 @@ from marqov.executors.rigetti import RigettiExecutor, RigettiExecutorConfig
 from marqov.simulation.executor import SimulationExecutor
 
 __all__ = [
+    "AliceBobExecutor",
+    "AliceBobExecutorConfig",
     "AzureQuantumExecutor",
     "AzureQuantumExecutorConfig",
     "BaseExecutor",

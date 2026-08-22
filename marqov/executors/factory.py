@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from marqov.executors.alice_bob import AliceBobExecutor, AliceBobExecutorConfig
 from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorConfig
 from marqov.executors.base import BaseExecutor
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
@@ -112,6 +113,10 @@ class ExecutorFactory:
         # Qilimanjaro qilisdk (local simulator only — QiliSim or QutipBackend)
         if provider == "Qilimanjaro":
             return cls._create_qilisdk_executor(backend_slug, backend_config)
+
+        # Alice & Bob local cat-qubit emulators (local simulator only — no Felis Cloud)
+        if provider == "Alice & Bob":
+            return cls._create_alice_bob_executor(backend_slug, backend_config)
 
         # NVIDIA CUDA-Q (GPU/CPU statevector, direct IQM)
         if provider == "CUDA-Q" or backend_slug in _SLUG_TO_TARGET:
@@ -440,6 +445,43 @@ class ExecutorFactory:
         return QiliSDKExecutor(QiliSDKExecutorConfig(simulator=simulator))
 
     @classmethod
+    def _create_alice_bob_executor(
+        cls,
+        backend_slug: str,
+        backend_config: dict[str, Any],
+    ) -> AliceBobExecutor:
+        """Create an Alice & Bob local cat-qubit emulator executor from configuration.
+
+        No field is required: the backend tier falls back to the slug, or to
+        AliceBobExecutorConfig's own default ("EMU:40Q:LOGICAL_TARGET") if the
+        slug isn't given either. Only forwards keys present in backend_config
+        and relies on AliceBobExecutorConfig's own defaults otherwise, so
+        factory and dataclass defaults can't drift apart.
+
+        Args:
+            backend_slug: Backend slug, used as backend_name if not given in
+                backend_config (e.g. "EMU:6Q:PHYSICAL_CATS").
+            backend_config: Optional backend_name, average_nb_photons,
+                kappa_1, kappa_2, distance overrides.
+
+        Returns:
+            Configured AliceBobExecutor instance.
+        """
+        config_kwargs: dict[str, Any] = {}
+        if "backend_name" in backend_config:
+            config_kwargs["backend_name"] = backend_config["backend_name"]
+        elif backend_slug:
+            config_kwargs["backend_name"] = backend_slug
+
+        for key in ("average_nb_photons", "kappa_1", "kappa_2", "distance"):
+            if key in backend_config:
+                config_kwargs[key] = backend_config[key]
+
+        config = AliceBobExecutorConfig(**config_kwargs)
+
+        return AliceBobExecutor(config)
+
+    @classmethod
     def _create_simulation_executor(
         cls,
         backend_slug: str,
@@ -479,6 +521,7 @@ class ExecutorFactory:
             "Local",
             "Quantinuum",
             "Qilimanjaro",
+            "Alice & Bob",
         ]
 
     @classmethod

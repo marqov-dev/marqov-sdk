@@ -876,7 +876,7 @@ class TestExecutorFactory:
         assert set(ExecutorFactory.get_supported_providers()) == {
             "Local", "AWS Braket", "IBM Quantum", "Quantinuum",
             "Azure Quantum", "IonQ Direct", "Rigetti QCS", "Quantum Brilliance",
-            "CUDA-Q", "Qilimanjaro",
+            "CUDA-Q", "Qilimanjaro", "Alice & Bob",
         }
 
     def test_unsupported_provider_error_lists_all_supported_providers(self) -> None:
