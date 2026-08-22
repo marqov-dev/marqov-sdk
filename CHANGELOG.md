@@ -5,6 +5,60 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
+## [0.5.0] — 2026-08-21
+
+### Added
+
+- **`QiliSDKExecutor` — a new `Qilimanjaro` provider running on `qilisdk`'s
+  local simulators.** Wraps `QiliSim` (their own C++ simulator, ships in the
+  base `qilisdk` package) or `QutipBackend` (pure-Python reference sim, via
+  `qilisdk`'s own `qutip` extra) behind the same `BaseExecutor` interface as
+  every other provider — no cloud account or SpeQtrum credentials required.
+  Marqov's canonical gate set (`H`/`X`/`Y`/`Z`/`S`/`T`/`Rx`/`Ry`/`Rz`/`CNOT`/
+  `CZ`/`SWAP`) translates 1:1 onto `qilisdk.digital` gate constructors; results
+  come back through `qilisdk`'s `SamplingReadoutResult.samples`. First step of
+  the Qilimanjaro integration — real-hardware/SpeQtrum access is a follow-up
+  once beta credentials are available.
+
+  `qilisdk` is installed separately (`pip install qilisdk`), not via a
+  `marqov[...]` extra, the same treatment as Quantum Brilliance's `qristal`:
+  `qilisdk` requires `numpy>=2.3` (macOS) / `>=2.4.1` (elsewhere), which only
+  overlaps marqov's own `numpy<2.4` core pin in the macOS `2.3.x` window. A
+  formal `marqov[qilisdk]` extra was tried and reverted — even scoped with a
+  `sys_platform == "darwin"` marker, its mere presence in
+  `[project.optional-dependencies]` made the *entire* `uv.lock` unresolvable
+  (uv locks the union of all extras together, so one platform-incompatible
+  extra poisons the whole project, not just itself). (marqov-sdk#104)
+
+- **`normalized_fidelity` and related application-level benchmarking
+  metrics**, in `marqov/benchmarking/`. The Lubinski et al. / QED-C metric
+  `max(0, (F_backend − F_uniform) / (1 − F_uniform))` normalizes out the
+  trivial uniform-noise baseline, alongside new `classical_fidelity`
+  (Bhattacharyya fidelity) and `fidelity_with_uniform` helpers. Where the
+  existing SPAM tooling measures per-qubit readout error, this measures how
+  faithfully a whole application's output distribution survives on real
+  hardware. Ported from Open QBench (Apache-2.0), attributed in the module.
+  (marqov-sdk#59)
+
+### Fixed
+
+- **Local backend format conversion ignored stray credentials.**
+  `_to_backend_format()` was missing the local-backend short-circuit that
+  `_get_provider_device()` and `run()` both already had, so `backend="local"`
+  with a leftover `ibm_token`/`azure_subscription_id` in params converted the
+  circuit to Qiskit while the device build stayed on Braket's
+  `LocalSimulator`, which doesn't accept it. (marqov-sdk#102)
+
+### Internal
+
+- **`uv.lock` regenerated across all extras** — the `cudaq` extra was declared
+  in `pyproject.toml` but never locked, so `uv sync --extra cudaq --frozen`
+  hit the network instead of resolving from the lock. Two gaps hit during the
+  0.4.1 release are now documented in `RELEASING.md`: a bare release-branch
+  push gets no CI run (open a PR against `main` instead), and the `pypi`
+  GitHub Environment's required-reviewer gate silently waits on approval.
+  (marqov-sdk#100)
+
 ## [0.4.1] — 2026-08-14
 
 ### Fixed

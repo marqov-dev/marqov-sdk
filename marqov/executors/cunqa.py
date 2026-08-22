@@ -7,9 +7,8 @@ results, and always tears the family down with ``qdrop`` — including on
 failure or cancellation, so a crashed or timed-out run doesn't strand Slurm
 allocations.
 
-This targets Phase 0 of the CUNQA PoC (docs/plans/marqov-cunqa-poc.md in
-marqov-research): correctness only, N≈4, no failover/reproducibility/scaling
-logic yet.
+This targets an early, correctness-only phase of a broader CUNQA integration
+effort: N≈4, no failover/reproducibility/scaling logic yet.
 
 Example:
     >>> from marqov.circuits import bell_state
@@ -21,8 +20,11 @@ Example:
     >>> print(result.counts)
 
 ``cunqa`` is an optional dependency, and only importable on a machine with
-CUNQA built and on ``sys.path``. CUNQA has no PyPI wheel — ``pip install
-marqov[cunqa]`` only installs the Qiskit pin, not CUNQA itself.
+CUNQA built and on ``sys.path``. CUNQA has no PyPI wheel and is not a
+``marqov[...]`` extra — its exact ``qiskit==1.2.4`` pin would downgrade the
+whole project's lockfile if declared in ``[project.optional-dependencies]``
+(the same class of problem ``qilisdk``'s numpy floor caused). Install
+``qiskit==1.2.4`` separately in the environment where CUNQA is built.
 
 API surface verified 2026-08-21 directly against CESGA-Quantum-Spain/cunqa
 source (cunqa/qpu.py, cunqa/qjob.py, cunqa/result.py, and the qraise C++
@@ -35,8 +37,8 @@ backend on `main`). Confirmed real shape:
   at ``cunqa/qpu.py:382-383`` — Python appends the ``"G"`` suffix itself
   (``f"--mem-per-qpu={mem_per_qpu}G"``) before shelling out. Note this is
   the PYTHON path's units; a raw CLI invocation of the C++ binary directly
-  is a DIFFERENT code path with unverified flag spelling/units — see the
-  smoke-test note in the marqov-research plan's Task 3.
+  is a DIFFERENT code path with unverified flag spelling/units — check
+  ``qraise --help`` on the live cluster before relying on it.
 - ``get_QPUs(co_located: bool = False, family: str | None = None) -> list``
 - ``run(circuits, qpus, param_values=None, **run_args) -> list`` — no
   documented ``seed`` kwarg (Phase 1 scope, not wired in here)

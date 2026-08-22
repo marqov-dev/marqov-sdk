@@ -102,14 +102,6 @@ ionq = [
 rigetti = [
     "pyquil>=4.0.0",
 ]
-qilisdk = [
-    "qilisdk>=0.2.1",
-]
-cunqa = [
-    "qiskit==1.2.4",  # CUNQA's pinned Qiskit version — exact match, not a floor.
-                      # This extra does NOT install cunqa itself — no PyPI wheel exists;
-                      # it must be built from source (see marqov-research's CUNQA PoC infra).
-]
 all = [
     "qiskit>=1.0.0",
     "qiskit-ibm-runtime>=0.20.0",
