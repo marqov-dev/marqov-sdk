@@ -1482,6 +1482,7 @@ dev = [
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "qiskit-aer" },
     { name = "qutip" },
     { name = "ruff" },
 ]
@@ -1559,6 +1560,7 @@ requires-dist = [
     { name = "qiskit", marker = "extra == 'pytket'", specifier = ">=1.0.0" },
     { name = "qiskit", marker = "extra == 'qiskit'", specifier = ">=1.0.0" },
     { name = "qiskit", marker = "extra == 'quantinuum'", specifier = ">=1.0.0" },
+    { name = "qiskit-aer", marker = "extra == 'dev'", specifier = ">=0.14.0" },
     { name = "qiskit-ibm-runtime", marker = "extra == 'all'", specifier = ">=0.20.0" },
     { name = "qiskit-ibm-runtime", marker = "extra == 'ibm'", specifier = ">=0.20.0" },
     { name = "qiskit-qasm3-import", marker = "extra == 'all'", specifier = ">=0.5.0" },

@@ -52,6 +52,11 @@ dev = [
     # tests (tests/qutip/test_record.py). Not a runtime dependency — record.py
     # duck-types the qutip Result and never imports qutip itself.
     "qutip>=5.3.0,<6.0.0",
+    # Test-only: tests/test_cunqa_qpe_reference_circuit.py simulates the QPE
+    # reference circuit directly via AerSimulator to verify it independently
+    # of any live CUNQA cluster. Not a runtime dependency of cunqa.py itself
+    # (CUNQA wraps its own Aer internally, on the cluster).
+    "qiskit-aer>=0.14.0",
 ]
 qiskit = [
     "qiskit>=1.0.0",
