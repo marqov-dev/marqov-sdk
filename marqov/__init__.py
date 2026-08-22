@@ -34,7 +34,7 @@ Simple circuit execution:
     >>> result = await executor.execute(circuit, shots=1000)
 """
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 
 # Re-export commonly used items for convenience
 from marqov.circuits import Circuit, bell_state, ghz_state

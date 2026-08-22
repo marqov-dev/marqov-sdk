@@ -54,8 +54,11 @@ class ExecutorFactory:
         - Local: QuantumFlow simulator (no cloud required)
         - IonQ Direct: Native IonQ REST API (no AWS/Braket intermediary)
         - Qilimanjaro: qilisdk local simulators (QiliSim or QutipBackend, no
-          cloud required). Requires ``qilisdk`` — see
-          ``pip install marqov[qilisdk]``.
+          cloud required). Requires ``qilisdk`` — installed separately
+          (``pip install qilisdk``), not via a ``marqov[...]`` extra: its
+          numpy floor is incompatible with marqov's own numpy ceiling outside
+          a narrow macOS overlap window, which would make it unresolvable as
+          a formal extra in marqov's dependency lock.
 
     Example:
         >>> from marqov.executors.factory import ExecutorFactory
