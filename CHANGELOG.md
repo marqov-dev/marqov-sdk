@@ -30,6 +30,17 @@ release.
   (uv locks the union of all extras together, so one platform-incompatible
   extra poisons the whole project, not just itself). (marqov-sdk#104)
 
+- **`QiliSDKExecutor.execute_analog()` — analog/annealing mode on qilisdk's local simulators.**
+  Runs Qilimanjaro's actual hardware differentiator (fluxonium quantum annealing) locally, via
+  `qilisdk.analog.Hamiltonian`/`Schedule` and the `AnalogEvolution` functional — no SpeQtrum
+  account needed here either. Deliberately not part of the shared `BaseExecutor` contract:
+  analog Hamiltonians have no Marqov-canonical representation the way digital gate circuits do
+  (`qilisdk`'s own program type — `Hamiltonian`/`Schedule` — is passed straight through), and no
+  other Marqov backend has an analog capability yet to unify against. A survey of how Braket,
+  Azure Quantum, CUDA-Q, and classical heterogeneous-compute systems (Kubernetes, MLIR, XLA, Ray,
+  Slurm) all handle this same digital/analog split confirmed the pattern: shared job-lifecycle
+  contract, paradigm-native program types — never one flat representation for both.
+
 - **`normalized_fidelity` and related application-level benchmarking
   metrics**, in `marqov/benchmarking/`. The Lubinski et al. / QED-C metric
   `max(0, (F_backend − F_uniform) / (1 − F_uniform))` normalizes out the

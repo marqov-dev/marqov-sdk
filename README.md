@@ -127,7 +127,7 @@ result = await executor.execute(circuit, shots=1000)
 | Quantinuum | Available |
 | Quantum Brilliance | Available — requires `qristal` installed separately (not on PyPI, no `marqov[...]` extra); build from source or use the Docker image: https://qristal.readthedocs.io/ |
 | CUDA-Q | Available — not in `[all]` (GPU-heavy); install separately with `pip install "marqov[cudaq]"` |
-| Qilimanjaro (qilisdk local simulators) | Available — not on PyPI as a `marqov[...]` extra (like Quantum Brilliance): `qilisdk`'s numpy floor is incompatible with marqov's own numpy ceiling outside a narrow macOS overlap window. Install separately: `pip install qilisdk`. |
+| Qilimanjaro (qilisdk local simulators — digital `execute()` and analog `execute_analog()`) | Available — not on PyPI as a `marqov[...]` extra (like Quantum Brilliance): `qilisdk`'s numpy floor is incompatible with marqov's own numpy ceiling outside a narrow macOS overlap window. Install separately: `pip install qilisdk`. |
 | CESGA CUNQA (distributed-QC emulator, Slurm-based) | Available — not on PyPI at all (no wheel; build from source, see `CESGA-Quantum-Spain/cunqa`) and not a `marqov[...]` extra: CUNQA's exact `qiskit==1.2.4` pin would downgrade the whole project's lockfile if included in `[project.optional-dependencies]`, same class of problem `qilisdk` had. Install `qiskit==1.2.4` separately in the environment where CUNQA is built. |
 
 ---
