@@ -35,7 +35,10 @@ class _FakeCunqaClient:
 
     def qraise(self, n_qpus: int, walltime: str, **kwargs: Any) -> str:
         self.qraise_calls.append({"n_qpus": n_qpus, "walltime": walltime, **kwargs})
-        return "test-family"
+        # Real CUNQA echoes back the caller-supplied family (falling back to
+        # the job id only when none is given) -- matched here since the
+        # executor now always passes one explicitly.
+        return kwargs.get("family") or "test-family"
 
     def get_QPUs(self, co_located: bool, family: str) -> list[str]:
         self.get_qpus_calls.append({"co_located": co_located, "family": family})
@@ -126,7 +129,10 @@ async def test_execute_forwards_config_to_qraise() -> None:
 
     await executor.execute(bell_state(), shots=500)
 
-    assert fake_client.qraise_calls[0] == {
+    call = fake_client.qraise_calls[0]
+    family = call.pop("family")
+    assert family.startswith("marqov-")
+    assert call == {
         "n_qpus": 2,
         "walltime": "00:07:00",
         "simulator": "Aer",
@@ -158,7 +164,7 @@ async def test_execute_raises_timeout_if_qpus_never_register() -> None:
     with pytest.raises(TimeoutError, match="registered"):
         await executor.execute(bell_state(), shots=1000)
 
-    assert fake_client.dropped == ["test-family"]
+    assert fake_client.dropped == [fake_client.qraise_calls[0]["family"]]
 
 
 @pytest.mark.asyncio
@@ -184,7 +190,7 @@ async def test_execute_always_drops_qpus_even_on_run_failure() -> None:
     with pytest.raises(RuntimeError, match="simulated cluster failure"):
         await executor.execute(bell_state(), shots=1000)
 
-    assert fake_client.dropped == ["test-family"]
+    assert fake_client.dropped == [fake_client.qraise_calls[0]["family"]]
 
 
 @pytest.mark.asyncio
@@ -205,7 +211,7 @@ async def test_execute_drops_qpus_on_cancellation() -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert fake_client.dropped == ["test-family"]
+    assert fake_client.dropped == [fake_client.qraise_calls[0]["family"]]
 
 
 @pytest.mark.asyncio
@@ -232,7 +238,7 @@ async def test_execute_survives_repeated_cancellation_during_teardown() -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert fake_client.dropped == ["test-family"]
+    assert fake_client.dropped == [fake_client.qraise_calls[0]["family"]]
 
 
 @pytest.mark.asyncio
@@ -250,6 +256,33 @@ async def test_execute_qdrop_failure_does_not_mask_original_exception() -> None:
 
     with pytest.raises(RuntimeError, match="original failure: circuit rejected"):
         await executor.execute(bell_state(), shots=1000)
+
+
+@pytest.mark.asyncio
+async def test_execute_raises_timeout_if_qraise_itself_never_returns() -> None:
+    """Real CUNQA's qraise() blocks internally (polling squeue until the job
+    is RUNNING with every vQPU registered) with no timeout of its own —
+    unlike this fake, which normally returns instantly. If the Slurm job
+    never reaches RUNNING (a stuck node, insufficient capacity), that call
+    can hang forever. This must time out via cfg.startup_timeout_s rather
+    than hang the whole executor, and still attempt qdrop for cleanup using
+    the family generated before the call (qraise's own return value is
+    unusable here — it never returned one)."""
+
+    class _HangingQraiseClient(_FakeCunqaClient):
+        def qraise(self, n_qpus: int, walltime: str, **kwargs: Any) -> str:
+            time.sleep(2)
+            return super().qraise(n_qpus, walltime, **kwargs)
+
+    fake_client = _HangingQraiseClient(counts_per_qpu={})
+    config = CUNQAExecutorConfig(n_qpus=2, walltime="00:05:00", startup_timeout_s=0.1, poll_interval_s=0.01)
+    executor = CUNQAExecutor(config, client=fake_client)
+
+    with pytest.raises(TimeoutError, match="qraise did not return"):
+        await executor.execute(bell_state(), shots=1000)
+
+    assert len(fake_client.dropped) == 1
+    assert fake_client.dropped[0].startswith("marqov-")
 
 
 def test_config_defaults() -> None:
