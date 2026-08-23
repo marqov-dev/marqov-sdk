@@ -7,6 +7,7 @@
 # Claude Code local tooling / worktrees — never ship in the sdist.
 .claude/
 .playwright-mcp/
+.worktrees/
 # Blog drafts live on the website, not in the package/sdist.
 docs/blog/
 __pycache__/
