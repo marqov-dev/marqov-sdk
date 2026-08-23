@@ -65,6 +65,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
@@ -224,18 +225,49 @@ class CUNQAExecutor(BaseExecutor):
         qiskit_circuit = await asyncio.to_thread(circuit.to_qiskit)
         qiskit_circuit = add_measure_all(qiskit_circuit)
 
-        family = await asyncio.to_thread(
-            self._client.qraise,
-            cfg.n_qpus,
-            cfg.walltime,
-            simulator=cfg.simulator,
-            co_located=cfg.co_located,
-            classical_comm=cfg.classical_comm,
-            quantum_comm=cfg.quantum_comm,
-            mem_per_qpu=cfg.mem_per_qpu_gb,
-        )
+        # Generated up front, not read from qraise's return value: CUNQA's
+        # real qraise() blocks internally (polling squeue until the job is
+        # RUNNING with every vQPU registered) with NO timeout of its own —
+        # unlike the fake client used in the tests below, which returns
+        # instantly. If that real call never returns (a stuck node, a job
+        # that never reaches RUNNING), we still need a family name to hand
+        # to qdrop for cleanup — which we can't get from a call that never
+        # returned. Passing our own family through to qraise's `family=`
+        # kwarg makes this available regardless of whether qraise itself
+        # completes in time.
+        family = f"marqov-{uuid.uuid4().hex[:12]}"
         start = time.monotonic()
         try:
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._client.qraise,
+                        cfg.n_qpus,
+                        cfg.walltime,
+                        simulator=cfg.simulator,
+                        co_located=cfg.co_located,
+                        classical_comm=cfg.classical_comm,
+                        quantum_comm=cfg.quantum_comm,
+                        mem_per_qpu=cfg.mem_per_qpu_gb,
+                        family=family,
+                    ),
+                    timeout=cfg.startup_timeout_s,
+                )
+            except asyncio.TimeoutError as e:
+                # asyncio.wait_for abandoning the future does NOT stop the
+                # underlying thread — the real qraise() call may still be
+                # running in the background, polling squeue forever, if
+                # the Slurm job never reaches RUNNING. Best-effort cleanup
+                # via _teardown (below) at least issues qdrop for this
+                # family; the orphaned thread itself is a known, accepted
+                # residual gap (see _teardown's docstring for the same
+                # pattern applied to cancellation).
+                raise TimeoutError(
+                    f"qraise did not return within {cfg.startup_timeout_s}s "
+                    f"for family {family!r} — the underlying call may still "
+                    f"be running in the background"
+                ) from e
+
             qpus = await self._wait_for_qpus_ready(family, cfg)
             circuits = [qiskit_circuit.copy() for _ in qpus]
             jobs = await asyncio.to_thread(self._client.run, circuits, qpus, shots=shots_per_qpu)
