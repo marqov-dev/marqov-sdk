@@ -5,7 +5,7 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
-## [0.5.0] — 2026-08-21
+## [0.5.0] — 2026-08-23
 
 ### Added
 
@@ -51,6 +51,28 @@ release.
   hardware. Ported from Open QBench (Apache-2.0), attributed in the module.
   (marqov-sdk#59)
 
+- **`CUNQAExecutor` — a new `CUNQA` provider running distributed circuits
+  across vQPUs on a real Slurm cluster.** CUNQA (CESGA, Apache-2.0) is a
+  distributed quantum-computing emulator: vQPUs run as Slurm tasks, with
+  real classical/quantum communication channels between them (Phase 1 of
+  this integration, not yet wired in here — this first phase is
+  correctness-only, N≈4, no failover/reproducibility/scaling logic). The
+  executor launches a family of vQPUs via `qraise`, splits requested shots
+  evenly across them, gathers and merges results, and always tears the
+  family down with `qdrop` — including on failure or cancellation, so a
+  crashed or timed-out run doesn't strand a Slurm allocation. Since
+  Marqov's `Circuit` IR has no measurement concept at all, this executor
+  is responsible for adding its own (`add_measure_all`), the same pattern
+  `RigettiExecutor` already established.
+
+  Verified end to end against a live AWS ParallelCluster Slurm cluster: a
+  real no-comm QPE circuit recovering the exact expected phase bin across
+  4 real vQPUs. Not on PyPI at all (no wheel; build from source, see
+  `CESGA-Quantum-Spain/cunqa`) and not a `marqov[...]` extra — CUNQA's
+  exact `qiskit==1.2.4` pin would downgrade the whole project's lockfile
+  the same way `qilisdk`'s numpy floor does; install `qiskit==1.2.4`
+  separately in the environment where CUNQA is built. (marqov-sdk#106)
+
 ### Fixed
 
 - **Local backend format conversion ignored stray credentials.**
@@ -59,6 +81,20 @@ release.
   with a leftover `ibm_token`/`azure_subscription_id` in params converted the
   circuit to Qiskit while the device build stayed on Braket's
   `LocalSimulator`, which doesn't accept it. (marqov-sdk#102)
+
+- **`CUNQAExecutor` could hang indefinitely on a live cluster.** Real
+  CUNQA's `qraise()` blocks internally — polling `squeue` until the Slurm
+  job is `RUNNING` with every vQPU registered — with no timeout of its
+  own, unlike the fake client this executor was originally tested
+  against. If a job never reaches `RUNNING` (a stuck node, insufficient
+  capacity), the call never returned, and the executor's own
+  `startup_timeout_s` only ever guarded the poll loop *after* `qraise`
+  returned — too late. The vQPU family name is now generated up front
+  (passed through to `qraise`'s own `family=` kwarg) instead of read from
+  its return value, and the `qraise` call itself is wrapped in
+  `asyncio.wait_for(timeout=cfg.startup_timeout_s)`, so teardown/`qdrop`
+  can still be attempted even if `qraise` itself never returns.
+  (marqov-sdk#109)
 
 ### Internal
 
@@ -69,6 +105,14 @@ release.
   push gets no CI run (open a PR against `main` instead), and the `pypi`
   GitHub Environment's required-reviewer gate silently waits on approval.
   (marqov-sdk#100)
+
+- **Four unexercised release-process footguns closed in `RELEASING.md`/
+  `release.yml`** — none had bitten across 0.2.0–0.4.1, which is evidence
+  the failure modes hadn't happened yet, not that the logic was correct.
+  `publish-pypi` no longer trusts the tag ref alone (a `workflow_dispatch`
+  against an existing tag would otherwise publish to real PyPI);
+  `publish-testpypi` now tolerates a repeated dry-run at the same version.
+  (marqov-sdk#108)
 
 ## [0.4.1] — 2026-08-14
 
