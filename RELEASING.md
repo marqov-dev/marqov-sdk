@@ -1,7 +1,12 @@
 # Releasing the Marqov SDK
 
-Everything before the `v*` tag push is reversible; the tag is the irreversible
-step (PyPI never lets a version be reused), so validate hard and tag last.
+Everything before the `v*` tag push is reversible **on real PyPI**; the tag is
+the irreversible step there (PyPI never lets a version be reused), so validate
+hard and tag last. One thing before the tag is *not* reversible: the step-3
+dry-run permanently claims `X.Y.Z` on **TestPyPI**, which runs the same
+Warehouse code and also never reuses a version. `publish-testpypi` sets
+`skip-existing: true` so a repeated dry-run at the same version is a no-op
+rather than a failure, but the first upload of a version is still one-way.
 
 > **How the tag publishes:** pushing a `v*` tag triggers
 > `.github/workflows/release.yml`, which builds the package and publishes it to
@@ -53,20 +58,34 @@ step (PyPI never lets a version be reused), so validate hard and tag last.
       uvx twine check dist/*
       ```
 - [ ] Push a `release/X.Y.Z` branch (version bumped, changelog dated).
+- [ ] CI (full suite) green on the branch, **before** the dry-run. `ci.yml` only
+      triggers on pull requests and pushes to `main`, not on a bare branch push,
+      so open a PR from the release branch to `main` to get a run (do not merge
+      it yet; it exists to trigger CI on the exact release SHA). This comes first
+      because the dry-run claims `X.Y.Z` on TestPyPI for good: confirm the SHA is
+      good before spending the version on it.
 - [ ] Dry-run: `gh workflow run release.yml --ref release/X.Y.Z` (TestPyPI only).
+      Dispatch against the **branch**, never against a tag ref.
 - [ ] `gh run watch <id> --exit-status` — build ✅, publish-testpypi ✅, publish-pypi skipped.
-- [ ] Validate the PUBLISHED artifact, not just the pipeline — install from TestPyPI
-      and import it (do it here, while it's still free):
+- [ ] Validate the PUBLISHED artifact, not just the pipeline. Fetch it from
+      TestPyPI and install it in a throwaway venv, keeping the two indexes in
+      **separate** resolution steps:
       ```
-      pip install --index-url https://test.pypi.org/simple/ \
-                  --extra-index-url https://pypi.org/simple/ marqov==X.Y.Z
+      python -m venv /tmp/marqov-testpypi && . /tmp/marqov-testpypi/bin/activate
+      # 1. The marqov artifact only, straight from TestPyPI. --no-deps means no
+      #    dependency is ever resolved against TestPyPI.
+      pip download --no-deps --index-url https://test.pypi.org/simple/ \
+                   marqov==X.Y.Z -d /tmp/marqov-testpypi-dist
+      # 2. Install that exact file; every dependency resolves from real PyPI.
+      pip install /tmp/marqov-testpypi-dist/marqov-X.Y.Z-py3-none-any.whl
       python -c "import marqov; print(marqov.__version__)"
+      deactivate
       ```
-      (`--extra-index-url` because dependencies aren't on TestPyPI.)
-- [ ] CI (full suite) green on the branch. `ci.yml` only triggers on pull
-      requests and pushes to `main`, not on a bare branch push, so open a PR
-      from the release branch to `main` to get a run (do not merge it yet;
-      it exists to trigger CI on the exact release SHA).
+      Do **not** point pip at both indexes at once (`--index-url` TestPyPI plus
+      `--extra-index-url` PyPI). That merges them into one resolution pool for
+      every dependency, and TestPyPI is public and uncurated: anyone can upload a
+      higher-versioned `numpy`/`scipy`/`requests` there and win the resolution.
+      This is PyPA's own documented dependency-confusion anti-pattern.
 
 ## 4. Cut the release
 - [ ] Fast-forward `main` to the release commit and push.
@@ -91,7 +110,10 @@ git push origin vX.Y.Z
 - [ ] Verify: real PyPI shows X.Y.Z, and a clean-venv `pip install marqov==X.Y.Z` imports.
 
 ## Rollback
-- **Before the tag:** nothing has been published — fix forward with a new commit.
+- **Before the tag:** nothing has been published to real PyPI, so fix forward
+  with a new commit. (A version already dry-run to TestPyPI stays claimed there;
+  `skip-existing: true` makes re-running the dry-run at that version a no-op, so
+  it does not block the fix.)
   Do **not** force-push the default branch: this repo has forks, and rewriting
   `main` hands everyone who cloned or forked divergent history.
 - **After the tag:** a PyPI version cannot be unpublished. Ship `X.Y.(Z+1)` with the fix.

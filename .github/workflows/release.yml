@@ -33,10 +33,16 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
         with:
           repository-url: https://test.pypi.org/legacy/
+          # TestPyPI also never allows a version to be reused; this keeps a
+          # repeated dry-run of the same X.Y.Z idempotent. Deliberately NOT set
+          # on publish-pypi, where a duplicate upload should be a hard failure.
+          skip-existing: true
 
   publish-pypi:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Both conditions: a dispatch against a tag ref sets github.ref to that tag,
+    # so the ref check alone would let a "TestPyPI dry-run" publish to real PyPI.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment: pypi
     permissions: { id-token: write }
