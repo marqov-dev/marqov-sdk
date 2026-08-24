@@ -40,6 +40,7 @@ release.
   Azure Quantum, CUDA-Q, and classical heterogeneous-compute systems (Kubernetes, MLIR, XLA, Ray,
   Slurm) all handle this same digital/analog split confirmed the pattern: shared job-lifecycle
   contract, paradigm-native program types — never one flat representation for both.
+  (marqov-sdk#107)
 
 - **`normalized_fidelity` and related application-level benchmarking
   metrics**, in `marqov/benchmarking/`. The Lubinski et al. / QED-C metric
