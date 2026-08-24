@@ -172,14 +172,48 @@ class IBMExecutor(BaseExecutor):
         pub_result = result[0]
         data_bin = pub_result.data
 
-        # SamplerV2 returns BitArray in classical register fields
-        # Get the first classical register (typically "meas" or "c")
-        creg_names = [attr for attr in dir(data_bin) if not attr.startswith("_")]
-        if not creg_names:
+        # SamplerV2 returns a BitArray per classical register. Find it by
+        # capability (it exposes get_counts), NOT by taking dir()[0]: dir() is
+        # alphabetical and DataBin also exposes mapping helpers ('items',
+        # 'keys', 'ndim', 'shape', 'size', 'values'), so dir()[0] is 'items' —
+        # a bound method — for any register sorting after it (e.g. the 'meas'
+        # register that measure_all() creates).
+        keys = getattr(data_bin, "keys", None)
+        if callable(keys):
+            # Qiskit >= 1.2: DataBin declares its register names.
+            names = list(keys())
+        else:
+            names = [n for n in dir(data_bin) if not n.startswith("_")]
+
+        bit_arrays = [
+            candidate
+            for candidate in (getattr(data_bin, name, None) for name in names)
+            if hasattr(candidate, "get_counts")
+        ]
+
+        if not bit_arrays:
             return {}
 
-        bit_array = getattr(data_bin, creg_names[0])
-        return dict(bit_array.get_counts())
+        if len(bit_arrays) > 1:
+            # Each BitArray covers one register. Returning just the first one
+            # yields a bitstring narrower than the measurement, silently
+            # mis-indexing every downstream consumer (fidelity, SPAM,
+            # expectation values). Joining them needs a defined register order
+            # and a decision about whether the reversal applies within or
+            # across registers — so fail loudly rather than guess.
+            raise NotImplementedError(
+                f"Result has multiple classical registers ({len(bit_arrays)}); "
+                "Marqov cannot yet combine them into a single bitstring. "
+                "Use a single classical register (e.g. measure_all())."
+            )
+
+        # Qiskit is little-endian (qubit 0 = rightmost); Marqov's convention is
+        # qubit 0 = leftmost. Reverse, exactly as AzureQuantumExecutor does for
+        # the same framework.
+        return {
+            bitstring[::-1]: count
+            for bitstring, count in bit_arrays[0].get_counts().items()
+        }
 
     async def execute(
         self,
