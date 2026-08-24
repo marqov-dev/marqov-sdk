@@ -5,6 +5,27 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
+## [Unreleased]
+
+### Fixed
+
+- **`Circuit.from_qiskit`/`from_cirq`/`from_pyquil` silently discarded
+  mid-circuit `measure`, `reset`, and `delay` instructions.** A terminal
+  measurement (nothing after it touches its qubit or reads its classical bit)
+  is genuinely implicit under this SDK's gate-only, `shots`-based circuit
+  model and is still silently skipped. A **mid-circuit** measurement,
+  `reset`, or `delay` is never implicit — dropping one silently changed what
+  the imported circuit computed, with no warning. All three importers now
+  raise a clear error naming the instruction and qubit instead.
+
+  **Breaking, deliberately:** any circuit containing a mid-circuit
+  measurement, `reset`, or `delay` that previously imported "successfully"
+  (silently as a different, wrong circuit) now raises `ValueError`
+  (`from_qiskit`/`from_cirq`) or `NotImplementedError` (`from_pyquil`)
+  instead. There is no opt-out flag: the old behavior was never a
+  correctness guarantee to preserve, it was a silent miscomputation.
+  (marqov-sdk#76)
+
 ## [0.5.1] — 2026-08-23
 
 ### Added

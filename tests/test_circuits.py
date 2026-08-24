@@ -445,13 +445,15 @@ class TestFromCirq:
             Circuit.from_cirq(cc)
 
     def test_reset_raises(self) -> None:
-        """A reset instruction is never implicit and always raises."""
+        """A reset instruction is never implicit and always raises, naming
+        the qubit (not just accidentally falling into the generic
+        unsupported-gate path)."""
         import cirq
 
         q0 = cirq.LineQubit(0)
         cc = cirq.Circuit([cirq.H(q0), cirq.reset(q0)])
 
-        with pytest.raises(ValueError, match="[Rr]eset"):
+        with pytest.raises(ValueError, match=r"does not support 'reset'.*qubits \[0\]"):
             Circuit.from_cirq(cc)
 
     def test_delay_raises(self) -> None:
@@ -475,6 +477,20 @@ class TestFromCirq:
 
         imported = Circuit.from_cirq(cc)
         assert imported.num_qubits == 1
+
+    def test_mid_circuit_measurement_in_repeated_subcircuit_raises(self) -> None:
+        """A measurement repeated via CircuitOperation(repetitions>1) is only
+        terminal on its last repetition — the earlier ones are genuinely
+        mid-circuit and must raise, even though Cirq's decomposition reuses
+        the same operation object across every repetition."""
+        import cirq
+
+        q0 = cirq.LineQubit(0)
+        sub = cirq.FrozenCircuit([cirq.H(q0), cirq.measure(q0, key="m")])
+        cc = cirq.Circuit([cirq.CircuitOperation(sub, repetitions=3)])
+
+        with pytest.raises(ValueError, match="mid-circuit measurement"):
+            Circuit.from_cirq(cc)
 
 
 class TestFromPennylane:

@@ -483,10 +483,12 @@ class Circuit:
         nothing following it, would be invisible to that check and wrongly
         treated as mid-circuit.
 
-        Measurement and wait/delay gates are kept as opaque leaves: they must
-        never be decomposed (`decompose_once` on a `WaitGate` returns an
-        empty list, not `None`, which would otherwise make it silently
-        disappear during flattening).
+        Measurement, wait/delay, and reset gates are kept as opaque leaves:
+        measurement and reset must be handled by the explicit policy checks
+        below rather than falling into the generic "unsupported gate" path
+        by accident, and `decompose_once` on a `WaitGate` returns an empty
+        list, not `None`, which would otherwise make it silently disappear
+        during flattening.
         """
         import cirq
 
@@ -495,7 +497,7 @@ class Circuit:
 
         def _walk(ops) -> None:
             for op in ops:
-                if isinstance(op.gate, (cirq.MeasurementGate, cirq.WaitGate)):
+                if isinstance(op.gate, (cirq.MeasurementGate, cirq.WaitGate, cirq.ResetChannel)):
                     flat.append(op)
                     continue
                 if cls._map_cirq_operation(op, scratch):
@@ -511,17 +513,23 @@ class Circuit:
         return flat
 
     @classmethod
-    def _cirq_terminal_measurement_ids(cls, operations: list) -> set[int]:
-        """Return ``id()`` of each measurement operation that is terminal.
+    def _cirq_terminal_measurement_indices(cls, operations: list) -> set[int]:
+        """Return the index of each measurement operation that is terminal.
 
         A measurement is terminal iff nothing after it touches its qubits and
         nothing after it is classically controlled on its key — the latter
         check catches conditioning on a *different* qubit (e.g.
         teleportation's correction step), not just gates on the same qubit.
+
+        Tracked by position, not `id()`: a repeated `CircuitOperation`
+        (`repetitions > 1`) decomposes to the *same* operation object for
+        every repetition, so `id()`-based tracking would make an early,
+        genuinely mid-circuit repetition match the terminal id of the last
+        one — silently reintroducing the bug this check exists to catch.
         """
         import cirq
 
-        terminal_ids = set()
+        terminal_indices = set()
         for index, op in enumerate(operations):
             if not isinstance(op.gate, cirq.MeasurementGate):
                 continue
@@ -533,12 +541,12 @@ class Circuit:
                 if qubits & set(later.qubits):
                     is_terminal = False
                     break
-                if any(getattr(cond, "key", None) == key for cond in later.classical_controls):
+                if any(key in cond.keys for cond in later.classical_controls):
                     is_terminal = False
                     break
             if is_terminal:
-                terminal_ids.add(id(op))
-        return terminal_ids
+                terminal_indices.add(index)
+        return terminal_indices
 
     @classmethod
     def _map_cirq_operation(cls, op, circuit: "Circuit") -> bool:
@@ -650,11 +658,11 @@ class Circuit:
 
         circuit = cls()
         flat_operations = cls._flatten_cirq_operations(list(cirq_circuit.all_operations()))
-        terminal_measurement_ids = cls._cirq_terminal_measurement_ids(flat_operations)
+        terminal_measurement_indices = cls._cirq_terminal_measurement_indices(flat_operations)
 
-        for op in flat_operations:
+        for index, op in enumerate(flat_operations):
             if isinstance(op.gate, cirq.MeasurementGate):
-                if id(op) in terminal_measurement_ids:
+                if index in terminal_measurement_indices:
                     continue
                 raise ValueError(
                     f"Circuit.from_cirq() does not support mid-circuit measurement "
@@ -666,6 +674,13 @@ class Circuit:
             if isinstance(op.gate, cirq.WaitGate):
                 raise ValueError(
                     f"Circuit.from_cirq() does not support 'wait'/delay "
+                    f"(qubits {[q.x for q in op.qubits]}): it is never implicit "
+                    "under this SDK's gate-only circuit model."
+                )
+
+            if isinstance(op.gate, cirq.ResetChannel):
+                raise ValueError(
+                    f"Circuit.from_cirq() does not support 'reset' "
                     f"(qubits {[q.x for q in op.qubits]}): it is never implicit "
                     "under this SDK's gate-only circuit model."
                 )
@@ -832,7 +847,11 @@ class Circuit:
 
     # Classical declarations do not affect the unitary circuit representation
     # imported by this SDK. `Measurement` is handled separately since it is
-    # only implicit (and thus safe to skip) when terminal.
+    # only implicit (and thus safe to skip) when terminal. `Reset` and
+    # `Delay` are deliberately absent from this set: neither is a `Gate` nor
+    # in the skip set, so they fall through to the generic "unsupported
+    # instruction" `NotImplementedError` below — always raising, since
+    # neither is ever implicit.
     _PYQUIL_SKIP_INSTRUCTIONS: set[str] = {"Declare", "Halt", "Pragma"}
 
     @classmethod
