@@ -28,6 +28,7 @@ import boto3
 from braket.aws import AwsDevice, AwsSession
 from braket.circuits import Circuit as BraketCircuit
 
+from marqov.executors._counts import allocate_counts
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 
 if TYPE_CHECKING:
@@ -269,7 +270,11 @@ class BraketExecutor(BaseExecutor):
             # instead of raw shot counts. Convert to synthetic counts using shots.
             probs = getattr(result, 'measurement_probabilities', {}) or {}
             if probs:
-                counts = {bs: round(float(prob) * shots) for bs, prob in dict(probs).items()}
+                # Largest-remainder allocation, not round(): naive rounding does
+                # not conserve the shot total (three bins at 1/3 of 1000 shots
+                # round to 333 each = 999), and downstream code divides by the
+                # total assuming it equals `shots`.
+                counts = allocate_counts(dict(probs), shots)
 
         return ExecutionResult(
             counts=counts,

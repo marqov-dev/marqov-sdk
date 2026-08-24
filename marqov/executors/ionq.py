@@ -34,6 +34,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from marqov.executors._counts import allocate_counts
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 
 if TYPE_CHECKING:
@@ -228,37 +229,13 @@ class IonQExecutor(BaseExecutor):
         if not histogram:
             return {}
 
-        # Floor each bin and remember its fractional remainder.
-        counts: dict[str, int] = {}
-        remainders: dict[str, float] = {}
-        allocated = 0
-        for index, probability in histogram.items():
-            bitstring = format(int(index), f"0{num_qubits}b")
-            exact = float(probability) * shots
-            base = int(exact)  # floor (probabilities are non-negative)
-            counts[bitstring] = base
-            remainders[bitstring] = exact - base
-            allocated += base
-
-        # Distribute (or reclaim) the leftover shots so the total equals `shots`.
-        leftover = shots - allocated
-        if leftover > 0:
-            # Hand extra shots to the largest fractional remainders first.
-            ordered = sorted(remainders, key=lambda b: remainders[b], reverse=True)
-            for i in range(leftover):
-                counts[ordered[i % len(ordered)]] += 1
-        elif leftover < 0:
-            # Reclaim over-allocated shots from the smallest remainders first.
-            ordered = sorted(remainders, key=lambda b: remainders[b])
-            i = 0
-            while leftover < 0 and i < len(ordered) * (-leftover + 1):
-                bitstring = ordered[i % len(ordered)]
-                if counts[bitstring] > 0:
-                    counts[bitstring] -= 1
-                    leftover += 1
-                i += 1
-
-        return {bitstring: count for bitstring, count in counts.items() if count > 0}
+        # Map IonQ's state indices to bitstrings, then delegate the
+        # shot-conserving allocation to the shared helper (see _counts.py).
+        probabilities = {
+            format(int(index), f"0{num_qubits}b"): float(probability)
+            for index, probability in histogram.items()
+        }
+        return allocate_counts(probabilities, shots)
 
     async def execute(
         self,
