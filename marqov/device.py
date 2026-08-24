@@ -76,9 +76,10 @@ class MarqovDevice:
             from qiskit_ibm_runtime import QiskitRuntimeService
 
             kwargs = {
-                "channel": self._params.get("ibm_channel", "ibm_quantum"),
-                "instance": self._params.get("ibm_instance", "ibm-q/open/main"),
+                "channel": self._params.get("ibm_channel") or "ibm_quantum_platform",
             }
+            if self._params.get("ibm_instance"):
+                kwargs["instance"] = self._params["ibm_instance"]
             if self._params.get("ibm_token"):
                 kwargs["token"] = self._params["ibm_token"]
 

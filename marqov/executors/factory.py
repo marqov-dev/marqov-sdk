@@ -295,8 +295,8 @@ class ExecutorFactory:
 
         config = IBMExecutorConfig(
             backend_name=backend_name,
-            channel=backend_config.get("channel", "ibm_quantum"),
-            instance=backend_config.get("instance", "ibm-q/open/main"),
+            channel=backend_config.get("channel", "ibm_quantum_platform"),
+            instance=backend_config.get("instance"),
             token=backend_config.get("token"),
             optimization_level=backend_config.get("optimization_level", 1),
             resilience_level=backend_config.get("resilience_level", 1),

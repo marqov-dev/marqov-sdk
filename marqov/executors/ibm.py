@@ -36,10 +36,13 @@ class IBMExecutorConfig:
 
     Attributes:
         backend_name: IBM Quantum backend name (e.g., "ibm_kingston").
-        channel: Service channel — "ibm_quantum" for Open/paid plans,
-                 "ibm_cloud" for IBM Cloud Quantum instances.
-        instance: IBM Quantum instance in "hub/group/project" format.
-                  Defaults to "ibm-q/open/main" (Open Plan).
+        channel: Service channel — "ibm_quantum_platform" (default) or
+                 "ibm_cloud". The legacy "ibm_quantum" channel was retired
+                 by IBM and is rejected by qiskit-ibm-runtime.
+        instance: IBM Cloud instance CRN. Optional — when None, the service
+                  auto-discovers the instance from the token. Only pass this
+                  when the token maps to more than one instance. The legacy
+                  "hub/group/project" form is no longer valid.
         token: IBM Quantum API token. If None, uses saved credentials
                from QiskitRuntimeService.save_account().
         optimization_level: Transpiler optimization level (0-3).
@@ -53,8 +56,8 @@ class IBMExecutorConfig:
     """
 
     backend_name: str
-    channel: str = "ibm_quantum"
-    instance: str = "ibm-q/open/main"
+    channel: str = "ibm_quantum_platform"
+    instance: str | None = None
     token: str | None = None
     optimization_level: int = 1
     resilience_level: int = 1
@@ -93,10 +96,9 @@ class IBMExecutor(BaseExecutor):
         if self._service is None:
             from qiskit_ibm_runtime import QiskitRuntimeService
 
-            kwargs: dict[str, Any] = {
-                "channel": self.config.channel,
-                "instance": self.config.instance,
-            }
+            kwargs: dict[str, Any] = {"channel": self.config.channel}
+            if self.config.instance:
+                kwargs["instance"] = self.config.instance
             if self.config.token:
                 kwargs["token"] = self.config.token
 
