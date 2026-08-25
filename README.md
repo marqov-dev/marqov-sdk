@@ -274,6 +274,17 @@ The bounty issues that were open through [unitaryHACK 2026](https://unitaryhack.
 
 This project was created by **David Ryan** ([@ddri](https://github.com/ddri)), with contributions from the [community](https://github.com/marqov-dev/marqov-sdk/graphs/contributors).
 
-## License
+## Documentation
 
+The documentation site lives in [`docs/`](docs/) and can be served locally:
+
+```bash
+pip install -e .
+pip install -r docs/requirements.txt
+mkdocs serve
+```
+
+The first examples cover a credential-free Bell-state run and a local parameter
+sweep.
+## License
 [Apache 2.0](LICENSE)
