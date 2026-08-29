@@ -299,7 +299,44 @@ class Circuit:
         if version == 2:
             return qasm2.dumps(qiskit_circuit)
         return qasm3.dumps(qiskit_circuit)
+    
+    def to_pennylane(self):
+        """Convert circuit to a Pennylane QuantumTape.
 
+        Returns:
+            Pennylane QuantumTape representation.
+
+        Raises:
+            ImportError: If pennylane is not installed.
+        """
+        try:
+            import pennylane as qp
+            from pennylane.tape import QuantumTape
+        except ImportError:
+            raise ImportError(
+                "Pennylane is required for Circuit.to_pennylane(). "
+                "Install with: pip install marqov[pennylane]"
+            )
+        
+        tape_operations = []
+
+        for op in self._qf._elements:
+            marqov_op_name = str.lower(op.name)
+            pennylane_gate_name = self._INV_PENNYLANE_GATE_MAP[marqov_op_name]
+            gate = getattr(qp, pennylane_gate_name, None)
+            qubits = list(op.qubits)
+
+            if marqov_op_name in self._MARQOV_ROTATION_GATES:
+                angle = op._params[0]
+                operation = gate(angle, qubits)
+            else:
+                operation = gate(qubits)
+                
+            tape_operations.append(operation)
+
+        tape = QuantumTape(tape_operations)
+        return tape
+    
     # Simulation
 
     def simulate(self) -> qf.State:
@@ -723,6 +760,10 @@ class Circuit:
         "SWAP": "swap",
     }
 
+    _INV_PENNYLANE_GATE_MAP: dict[str, str] = {v: k for k, v in _PENNYLANE_GATE_MAP.items()}
+
+    _MARQOV_ROTATION_GATES: set[str] = {"rx", "ry", "rz"}
+
     _PENNYLANE_ROTATION_GATES: set[str] = {"RX", "RY", "RZ"}
 
     _PENNYLANE_SKIP: set[str] = {"Barrier"}
@@ -1135,3 +1176,4 @@ def ghz_state(num_qubits: int) -> Circuit:
     for i in range(num_qubits - 1):
         circuit.cnot(i, i + 1)
     return circuit
+
