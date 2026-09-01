@@ -17,7 +17,7 @@ pytest tests/ -v
 ## §1 — Canonical Gate Set
 
 All executor and circuit converter contributions must support the following
-gates and raise `NotImplementedError` for anything outside this set. This list
+gates and raise `ValueError` for anything outside this set. This list
 is derived from `marqov/circuits.py` (`_QISKIT_GATE_MAP`) and represents what
 the SDK can round-trip today.
 
@@ -26,6 +26,7 @@ the SDK can round-trip today.
 | Single-qubit  | H, X, Y, Z, S, T            |
 | Rotation      | Rx(θ), Ry(θ), Rz(θ)         |
 | Two-qubit     | CNOT/CX, CZ, SWAP            |
+| Three-qubit   | Toffoli/CCX, Fredkin/CSWAP  |
 
 ## §2 — Executor Interface
 

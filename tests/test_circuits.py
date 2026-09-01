@@ -5,6 +5,31 @@ import pytest
 from marqov.circuits import Circuit, bell_state, ghz_state
 
 
+def _basis_index(bits: str) -> int:
+    """Flattened statevector index for a computational basis state.
+
+    When wires ``0..N-1`` are all allocated, QuantumFlow orders the statevector
+    with qubit 0 as the most significant bit, so the index is the bitstring read
+    left-to-right as ``q0 q1 ... qN``. Example: ``"100"`` -> index 4.
+    """
+    return int(bits, 2)
+
+
+def _state_equiv(circuit_a, circuit_b, atol: float = 1e-6) -> bool:
+    """True if two circuits produce the same state up to a global phase.
+
+    Compares full complex amplitudes via fidelity ``|<a|b>|^2``, so unlike a
+    magnitude-only check it catches qubit permutations and arg-order bugs even
+    when amplitudes share the same magnitude.
+    """
+    import numpy as np
+
+    a = circuit_a.simulate().tensor.flatten()
+    b = circuit_b.simulate().tensor.flatten()
+    fidelity = np.abs(np.vdot(a, b)) ** 2 / (np.vdot(a, a).real * np.vdot(b, b).real)
+    return bool(np.isclose(fidelity, 1.0, atol=atol))
+
+
 class TestCircuit:
     """Tests for Circuit class."""
 
@@ -38,6 +63,11 @@ class TestCircuit:
         circuit = Circuit().cx(0, 1)
         assert circuit.num_qubits == 2
 
+    def test_three_qubit_gates(self) -> None:
+        """Three-qubit gates (CCX, CSWAP) build a 3-qubit circuit."""
+        circuit = Circuit().ccx(0, 1, 2).cswap(0, 1, 2)
+        assert circuit.num_qubits == 3
+
     def test_method_chaining(self) -> None:
         """All gate methods return self for chaining."""
         circuit = Circuit().h(0).cnot(0, 1).x(1)
@@ -49,6 +79,69 @@ class TestCircuit:
         repr_str = repr(circuit)
         assert "Circuit" in repr_str
         assert "qubits" in repr_str
+
+
+class TestThreeQubitGates:
+    """Truth-table correctness for Toffoli (CCX) and Fredkin (CSWAP)."""
+
+    def test_toffoli_flips_when_both_controls_set(self) -> None:
+        """CCX flips the target only when both controls are |1>."""
+        import numpy as np
+
+        # |110> -> Toffoli -> |111>
+        amps = Circuit().x(0).x(1).ccx(0, 1, 2).simulate().tensor.flatten()
+        assert np.isclose(np.abs(amps[_basis_index("111")]) ** 2, 1.0)
+
+    def test_toffoli_leaves_target_when_control_unset(self) -> None:
+        """CCX leaves the target untouched when a control is |0>."""
+        import numpy as np
+
+        # q0=1, q1=0 -> no flip -> |100>
+        amps = Circuit().x(0).ccx(0, 1, 2).simulate().tensor.flatten()
+        assert np.isclose(np.abs(amps[_basis_index("100")]) ** 2, 1.0)
+
+    def test_fredkin_swaps_when_control_set(self) -> None:
+        """CSWAP swaps the two targets when the control is |1>."""
+        import numpy as np
+
+        # control q0=1, targets q1=1,q2=0 -> swapped -> q1=0,q2=1 -> |101>
+        amps = Circuit().x(0).x(1).cswap(0, 1, 2).simulate().tensor.flatten()
+        assert np.isclose(np.abs(amps[_basis_index("101")]) ** 2, 1.0)
+
+    def test_fredkin_no_swap_when_control_unset(self) -> None:
+        """CSWAP leaves the targets unchanged when the control is |0>."""
+        import numpy as np
+
+        # control q0=0 -> no swap -> q1=1 stays -> |010>
+        amps = Circuit().x(1).cswap(0, 1, 2).simulate().tensor.flatten()
+        assert np.isclose(np.abs(amps[_basis_index("010")]) ** 2, 1.0)
+
+    def test_toffoli_alias_matches_ccx(self) -> None:
+        """toffoli() is an alias for ccx()."""
+        assert _state_equiv(
+            Circuit().x(0).x(1).toffoli(0, 1, 2),
+            Circuit().x(0).x(1).ccx(0, 1, 2),
+        )
+
+    def test_fredkin_alias_matches_cswap(self) -> None:
+        """fredkin() is an alias for cswap()."""
+        assert _state_equiv(
+            Circuit().x(0).x(1).fredkin(0, 1, 2),
+            Circuit().x(0).x(1).cswap(0, 1, 2),
+        )
+
+    def test_cswap_out_of_order_qubits(self) -> None:
+        """CSWAP respects argument order with non-ascending qubit indices.
+
+        CSWAP has three distinct roles (one control, two targets), so this also
+        covers the CCX case, whose two controls are interchangeable.
+        """
+        import numpy as np
+
+        # control q1, targets q0 and q2: control set, q0=1,q2=0 -> swap to q0=0,q2=1
+        # start |110> (q0=1,q1=1,q2=0) -> |011>
+        amps = Circuit().x(0).x(1).cswap(1, 0, 2).simulate().tensor.flatten()
+        assert np.isclose(np.abs(amps[_basis_index("011")]) ** 2, 1.0)
 
 
 class TestSimulation:
@@ -127,6 +220,19 @@ class TestBackendConversion:
         imported = Circuit.from_braket(braket_circuit)
         assert imported.num_qubits == original.num_qubits
 
+    def test_three_qubit_gates_roundtrip(self) -> None:
+        """CCX and CSWAP survive a Braket roundtrip (state preserved up to phase).
+
+        The preps are asymmetric and fire each gate, so a control/target
+        permutation on import would fail the fidelity check (see _state_equiv).
+        """
+        for original in (
+            Circuit().ry(0.7, 0).x(1).ccx(0, 1, 2),
+            Circuit().ry(0.7, 0).x(1).cswap(0, 1, 2),
+        ):
+            imported = Circuit.from_braket(original.to_braket())
+            assert _state_equiv(original, imported)
+
 
 class TestFromQiskit:
     """Tests for Circuit.from_qiskit()."""
@@ -175,12 +281,11 @@ class TestFromQiskit:
         imported_amps = imported.simulate().tensor.flatten()
         assert np.allclose(np.abs(orig_amps), np.abs(imported_amps))
 
-    def test_toffoli_decomposes(self) -> None:
-        """Toffoli (CCX) gate is decomposed and produces correct output."""
+    def test_toffoli_imported_natively(self) -> None:
+        """A Qiskit Toffoli imports as a native CCX (it is in the basis set now)."""
         import numpy as np
         from qiskit import QuantumCircuit
 
-        # Build a Qiskit circuit with Toffoli (not in our basis set)
         qc = QuantumCircuit(3)
         qc.x(0)
         qc.x(1)
@@ -190,8 +295,49 @@ class TestFromQiskit:
 
         # |110⟩ -> Toffoli -> |111⟩
         amps = imported.simulate().tensor.flatten()
-        # Qubit ordering: |q2 q1 q0⟩ — |111⟩ = index 7
+        # |111⟩ is symmetric, so index 7 regardless of bit ordering.
         assert np.abs(amps[7]) ** 2 > 0.99
+
+    def test_unmapped_three_qubit_gate_decomposes(self) -> None:
+        """A 3-qubit gate outside the basis (CCZ) still decomposes and imports.
+
+        Guards the transpiler-decompose path now that CCX/CSWAP import natively:
+        CCZ has no direct mapping, so it must decompose through the basis
+        (CCZ == H(t) . CCX . H(t)).
+        """
+        from qiskit import QuantumCircuit
+
+        qc = QuantumCircuit(3)
+        qc.ry(0.7, 0)
+        qc.x(1)
+        qc.ccz(0, 1, 2)
+
+        imported = Circuit.from_qiskit(qc)
+        equivalent = Circuit().ry(0.7, 0).x(1).h(2).ccx(0, 1, 2).h(2)
+        assert _state_equiv(imported, equivalent)
+
+    def test_three_qubit_gates_roundtrip(self) -> None:
+        """CCX and CSWAP survive a Qiskit roundtrip (state preserved up to phase)."""
+        for original in (
+            Circuit().ry(0.7, 0).x(1).ccx(0, 1, 2),
+            Circuit().ry(0.7, 0).x(1).cswap(0, 1, 2),
+        ):
+            imported = Circuit.from_qiskit(original.to_qiskit())
+            assert _state_equiv(original, imported)
+
+    def test_native_cswap_imported_directly(self) -> None:
+        """A Qiskit cswap is mapped to a native Fredkin, not decomposed away."""
+        import numpy as np
+        from qiskit import QuantumCircuit
+
+        qc = QuantumCircuit(3)
+        qc.x(0)  # control
+        qc.x(1)  # target0
+        qc.cswap(0, 1, 2)  # swap q1,q2 -> q1=0, q2=1
+
+        imported = Circuit.from_qiskit(qc)
+        amps = imported.simulate().tensor.flatten()
+        assert np.isclose(np.abs(amps[_basis_index("101")]) ** 2, 1.0)
 
     def test_barriers_ignored(self) -> None:
         """Barrier instructions are silently skipped."""
@@ -349,8 +495,8 @@ class TestFromCirq:
         imported_amps = imported.simulate().tensor.flatten()
         assert np.allclose(np.abs(orig_amps), np.abs(imported_amps))
 
-    def test_toffoli_decomposes(self) -> None:
-        """Toffoli (CCX) gate is decomposed and produces correct output."""
+    def test_toffoli_imported_natively(self) -> None:
+        """A Cirq TOFFOLI imports as a native CCX (it is in the basis set now)."""
         import cirq
         import numpy as np
 
@@ -365,8 +511,33 @@ class TestFromCirq:
 
         # |110⟩ -> Toffoli -> |111⟩
         amps = imported.simulate().tensor.flatten()
-        # Qubit ordering: |q2 q1 q0⟩ — |111⟩ = index 7
+        # |111⟩ is symmetric, so index 7 regardless of bit ordering.
         assert np.abs(amps[7]) ** 2 > 0.99
+
+    def test_three_qubit_gates_roundtrip(self) -> None:
+        """CCX and CSWAP survive a Cirq roundtrip (state preserved up to phase)."""
+        for original in (
+            Circuit().ry(0.7, 0).x(1).ccx(0, 1, 2),
+            Circuit().ry(0.7, 0).x(1).cswap(0, 1, 2),
+        ):
+            imported = Circuit.from_cirq(original.to_cirq())
+            assert _state_equiv(original, imported)
+
+    def test_native_fredkin_imported_directly(self) -> None:
+        """A native Cirq FREDKIN maps to a Fredkin, not a decomposition."""
+        import cirq
+        import numpy as np
+
+        q0, q1, q2 = cirq.LineQubit.range(3)
+        cc = cirq.Circuit([
+            cirq.X(q0),  # control
+            cirq.X(q1),  # target0
+            cirq.FREDKIN(q0, q1, q2),  # swap q1,q2 -> q1=0, q2=1
+        ])
+
+        imported = Circuit.from_cirq(cc)
+        amps = imported.simulate().tensor.flatten()
+        assert np.isclose(np.abs(amps[_basis_index("101")]) ** 2, 1.0)
 
     def test_measurements_skipped(self) -> None:
         """Measurement gates are silently skipped."""
@@ -566,8 +737,8 @@ class TestFromPennylane:
         imported_amps = imported.simulate().tensor.flatten()
         assert np.allclose(np.abs(orig_amps), np.abs(imported_amps))
 
-    def test_toffoli_decomposes(self) -> None:
-        """Toffoli gate is decomposed and produces correct output."""
+    def test_toffoli_imported_natively(self) -> None:
+        """A PennyLane Toffoli imports as a native CCX (it is in the basis set now)."""
         import numpy as np
         import pennylane as qml
 
@@ -581,6 +752,43 @@ class TestFromPennylane:
         # |110⟩ -> Toffoli -> |111⟩
         amps = imported.simulate().tensor.flatten()
         assert np.abs(amps[7]) ** 2 > 0.99
+
+    def test_three_qubit_gates_match_equivalent_circuit(self) -> None:
+        """Toffoli/CSWAP from a tape match an equivalent Marqov circuit.
+
+        PennyLane has no to_pennylane() export yet (issue #27), so we compare a
+        natively-built tape against the equivalent Marqov circuit rather than
+        doing a to->from roundtrip.
+        """
+        import pennylane as qml
+
+        cases = [
+            (
+                [qml.RY(0.7, wires=0), qml.PauliX(wires=1), qml.Toffoli(wires=[0, 1, 2])],
+                Circuit().ry(0.7, 0).x(1).ccx(0, 1, 2),
+            ),
+            (
+                [qml.RY(0.7, wires=0), qml.PauliX(wires=1), qml.CSWAP(wires=[0, 1, 2])],
+                Circuit().ry(0.7, 0).x(1).cswap(0, 1, 2),
+            ),
+        ]
+        for ops, original in cases:
+            imported = Circuit.from_pennylane(self._make_tape(ops))
+            assert _state_equiv(original, imported)
+
+    def test_native_cswap_imported_directly(self) -> None:
+        """A native PennyLane CSWAP maps to a Fredkin, not a decomposition."""
+        import numpy as np
+        import pennylane as qml
+
+        tape = self._make_tape([
+            qml.PauliX(wires=0),  # control
+            qml.PauliX(wires=1),  # target0
+            qml.CSWAP(wires=[0, 1, 2]),  # swap q1,q2 -> q1=0, q2=1
+        ])
+        imported = Circuit.from_pennylane(tape)
+        amps = imported.simulate().tensor.flatten()
+        assert np.isclose(np.abs(amps[_basis_index("101")]) ** 2, 1.0)
 
     def test_type_error_on_wrong_input(self) -> None:
         """TypeError raised for non-tape input."""
@@ -827,6 +1035,24 @@ class TestOpenQASM:
         rest_state = restored.simulate().tensor.flatten()
         assert np.allclose(np.abs(orig_state), np.abs(rest_state), atol=1e-6)
 
+    def test_ccx_roundtrip_v2_and_v3(self) -> None:
+        """Toffoli survives OpenQASM 2 and 3 roundtrips (state preserved up to phase)."""
+        original = Circuit().ry(0.7, 0).x(1).ccx(0, 1, 2)
+        for version in (2, 3):
+            restored = Circuit.from_openqasm(original.to_openqasm(version=version))
+            assert _state_equiv(original, restored), f"v{version}"
+
+    def test_cswap_roundtrip_v2_and_v3(self) -> None:
+        """Fredkin survives OpenQASM 2 and 3 roundtrips (state preserved up to phase).
+
+        QASM2 needs the legacy qelib1 gate set on import: qiskit's default QASM2
+        builtins omit cswap even though it dumps one (see from_openqasm).
+        """
+        original = Circuit().ry(0.7, 0).x(1).cswap(0, 1, 2)
+        for version in (2, 3):
+            restored = Circuit.from_openqasm(original.to_openqasm(version=version))
+            assert _state_equiv(original, restored), f"v{version}"
+
     def test_auto_detects_qasm2(self) -> None:
         """from_openqasm auto-detects QASM 2.0."""
         qasm2_str = 'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[1];\nh q[0];\n'
@@ -890,3 +1116,18 @@ class TestSerialization:
         orig_state = original.simulate().tensor.flatten()
         rest_state = restored.simulate().tensor.flatten()
         assert np.allclose(np.abs(orig_state), np.abs(rest_state))
+
+    def test_to_dict_three_qubit_gate_names(self) -> None:
+        """to_dict serializes CCX and CSWAP under their QuantumFlow names."""
+        data = Circuit().ccx(0, 1, 2).cswap(0, 1, 2).to_dict()
+        names = [g["gate"] for g in data["gates"]]
+        assert names == ["CCNot", "CSwap"]
+
+    def test_three_qubit_gates_roundtrip(self) -> None:
+        """CCX and CSWAP survive a to_dict/from_dict roundtrip (up to phase)."""
+        for original in (
+            Circuit().ry(0.7, 0).x(1).ccx(0, 1, 2),
+            Circuit().ry(0.7, 0).x(1).cswap(0, 1, 2),
+        ):
+            restored = Circuit.from_dict(original.to_dict())
+            assert _state_equiv(original, restored)
