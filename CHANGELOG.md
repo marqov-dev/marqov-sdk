@@ -7,8 +7,13 @@ release.
 
 ## [Unreleased]
 
-Prepared release version: **0.6.1**. Publication is pending; the changes below
-are not a record of a published package.
+### Documentation
+
+- Added the [QuTiP guide](docs/qutip.md) covering local installation,
+  copy-and-run examples, result recording, seed replay, saved states and
+  troubleshooting. This guide was added after the 0.6.1 release.
+
+## [0.6.1] — 2026-09-08
 
 ### Added
 
