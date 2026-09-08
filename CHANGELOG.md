@@ -7,6 +7,9 @@ release.
 
 ## [Unreleased]
 
+Prepared release version: **0.6.0**. Publication is pending; the changes below
+are not a record of a published package.
+
 ### Added
 
 - `WorkflowDispatch.capture()` exposes the existing graph and a process-local
@@ -17,6 +20,14 @@ release.
   responsibilities. Legacy `run()`/`start()` result transport is unchanged.
 
 ### Fixed
+
+- **Executor result normalization:** IBM now selects classical registers by their
+  count-reading capability and normalizes bitstrings to qubit 0 leftmost. Results
+  containing multiple measured registers raise `NotImplementedError` instead of
+  silently returning only one register. Braket probability fallback and IonQ
+  histogram conversion now use shared largest-remainder allocation so counts
+  sum to the requested shots, including unnormalized histograms. Asymmetric
+  result fixtures cover bit order. (marqov-sdk#114)
 
 - Task dependency extraction now follows nested list/tuple/dictionary values,
   matching argument serialization, and deduplicates predecessors in encounter
