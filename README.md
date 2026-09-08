@@ -63,16 +63,15 @@ pip install "marqov[qutip,qiskit]"
 pip install "marqov[all]"
 ```
 
-Run the local [QuTiP decay example](examples/qutip_decay.py) after installing
-`marqov[qutip]`:
+See the [QuTiP guide](docs/qutip.md) for a copy-and-run simulation, recorded
+observables, seed replay and saved-state handling. In a source checkout, run:
 
 ```bash
 python examples/qutip_decay.py
 ```
 
-It prints solver times and the `sigma_z` observable as JSON. No account is
-required. Managed execution requires separate runtime support; installing this
-extra does not enable a hosted service.
+The example prints JSON and runs locally without an account. Installing the
+wheel does not install the examples directory or enable managed execution.
 
 For local development:
 
