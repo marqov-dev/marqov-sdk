@@ -49,6 +49,17 @@ rather than a failure, but the first upload of a version is still one-way.
       provider API, or a transient timeout, is a **WARN**, not a failure — eyeball
       each so an outage on release day doesn't block the tag.
 
+For releases containing QuTiP packaging changes, run the isolated wheel check
+after building (requires `uv` on PATH):
+
+```bash
+.venv/bin/python tools/smoke_qutip_wheel.py /absolute/path/to/marqov-X.Y.Z-py3-none-any.whl
+```
+
+It installs the base wheel in a temporary environment, verifies QuTiP is absent,
+then installs the same wheel with `[qutip]` and runs the local decay example.
+Dependencies resolve from real PyPI; it does not upload anything.
+
 ## 3. Build, inspect, dry-run to TestPyPI
 - [ ] Look inside the artifact before any upload:
       ```
