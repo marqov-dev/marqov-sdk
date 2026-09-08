@@ -34,6 +34,7 @@ from marqov.workflows.decorators import (
     WorkflowDispatch,
 )
 from marqov.workflows.graph import TransportGraph, TaskProxy
+from marqov.workflows.capture import WorkflowCapture, TaskResultReference
 from marqov.workflows.temporal_workflow import JobWorkflow
 from marqov.workflows.runner import create_worker
 from marqov.workflows.activity import execute_task, prepare_node_inputs
@@ -65,6 +66,8 @@ __all__ = [
     "task",
     "workflow",
     "WorkflowDispatch",
+    "WorkflowCapture",
+    "TaskResultReference",
     "TransportGraph",
     "TaskProxy",
     "JobWorkflow",

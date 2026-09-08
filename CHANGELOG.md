@@ -7,7 +7,24 @@ release.
 
 ## [Unreleased]
 
+### Added
+
+- `WorkflowDispatch.capture()` exposes the existing graph and a process-local
+  return template for execution adapters, preserving names, plain containers,
+  constants and repeated task-result references. `WorkflowCapture.resolve_output`
+  reconstructs that value from completed node results without submitting work.
+  See [workflow capture](docs/workflow-capture.md) for supported forms and codec
+  responsibilities. Legacy `run()`/`start()` result transport is unchanged.
+
 ### Fixed
+
+- Task dependency extraction now follows nested list/tuple/dictionary values,
+  matching argument serialization, and deduplicates predecessors in encounter
+  order. Cyclic argument containers raise an explicit error.
+- **Behavior correction:** using an unresolved task proxy as a boolean now raises
+  `TypeError` instead of silently selecting the true branch during graph build.
+  Dynamic branching on task results requires an execution mechanism; Python
+  truthiness cannot implement it at capture time.
 
 - **`Circuit.from_qiskit`/`from_cirq`/`from_pyquil` silently discarded
   mid-circuit `measure`, `reset`, and `delay` instructions.** A terminal

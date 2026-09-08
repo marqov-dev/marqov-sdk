@@ -25,9 +25,12 @@ from __future__ import annotations
 
 import base64
 from functools import wraps
-from typing import Any, Callable, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Callable, TypeVar, overload
 
 import cloudpickle
+
+if TYPE_CHECKING:
+    from marqov.workflows.capture import WorkflowCapture
 
 from marqov.workflows.graph import (
     TaskConfig,
@@ -42,6 +45,7 @@ from marqov.workflows.graph import (
 
 T = TypeVar("T")
 F = TypeVar("F", bound=Callable[..., Any])
+_NO_CAPTURE_RESULT = object()
 
 
 def _serialize_arg(arg: Any) -> Any:
@@ -208,6 +212,8 @@ class WorkflowDispatch:
         name: str,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
+        *,
+        captured_result: Any = _NO_CAPTURE_RESULT,
     ) -> None:
         """Initialize the dispatch handle.
 
@@ -221,6 +227,21 @@ class WorkflowDispatch:
         self.name = name
         self._args = args
         self._kwargs = kwargs
+        self._captured_result = captured_result
+
+    def capture(self) -> WorkflowCapture:
+        """Export this already-built graph and its complete return structure.
+
+        No workflow body is rerun and no task is submitted. The returned object
+        contains executable material; an adapter must select an appropriate
+        isolated runtime and artifact codec. This is not the legacy Temporal
+        JSON transport and does not change run()/start() result semantics.
+        """
+        from marqov.workflows.capture import capture_output
+
+        if self._captured_result is _NO_CAPTURE_RESULT:
+            raise ValueError("Dispatch has no captured return value")
+        return capture_output(self.graph, self._captured_result)
 
     def visualize(self) -> str:
         """Return DOT format graph visualization.
@@ -490,6 +511,7 @@ def workflow(
                 name=workflow_name,
                 args=args,
                 kwargs=kwargs,
+                captured_result=result,
             )
 
         # Mark as workflow for introspection
@@ -501,4 +523,3 @@ def workflow(
     if func is not None:
         return decorator(func)
     return decorator
-

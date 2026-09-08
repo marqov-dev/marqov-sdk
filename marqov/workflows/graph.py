@@ -114,6 +114,10 @@ class TaskProxy:
         """Return string representation."""
         return f"TaskProxy({self._node.func_name}, id={self._node.id})"
 
+    def __bool__(self) -> bool:
+        """An unresolved result cannot select a Python control-flow branch."""
+        raise TypeError("Cannot use an unresolved task result as a boolean")
+
 
 class TransportGraph:
     """Directed acyclic graph of task dependencies.
@@ -271,7 +275,11 @@ def generate_node_id() -> str:
 
 
 def extract_dependencies(args: tuple[Any, ...], kwargs: dict[str, Any]) -> list[str]:
-    """Extract node IDs from TaskProxy arguments.
+    """Extract unique node IDs recursively from TaskProxy arguments.
+
+    Traverses the same list, tuple and dictionary-value containers as argument
+    serialization, preserving first occurrence order. Cyclic containers fail
+    explicitly; custom objects are opaque leaves.
 
     Args:
         args: Positional arguments that may contain proxies.
@@ -282,21 +290,26 @@ def extract_dependencies(args: tuple[Any, ...], kwargs: dict[str, Any]) -> list[
     """
     deps: list[str] = []
 
-    for arg in args:
-        if isinstance(arg, TaskProxy):
-            deps.append(arg.node_id)
-        elif isinstance(arg, (list, tuple)):
-            for item in arg:
-                if isinstance(item, TaskProxy):
-                    deps.append(item.node_id)
+    seen: set[str] = set()
+    active: set[int] = set()
 
-    for value in kwargs.values():
+    def visit(value: Any) -> None:
         if isinstance(value, TaskProxy):
-            deps.append(value.node_id)
-        elif isinstance(value, (list, tuple)):
-            for item in value:
-                if isinstance(item, TaskProxy):
-                    deps.append(item.node_id)
+            if value.node_id not in seen:
+                seen.add(value.node_id)
+                deps.append(value.node_id)
+        elif isinstance(value, (list, tuple, dict)):
+            identity = id(value)
+            if identity in active:
+                raise ValueError("Cyclic task argument containers are not supported")
+            active.add(identity)
+            try:
+                for item in value.values() if isinstance(value, dict) else value:
+                    visit(item)
+            finally:
+                active.remove(identity)
+
+    visit(args)
+    visit(kwargs)
 
     return deps
-
