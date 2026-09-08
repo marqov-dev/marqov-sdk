@@ -47,15 +47,32 @@ Independent tasks execute in parallel automatically. Marqov handles scheduling, 
 pip install marqov
 ```
 
-With backend-specific extras:
+With framework- or backend-specific extras:
 
 ```bash
 # IBM Quantum
 pip install "marqov[ibm]"
 
-# All extras
+# QuTiP solvers and Marqov's result-recording helper
+pip install "marqov[qutip]"
+
+# Combine selected frameworks
+pip install "marqov[qutip,qiskit]"
+
+# Broad framework bundle
 pip install "marqov[all]"
 ```
+
+Run the local [QuTiP decay example](examples/qutip_decay.py) after installing
+`marqov[qutip]`:
+
+```bash
+python examples/qutip_decay.py
+```
+
+It prints solver times and the `sigma_z` observable as JSON. No account is
+required. Managed execution requires separate runtime support; installing this
+extra does not enable a hosted service.
 
 For local development:
 

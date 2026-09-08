@@ -7,8 +7,19 @@ release.
 
 ## [Unreleased]
 
-Prepared release version: **0.6.0**. Publication is pending; the changes below
+Prepared release version: **0.6.1**. Publication is pending; the changes below
 are not a record of a published package.
+
+### Added
+
+- Optional `marqov[qutip]` installation includes QuTiP 5 dependencies
+  (`>=5.3.0,<6.0.0`) for solver use with the existing `marqov.qutip.record` helper.
+  QuTiP is also included in `marqov[all]`; the base SDK dependencies are unchanged.
+
+- A runnable local QuTiP decay example and a clean-install wheel smoke check
+  verify optional installation and recorded observables against analytic decay.
+
+## [0.6.0] — 2026-09-08
 
 ### Added
 
