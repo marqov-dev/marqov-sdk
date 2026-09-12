@@ -42,3 +42,22 @@ It must not replace the released 0.6.1 artifact. A reviewed new release/version,
 published wheel hash, refreshed frozen platform profiles and exact container
 qualification are required before runtime adoption. No package was published and
 no hosted runtime was changed by this qualification.
+
+## Release candidate
+
+The candidate is version0.7.0 because default installation no longer supplies
+Braket execution, circuit conversion or the MarqovDevice local simulator.
+Existing users of those paths must install `marqov[braket]` (or `[all]`).
+Independent review found no blocking code issue. The earlier0.6.1 local wheel
+was qualification evidence only; published0.6.1 remains immutable. The0.7.0
+artifact must be reviewed, published, pinned and qualified by the platform before
+adoption. No publication is implied by this version change.
+
+The built0.7.0 local candidate wheel passed the same installed-core proof with
+cloudpickle3.1.2, Braket absent,100-shot local Bell simulation and a captured
+function executed in a fresh process returning the structured answer42.
+Candidate SHA256: `8843a6d43201ef219aba06ca35d2ee02326a83ff216cec618aedd50b1c8e24c7`.
+This local build hash is not a claim about a future published artifact.
+
+Final0.7.0 candidate full suite:780 passed,20 skipped and13 pre-existing XPASS,
+with no new skips or expected failures. Log: `/private/tmp/marqov-sdk-070-full-tests.log`.
