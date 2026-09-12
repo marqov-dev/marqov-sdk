@@ -24,9 +24,14 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-import boto3
-from braket.aws import AwsDevice, AwsSession
-from braket.circuits import Circuit as BraketCircuit
+try:
+    import boto3
+    from braket.aws import AwsDevice, AwsSession
+    from braket.circuits import Circuit as BraketCircuit
+except ModuleNotFoundError as error:
+    if error.name not in {"boto3", "braket"}:
+        raise
+    boto3 = AwsDevice = AwsSession = BraketCircuit = None
 
 from marqov.executors._counts import allocate_counts
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
@@ -125,6 +130,8 @@ class BraketExecutor(BaseExecutor):
         Args:
             config: Executor configuration including device ARN and S3 settings.
         """
+        if AwsDevice is None:
+            raise ImportError('AWS Braket requires pip install "marqov[braket]"')
         self.config = config
         self._device: AwsDevice | None = None
         self._aws_session: AwsSession | None = None

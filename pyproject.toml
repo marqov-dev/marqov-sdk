@@ -25,8 +25,8 @@ dependencies = [
     "temporalio>=1.7.0",
     # Circuit transpilation (marqov-owned fork of QuantumFlow v1.4.0; see marqov-dev/marqov-quantumflow)
     "marqov-quantumflow==1.0.0",
-    # AWS Braket
-    "amazon-braket-sdk>=1.80.0",
+    # Workflow serialization is core, independent of provider installations.
+    "cloudpickle>=2.2.1",
     # Azure Quantum
     "azure-quantum>=1.0.0",
     # CLI
@@ -43,6 +43,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+braket = [
+    # Earlier versions permit unsafe deserialization of job results/checkpoints.
+    "amazon-braket-sdk>=1.117.0",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
@@ -111,6 +115,7 @@ rigetti = [
     "pyquil>=4.0.0",
 ]
 all = [
+    "amazon-braket-sdk>=1.117.0",
     "qutip>=5.3.0,<6.0.0",
     "qiskit>=1.0.0",
     "qiskit-ibm-runtime>=0.20.0",

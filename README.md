@@ -50,6 +50,9 @@ pip install marqov
 With framework- or backend-specific extras:
 
 ```bash
+# AWS Braket
+pip install "marqov[braket]"
+
 # IBM Quantum
 pip install "marqov[ibm]"
 
@@ -62,6 +65,14 @@ pip install "marqov[qutip,qiskit]"
 # Broad framework bundle
 pip install "marqov[all]"
 ```
+
+AWS Braket is an optional provider dependency. Existing Braket installations
+should use `marqov[braket]` (or `marqov[all]`) when upgrading. Core workflows,
+`LocalExecutor` and `Circuit.simulate()` do not require it. `MarqovDevice` with
+`local` or `marqov-sim` uses Braket's local simulator and needs the extra, as do
+Braket circuit conversions. Hosted compiler/task environments can pin
+their serialization version without inheriting Braket's separate job serializer
+constraint.
 
 See the [QuTiP guide](docs/qutip.md) for a copy-and-run simulation, recorded
 observables, seed replay and saved-state handling. In a source checkout, run:

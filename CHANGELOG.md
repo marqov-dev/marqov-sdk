@@ -5,7 +5,19 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
-## [Unreleased]
+## [0.7.0] — release candidate
+
+### Changed
+
+- AWS Braket is now an optional `marqov[braket]` dependency, also included in
+  `marqov[all]`, with a security floor of `amazon-braket-sdk>=1.117.0`.
+  Existing Braket users must select that extra when installing or upgrading.
+  This includes `MarqovDevice`'s `local`/`marqov-sim` simulator and Braket circuit
+  conversions. Their execution semantics are unchanged; missing installations
+  now report the required extra.
+- Workflow serialization declares `cloudpickle>=2.2.1` directly. A core-only
+  compiler/task environment can pin its own compatible serialization version
+  without inheriting Braket's job serialization dependency constraint.
 
 ### Documentation
 
