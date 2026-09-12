@@ -1442,9 +1442,9 @@ wheels = [
 name = "marqov"
 source = { editable = "." }
 dependencies = [
-    { name = "amazon-braket-sdk" },
     { name = "azure-quantum" },
     { name = "click" },
+    { name = "cloudpickle" },
     { name = "marqov-quantumflow" },
     { name = "numpy" },
     { name = "pydantic" },
@@ -1456,6 +1456,7 @@ dependencies = [
 
 [package.optional-dependencies]
 all = [
+    { name = "amazon-braket-sdk" },
     { name = "cirq-core" },
     { name = "pennylane" },
     { name = "pyquil" },
@@ -1471,6 +1472,9 @@ all = [
 azure = [
     { name = "cirq" },
     { name = "qiskit" },
+]
+braket = [
+    { name = "amazon-braket-sdk" },
 ]
 cirq = [
     { name = "cirq-core" },
@@ -1529,12 +1533,14 @@ rigetti = [
 
 [package.metadata]
 requires-dist = [
-    { name = "amazon-braket-sdk", specifier = ">=1.80.0" },
+    { name = "amazon-braket-sdk", marker = "extra == 'all'", specifier = ">=1.117.0" },
+    { name = "amazon-braket-sdk", marker = "extra == 'braket'", specifier = ">=1.117.0" },
     { name = "azure-quantum", specifier = ">=1.0.0" },
     { name = "cirq", marker = "extra == 'azure'", specifier = ">=1.0.0" },
     { name = "cirq-core", marker = "extra == 'all'", specifier = ">=1.0.0" },
     { name = "cirq-core", marker = "extra == 'cirq'", specifier = ">=1.0.0" },
     { name = "click", specifier = ">=8.0.0" },
+    { name = "cloudpickle", specifier = ">=2.2.1" },
     { name = "cudaq", marker = "sys_platform == 'linux' and extra == 'cudaq'", specifier = ">=0.14.2" },
     { name = "marqov-quantumflow", specifier = "==1.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
@@ -1581,7 +1587,7 @@ requires-dist = [
     { name = "structlog", specifier = ">=24.0.0" },
     { name = "temporalio", specifier = ">=1.7.0" },
 ]
-provides-extras = ["all", "azure", "cirq", "cudaq", "dev", "ibm", "ionq", "openqasm", "pennylane", "pyquil", "pytket", "qiskit", "quantinuum", "qutip", "rigetti"]
+provides-extras = ["all", "azure", "braket", "cirq", "cudaq", "dev", "ibm", "ionq", "openqasm", "pennylane", "pyquil", "pytket", "qiskit", "quantinuum", "qutip", "rigetti"]
 
 [[package]]
 name = "marqov-quantumflow"

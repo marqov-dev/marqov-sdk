@@ -6,6 +6,7 @@ import asyncio
 
 from marqov.backends import is_azure, is_braket, is_ibm, is_simulator
 from marqov.circuits import Circuit
+from marqov._optional import require_braket
 
 
 def _run_loop_safe(fn):
@@ -68,6 +69,7 @@ class MarqovDevice:
             return self._provider_device
 
         if self._backend in ("local", "marqov-sim"):
+            require_braket()
             from braket.devices import LocalSimulator
 
             self._provider_device = LocalSimulator()

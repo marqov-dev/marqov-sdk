@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING
 
 import quantumflow as qf
 
+from marqov._optional import require_braket
+
 if TYPE_CHECKING:
     from braket.circuits import Circuit as BraketCircuit
     from pyquil import Program as PyQuilProgram
@@ -213,6 +215,7 @@ class Circuit:
         Returns:
             Braket Circuit object ready for execution.
         """
+        require_braket()
         return qf.circuit_to_braket(self._qf, translate=True)
 
     def to_qiskit(self):
@@ -323,6 +326,7 @@ class Circuit:
             New Circuit instance.
         """
         circuit = cls()
+        require_braket()
         circuit._qf = qf.braket_to_circuit(braket_circuit)
         return circuit
 
