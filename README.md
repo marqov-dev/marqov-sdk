@@ -37,7 +37,7 @@ dispatch = multi_shot_study([100, 500, 1000, 5000])
 # dispatch.run(client) — needs a Temporal worker
 ```
 
-Independent tasks execute in parallel automatically. Marqov handles scheduling, retries, and result collection across any supported backend. Run your own Temporal worker (see `marqov/workflows/`). Hosted execution is provided separately by the [Marqov Platform](https://marqov.ai); SDK installation alone does not enable managed execution.
+Independent tasks execute in parallel automatically. Marqov handles scheduling, retries, and result collection across any supported backend. Run your own Temporal worker (see `marqov/workflows/`). Hosted execution is provided separately by the [Marqov Platform](https://marqov.ai). SDK installation alone does not enable managed execution.
 
 ---
 
