@@ -120,11 +120,18 @@ class QiliSDKExecutor(BaseExecutor):
         Args:
             circuit: The circuit to execute.
             shots: Number of measurement shots.
-            **kwargs: Additional options (ignored today).
+            **kwargs: Unsupported options; any supplied option raises TypeError.
 
         Returns:
             ExecutionResult with measurement counts.
+
+        Raises:
+            TypeError: If unsupported keyword options are supplied.
         """
+        if kwargs:
+            names = ", ".join(sorted(kwargs))
+            raise TypeError(f"QiliSDKExecutor.execute() got unsupported options: {names}")
+
         circuit = self._validate_circuit(circuit)
 
         from qilisdk.functionals import DigitalPropagation
@@ -173,11 +180,18 @@ class QiliSDKExecutor(BaseExecutor):
                 value or an explicit `QTensor`. Defaults to
                 `InitialState.UNIFORM` (equal superposition), the standard
                 starting point for a transverse-field-driver anneal.
-            **kwargs: Additional options (ignored today).
+            **kwargs: Unsupported options; any supplied option raises TypeError.
 
         Returns:
             ExecutionResult with measurement counts.
+
+        Raises:
+            TypeError: If unsupported keyword options are supplied.
         """
+        if kwargs:
+            names = ", ".join(sorted(kwargs))
+            raise TypeError(f"QiliSDKExecutor.execute_analog() got unsupported options: {names}")
+
         from qilisdk.core.qtensor import InitialState as _InitialState
         from qilisdk.functionals import AnalogEvolution
         from qilisdk.readout import Readout
