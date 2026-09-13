@@ -37,11 +37,14 @@ dispatch = multi_shot_study([100, 500, 1000, 5000])
 # dispatch.run(client) — needs a Temporal worker
 ```
 
-Independent tasks execute in parallel automatically. Marqov handles scheduling, retries, and result collection across any supported backend. Run your own Temporal worker (see `marqov/workflows/`) — or skip the infrastructure entirely with the hosted [Marqov Platform](https://marqov.ai).
+Independent tasks execute in parallel automatically. Marqov handles scheduling, retries, and result collection across any supported backend. Run your own Temporal worker (see `marqov/workflows/`). Hosted execution is provided separately by the [Marqov Platform](https://marqov.ai). SDK installation alone does not enable managed execution.
 
 ---
 
 ## Installation
+
+SDK 0.7.0 is published. See the [changelog](CHANGELOG.md) and
+[0.7.0 upgrade guide](docs/releases/0.7.0.md), especially if you use AWS Braket.
 
 ```bash
 pip install marqov
@@ -98,7 +101,8 @@ pytest tests/ -v
 ## Cloud Executors
 
 Swap in a cloud backend when you're ready to run on hardware — on **your own
-provider accounts**, no Marqov account needed:
+provider accounts**, no Marqov account needed. The AWS example below requires
+`pip install "marqov[braket]"` and your AWS credentials:
 
 ```python
 import asyncio
@@ -169,7 +173,7 @@ from marqov.circuits import Circuit
 circuit = Circuit().h(0).cnot(0, 1)
 
 circuit.to_qiskit()   # qiskit.QuantumCircuit
-circuit.to_braket()   # braket.circuits.Circuit
+circuit.to_braket()   # braket.circuits.Circuit (requires marqov[braket])
 circuit.to_cirq()     # cirq.Circuit
 circuit.to_pyquil()   # pyquil.Program  (requires pip install marqov[pyquil])
 ```

@@ -5,7 +5,11 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
-## [0.7.0] — release candidate
+## [0.7.0] — 2026-09-12
+
+Published on [PyPI](https://pypi.org/project/marqov/0.7.0/). See the
+[upgrade guide](docs/releases/0.7.0.md) and
+[release record](https://github.com/marqov-dev/marqov-sdk/releases/tag/v0.7.0).
 
 ### Changed
 
