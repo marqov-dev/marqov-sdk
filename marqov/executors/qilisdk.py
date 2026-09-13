@@ -105,14 +105,15 @@ class QiliSDKExecutor(BaseExecutor):
         except ImportError as exc:
             extra = _SIMULATOR_EXTRA.get(self.config.simulator, "")
             raise ImportError(
-                f"qilisdk is required for QiliSDKExecutor. "
-                f"Install with: pip install qilisdk{extra}"
+                f"qilisdk is required for QiliSDKExecutor. Install with: pip install qilisdk{extra}"
             ) from exc
 
     async def execute(
         self,
         circuit: Circuit,
         shots: int = 1000,
+        *,
+        seed: int | None = None,
         **kwargs: Any,
     ) -> ExecutionResult:
         """Run circuit on a qilisdk local simulator.
@@ -120,18 +121,24 @@ class QiliSDKExecutor(BaseExecutor):
         Args:
             circuit: The circuit to execute.
             shots: Number of measurement shots.
+            seed: Per-call QiliSim sampling seed, an integer from 0 to 2**31-1.
+                Uses a fresh single-threaded simulator for each seeded call.
+                Repeatability requires the same program, shots and software/platform.
+                None preserves the default unseeded behavior. Unsupported for qutip.
             **kwargs: Unsupported options; any supplied option raises TypeError.
 
         Returns:
             ExecutionResult with measurement counts.
 
         Raises:
-            TypeError: If unsupported keyword options are supplied.
+            TypeError: If unsupported keyword options or a non-integer seed are supplied.
+            ValueError: If the seed is out of range or the simulator is qutip.
         """
         if kwargs:
             names = ", ".join(sorted(kwargs))
             raise TypeError(f"QiliSDKExecutor.execute() got unsupported options: {names}")
 
+        backend = self._backend_for_seed(seed)
         circuit = self._validate_circuit(circuit)
 
         from qilisdk.functionals import DigitalPropagation
@@ -143,7 +150,7 @@ class QiliSDKExecutor(BaseExecutor):
         propagation = DigitalPropagation(circuit=qili_circuit)
         readout = Readout().with_sampling(nshots=shots)
 
-        result = self._backend.execute(propagation, readout)
+        result = backend.execute(propagation, readout)
         counts = result.get_samples()
 
         execution_time_ms = (time.perf_counter() - start_time) * 1000
@@ -154,7 +161,10 @@ class QiliSDKExecutor(BaseExecutor):
             execution_time_ms=execution_time_ms,
             shots=shots,
             raw_result=result,
-            metadata={"simulator": self.config.simulator},
+            metadata={
+                "simulator": self.config.simulator,
+                **({"seed": seed, "num_threads": 1} if seed is not None else {}),
+            },
         )
 
     async def execute_analog(
@@ -162,6 +172,8 @@ class QiliSDKExecutor(BaseExecutor):
         schedule: Schedule,
         shots: int = 1000,
         initial_state: InitialState | QTensor | None = None,
+        *,
+        seed: int | None = None,
         **kwargs: Any,
     ) -> ExecutionResult:
         """Run a qilisdk analog (Hamiltonian-evolution) program on a local simulator.
@@ -180,17 +192,24 @@ class QiliSDKExecutor(BaseExecutor):
                 value or an explicit `QTensor`. Defaults to
                 `InitialState.UNIFORM` (equal superposition), the standard
                 starting point for a transverse-field-driver anneal.
+            seed: Per-call QiliSim sampling seed, an integer from 0 to 2**31-1.
+                Uses a fresh single-threaded simulator for each seeded call.
+                Repeatability requires the same program, shots and software/platform.
+                None preserves the default unseeded behavior. Unsupported for qutip.
             **kwargs: Unsupported options; any supplied option raises TypeError.
 
         Returns:
             ExecutionResult with measurement counts.
 
         Raises:
-            TypeError: If unsupported keyword options are supplied.
+            TypeError: If unsupported keyword options or a non-integer seed are supplied.
+            ValueError: If the seed is out of range or the simulator is qutip.
         """
         if kwargs:
             names = ", ".join(sorted(kwargs))
             raise TypeError(f"QiliSDKExecutor.execute_analog() got unsupported options: {names}")
+
+        backend = self._backend_for_seed(seed)
 
         from qilisdk.core.qtensor import InitialState as _InitialState
         from qilisdk.functionals import AnalogEvolution
@@ -204,7 +223,7 @@ class QiliSDKExecutor(BaseExecutor):
         evolution = AnalogEvolution(schedule=schedule, initial_state=initial_state)
         readout = Readout().with_sampling(nshots=shots)
 
-        result = self._backend.execute(evolution, readout)
+        result = backend.execute(evolution, readout)
         counts = result.get_samples()
 
         execution_time_ms = (time.perf_counter() - start_time) * 1000
@@ -215,8 +234,27 @@ class QiliSDKExecutor(BaseExecutor):
             execution_time_ms=execution_time_ms,
             shots=shots,
             raw_result=result,
-            metadata={"simulator": self.config.simulator, "mode": "analog"},
+            metadata={
+                "simulator": self.config.simulator,
+                "mode": "analog",
+                **({"seed": seed, "num_threads": 1} if seed is not None else {}),
+            },
         )
+
+    def _backend_for_seed(self, seed: int | None) -> Any:
+        if seed is None:
+            return self._backend
+        if type(seed) is not int:
+            raise TypeError("seed must be an integer or None")
+        # QiliSim's native configuration conversion uses a signed 32-bit integer.
+        if not 0 <= seed <= 2**31 - 1:
+            raise ValueError("seed must be between 0 and 2**31-1")
+        if self.config.simulator != "qilisim":
+            raise ValueError("seed is supported only by the qilisim simulator")
+        from qilisdk.backends import ExecutionConfig, QiliSim
+
+        # Per-call seeding must not reuse an advanced RNG or alter the unseeded backend.
+        return QiliSim(execution_config=ExecutionConfig(seed=seed, num_threads=1))
 
     def _to_qilisdk_circuit(self, circuit: Circuit) -> Any:
         """Translate a Marqov Circuit into a qilisdk digital Circuit.

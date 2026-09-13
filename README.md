@@ -163,6 +163,8 @@ result = await executor.execute(circuit, shots=1000)
 
 ---
 
+For QiliSim sampling seeds and repeatability limits, see [QiliSDK seed support](docs/qilisdk.md).
+
 ## Circuit Interop
 
 `Circuit` is a backend-agnostic abstraction that converts to any supported framework's native format:

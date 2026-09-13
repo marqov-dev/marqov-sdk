@@ -5,6 +5,15 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
+## [Unreleased]
+
+### Added
+
+- Per-call `seed` support for QiliSDKExecutor digital and analog QiliSim runs.
+  Seeded calls use a fresh single-threaded simulator and record the seed and
+  thread count in result metadata. Invalid seeds, seeded QuTiP calls and other
+  unsupported options fail explicitly. See [seed support](docs/qilisdk.md).
+
 ## [0.7.0] — 2026-09-12
 
 Published on [PyPI](https://pypi.org/project/marqov/0.7.0/). See the
