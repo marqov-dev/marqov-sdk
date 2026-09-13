@@ -5,7 +5,7 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
-## [Unreleased]
+## [0.7.1] — 2026-09-13
 
 ### Added
 
@@ -13,6 +13,12 @@ release.
   Seeded calls use a fresh single-threaded simulator and record the seed and
   thread count in result metadata. Invalid seeds, seeded QuTiP calls and other
   unsupported options fail explicitly. See [seed support](docs/qilisdk.md).
+
+### Fixed
+
+- QiliSDK digital and analog execution reject unsupported keyword options
+  instead of silently discarding them. Supported QiliSim seeds are honoured;
+  seeded QuTiP calls fail explicitly.
 
 ## [0.7.0] — 2026-09-12
 

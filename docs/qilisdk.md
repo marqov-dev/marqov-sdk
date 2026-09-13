@@ -1,8 +1,7 @@
 # Reproducible sampling with QiliSim
 
 The Marqov QiliSDK adapter accepts a per-call `seed` on both digital and analog
-execution. This source change must be included in a published Marqov release
-before an installation from PyPI gains the behavior.
+execution. Requires Marqov 0.7.1 or later.
 
 ```python
 from marqov import Circuit
