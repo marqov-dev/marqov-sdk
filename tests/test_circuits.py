@@ -890,3 +890,68 @@ class TestSerialization:
         orig_state = original.simulate().tensor.flatten()
         rest_state = restored.simulate().tensor.flatten()
         assert np.allclose(np.abs(orig_state), np.abs(rest_state))
+
+
+class TestToPennylane:
+    """Tests for Circuit.to_pennylane()."""
+
+    def test_roundtrip_bell_state(self):
+        """Bell state survives to_pennylane roundtrip."""
+        original = bell_state()
+        pennylane = original.to_pennylane()
+        restored = Circuit.from_pennylane(pennylane)
+
+        import numpy as np
+
+        orig_state = original.simulate().tensor.flatten()
+        rest_state = restored.simulate().tensor.flatten()
+        assert np.allclose(np.abs(orig_state), np.abs(rest_state))
+
+    def test_to_pennylane_angle(self):
+        """Angle survives conversion to pennylane"""
+        original_angle = 50
+        original = Circuit()
+        original.rx(original_angle, 0)
+        pennylane = original.to_pennylane()
+        pennylane_angle = pennylane.get_parameters()[0]
+        assert original_angle == pennylane_angle
+
+    def test_every_gate(self):
+        """Every gate survives conversion to pennylane"""
+        angle = 50
+        marqov_circuit = Circuit()
+        marqov_circuit.cnot(0,1)
+        marqov_circuit.h(0)
+        marqov_circuit.x(0)
+        marqov_circuit.y(0)
+        marqov_circuit.z(0)
+        marqov_circuit.s(0)
+        marqov_circuit.t(0)
+        marqov_circuit.rx(angle, 0)
+        marqov_circuit.ry(angle, 0)
+        marqov_circuit.rz(angle, 0)
+        marqov_circuit.cz(0, 1)
+        marqov_circuit.swap(0, 1)
+        
+        pennylane_circuit = marqov_circuit.to_pennylane()
+
+        pennylane_list_of_operations = pennylane_circuit.operations
+
+        from pennylane import CNOT, H, X, Y, Z, S, T, RX, RY, RZ, CZ, SWAP
+        expected_operations = [
+            CNOT(wires=[0, 1]),
+            H(0),
+            X(0),
+            Y(0),
+            Z(0),
+            S(0),
+            T(0),
+            RX(50, wires=[0]),
+            RY(50, wires=[0]),
+            RZ(50, wires=[0]),
+            CZ(wires=[0, 1]),
+            SWAP(wires=[0, 1])
+        ]
+
+        assert expected_operations == pennylane_list_of_operations
+        assert len(expected_operations) == len(pennylane_list_of_operations)
