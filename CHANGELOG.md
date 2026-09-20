@@ -14,6 +14,14 @@ release.
   still invoked as `marqov list`); previously the shadowed builtin broke
   every `marqov run ... --arg key=value` invocation. See marqov-sdk#148.
 
+- The Temporal task activity now drains the child process's stderr while the
+  child runs, so a task that writes more than the pipe buffer holds (verbose
+  provider logging, progress output) can no longer block the child in `write()`
+  and stall the activity until its timeout. Only the last 32 KiB are kept, and
+  the crash message says how many earlier bytes were dropped. A failing
+  heartbeat loop is now logged at error level instead of being discarded
+  silently. (marqov-sdk#140)
+
 ## [0.8.0] — 2026-09-25
 
 ### Added
