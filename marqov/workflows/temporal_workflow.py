@@ -32,6 +32,7 @@ from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ApplicationError
 
 
 @workflow.defn
@@ -91,7 +92,24 @@ class JobWorkflow:
                     start_to_close_timeout=timedelta(seconds=30),
                 )
 
-                resolved = json.loads(resolved_json)
+                # A malformed payload must fail the workflow, not its workflow
+                # task: a bare JSONDecodeError/TypeError/KeyError is not a
+                # FailureError, so Temporal would retry the workflow task
+                # forever and the job would never reach a terminal state.
+                try:
+                    resolved = json.loads(resolved_json)
+                    execute_args = [
+                        resolved["node_id"],
+                        resolved["func_ref"],
+                        json.dumps(resolved["args"]),
+                        json.dumps(resolved["kwargs"]),
+                    ]
+                except (json.JSONDecodeError, TypeError, KeyError) as exc:
+                    raise ApplicationError(
+                        f"prepare_node_inputs returned a malformed payload for "
+                        f"node {node_id}: {exc!r}",
+                        non_retryable=True,
+                    ) from exc
 
                 # Schedule task execution
                 retry_policy = RetryPolicy(
@@ -110,12 +128,7 @@ class JobWorkflow:
                 # Activity referenced by string name - no import needed!
                 activity_coro = workflow.execute_activity(
                     "execute_task",
-                    args=[
-                        resolved["node_id"],
-                        resolved["func_ref"],
-                        json.dumps(resolved["args"]),
-                        json.dumps(resolved["kwargs"]),
-                    ],
+                    args=execute_args,
                     start_to_close_timeout=timedelta(
                         seconds=node_data.get("timeout_seconds", 300)
                     ),
@@ -137,8 +150,18 @@ class JobWorkflow:
                 if isinstance(result_or_exc, BaseException):
                     task_timeline.extend(task_metas)
                     raise result_or_exc
-                result = json.loads(result_or_exc)
-                completed_results[result["node_id"]] = result["result"]
+                # Same reasoning as above: convert a malformed activity return
+                # into a FailureError so Temporal fails the workflow cleanly.
+                try:
+                    result = json.loads(result_or_exc)
+                    completed_results[result["node_id"]] = result["result"]
+                except (json.JSONDecodeError, TypeError, KeyError) as exc:
+                    task_timeline.extend(task_metas)
+                    raise ApplicationError(
+                        f"execute_task returned a malformed result envelope for "
+                        f"node {task_metas[i]['node_id']}: {exc!r}",
+                        non_retryable=True,
+                    ) from exc
 
             task_timeline.extend(task_metas)
 
