@@ -149,6 +149,7 @@ class Transport:
         params: dict[str, Any] | None = None,
         idempotent_write: bool = False,
         wait: int | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Execute an HTTP request against the platform API.
 
@@ -169,6 +170,10 @@ class Transport:
                               retried because the server may have processed the
                               request.  When ``False`` (reads / GETs) any
                               transport failure is retried.
+            idempotency_key:  Caller-chosen ``Idempotency-Key`` for a write.
+                              Sent verbatim and reused across retries.  When
+                              omitted a fresh UUID4 is generated for this call.
+                              Ignored for reads.
             wait:             If given, appended as the ``wait`` query
                               parameter (long-poll seconds).  The server reads
                               the ``"wait"`` query param on the status endpoint.
@@ -205,9 +210,11 @@ class Transport:
         if wait is not None:
             merged_params["wait"] = wait
 
-        # Generate one idempotency key per call; reuse across retries.
-        idempotency_key: str | None = None
-        if method.upper() not in ("GET", "HEAD", "OPTIONS"):
+        # One idempotency key per call (the caller's, or a fresh UUID4); reused
+        # across retries so the server can dedupe replays.
+        if method.upper() in ("GET", "HEAD", "OPTIONS"):
+            idempotency_key = None
+        elif idempotency_key is None:
             idempotency_key = str(uuid.uuid4())
 
         extra_headers: dict[str, str] = {}

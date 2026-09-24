@@ -1,0 +1,4 @@
+{
+  "script_id": "7b1e9c40-2d3f-4a51-9e8c-5f6a7b8c9d01",
+  "content": "from marqov import task, workflow\n\n\n@task(timeout=60)\ndef alice(seed: int):\n    values = [seed, seed + 1, seed + 2]\n    return {\"stage\": \"alice\", \"seed\": seed, \"values\": values, \"total\": sum(values)}\n\n\n@workflow\ndef native_canary(seed: int = 7):\n    return {\"schema_version\": 1, \"alice\": alice(seed)}\n"
+}
