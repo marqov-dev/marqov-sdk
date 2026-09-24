@@ -129,7 +129,12 @@ the versioned submission `marqov.public-submission/v1`.
 - It validates locally, then requires a discovered runtime matching `backend`
   **and** `programming_model` (never substituting another).
 - It submits with your `idempotency_key` (or a fresh UUID for each call) and
-  verifies that the admission receipt matches the submitted source and input.
+  checks the admission receipt: its structure and input hash always, and its
+  source hash when the client holds the source (inline `source`, or `script_id`
+  with `source_sha256`). For a `script_id` without `source_sha256` the client
+  cannot independently verify the source content.
+- Any failure after the request may have been sent carries the effective key as
+  `exc.idempotency_key` (see [When the outcome is unknown](native-workflows.md#when-the-outcome-is-unknown)).
 - The returned `Job` is polled and read as usual. A workflow's
   `result().raw` is the platform's `marqov.managed-result/v1` projection.
 

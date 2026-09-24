@@ -37,6 +37,7 @@ Observable API contract notes:
 
 from __future__ import annotations
 
+import uuid
 from typing import Any, Mapping, Sequence
 
 import marqov
@@ -45,7 +46,7 @@ from marqov.circuits import Circuit
 from ._models import Backend, PlatformInfo
 from ._native import build_public_submission, check_receipt, parse_runtimes, require_uuid
 from ._transport import Transport
-from .errors import MarqovPlatformError
+from .errors import MarqovPlatformError, TransportError
 from .job import Job
 
 
@@ -283,7 +284,11 @@ class MarqovClient:
            **and** ``programming_model`` exactly, with ``cap_cents`` inside
            its range.  No other backend or runtime is ever substituted.
         3. ``POST /api/jobs/submit`` with the ``Idempotency-Key``.
-        4. Verify the admission receipt refers to this source and input.
+        4. Check the admission receipt: always its structure and input hash;
+           its source hash too when the source is known here (inline
+           ``source``, or ``source_sha256`` for a saved script).  For a
+           ``script_id`` without ``source_sha256`` the client cannot verify
+           which source content the platform used.
 
         Args:
             team_id:           Team UUID that owns and pays for the job.  Required.
@@ -304,7 +309,10 @@ class MarqovClient:
                                same submission safely, including from another
                                process; the platform returns the original
                                admission instead of admitting twice.  A fresh
-                               key is generated when omitted.
+                               key is generated when omitted.  Whenever a
+                               failure occurs after the request may have been
+                               sent, the raised error's ``idempotency_key``
+                               holds the key used (yours or the generated one).
 
         Returns:
             :class:`~marqov.platform.job.Job` for the admitted job.
@@ -348,16 +356,31 @@ class MarqovClient:
                 f"{runtime['max_cap_cents']} for this runtime, got {cap_cents}"
             )
 
-        resp = self._transport.request(
-            "POST",
-            "/api/jobs/submit",
-            json=body,
-            idempotent_write=True,
-            idempotency_key=idempotency_key,
-        )
-        job_id = check_receipt(
-            resp, input_text=input_text, source=source, source_sha256=source_sha256
-        )
+        # Fix the key before the request so every failure from here on can
+        # report it: the outcome of a sent request may be unknown, and only a
+        # resubmission with the same key and body can safely reveal it.
+        key = idempotency_key if idempotency_key is not None else str(uuid.uuid4())
+        try:
+            resp = self._transport.request(
+                "POST",
+                "/api/jobs/submit",
+                json=body,
+                idempotent_write=True,
+                idempotency_key=key,
+            )
+            job_id = check_receipt(
+                resp, input_text=input_text, source=source, source_sha256=source_sha256
+            )
+        except MarqovPlatformError as exc:
+            exc.idempotency_key = key
+            raise
+        except Exception as exc:  # e.g. a 2xx whose body is not JSON
+            raise TransportError(
+                "The platform's response could not be read; the submission may or may "
+                "not have been admitted. Resubmit with the same idempotency_key to confirm.",
+                code="submission_outcome_unknown",
+                idempotency_key=key,
+            ) from exc
         return Job(self._transport, job_id)
 
     def job(self, job_id: str) -> Job:

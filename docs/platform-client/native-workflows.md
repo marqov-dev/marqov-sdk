@@ -125,10 +125,41 @@ for output in result.raw["outputs"]:
    nothing.
 3. **Submits** with an `Idempotency-Key`: yours, or a fresh UUID for each call.
    The same key is reused on the client's own retries.
-4. **Verifies the admission receipt.** The receipt must be for exactly this
-   source and input. If it cannot be confirmed, the call raises
-   `invalid_receipt` or `receipt_mismatch` rather than returning a job. Retry
-   with the same `idempotency_key` to confirm.
+4. **Checks the admission receipt.** If the receipt cannot be confirmed, the
+   call raises `invalid_receipt` or `receipt_mismatch` rather than returning a job.
+   What the receipt check can prove depends on what the client holds:
+
+   | Submission | Checked against the receipt |
+   |---|---|
+   | Inline `source` | Structure, input hash **and** source hash (the client has the source) |
+   | `script_id` with `source_sha256` | Structure, input hash and source hash (against your `source_sha256`) |
+   | `script_id` without `source_sha256` | Structure and input hash only. The client **cannot** independently verify which source content the platform ran; pass `source_sha256` if you need that |
+
+### When the outcome is unknown
+
+If a failure happens after the request may have reached the platform, the
+exception carries the key that request used, as `exc.idempotency_key`. It is
+also shown in `str(exc)`. This covers:
+- exhausted connection retries or a timeout (`TransportError`);
+- a server error such as `503 managed_execution_unavailable`;
+- a response that cannot be read (`submission_outcome_unknown`);
+- a receipt that cannot be confirmed (`invalid_receipt` / `receipt_mismatch`).
+
+To learn the outcome, resubmit with the **same arguments** and
+`idempotency_key=exc.idempotency_key`. The platform returns the original
+admission if there was one, and never admits twice. Exceptions never contain
+your API key or source.
+
+```python
+from marqov.platform import MarqovPlatformError
+
+try:
+    job = client.submit_native(**request)
+except MarqovPlatformError as exc:
+    if exc.idempotency_key is None:
+        raise                                   # refused before anything was sent
+    job = client.submit_native(**request, idempotency_key=exc.idempotency_key)
+```
 
 Admission means the job is funded and queued, not that it has finished. The
 returned `Job` is the ordinary job handle; `status()` and `result()` work
