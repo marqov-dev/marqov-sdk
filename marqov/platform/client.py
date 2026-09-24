@@ -37,11 +37,15 @@ Observable API contract notes:
 
 from __future__ import annotations
 
+from typing import Any, Mapping, Sequence
+
 import marqov
 from marqov.circuits import Circuit
 
 from ._models import Backend, PlatformInfo
+from ._native import build_public_submission, check_receipt, parse_runtimes, require_uuid
 from ._transport import Transport
+from .errors import MarqovPlatformError
 from .job import Job
 
 
@@ -222,6 +226,138 @@ class MarqovClient:
 
         # Response shape: { "job_id": "<uuid>" }
         job_id: str = resp["job_id"]
+        return Job(self._transport, job_id)
+
+    def managed_runtimes(self, team_id: str) -> list[dict[str, Any]]:
+        """List the managed native runtimes enabled for a team.
+
+        Calls ``GET /api/jobs/managed-runtimes?team_id=…``.  Each entry is
+        ``{"backend", "programming_model", "min_cap_cents", "max_cap_cents"}``.
+        An empty list means managed native execution is not enabled for the
+        team.  Discovery is advisory: it reserves and authorises nothing, and
+        the platform re-checks everything at submission.
+
+        Args:
+            team_id: The team's UUID.  An API key may only query its own team.
+
+        Raises:
+            ValueError: ``team_id`` is not a UUID (no request is sent).
+            MarqovPlatformError: The response has an unexpected shape, or any
+                platform error (e.g. 404 for a team the key cannot see).
+        """
+        require_uuid(team_id, "team_id")
+        resp = self._transport.request(
+            "GET", "/api/jobs/managed-runtimes", params={"team_id": team_id}
+        )
+        return parse_runtimes(resp)
+
+    def submit_native(
+        self,
+        *,
+        team_id: str,
+        entrypoint: str,
+        cap_cents: int,
+        script_id: str | None = None,
+        source: str | None = None,
+        args: Sequence[Any] = (),
+        kwargs: Mapping[str, Any] | None = None,
+        programming_model: str = "native_workflow",
+        backend: str = "marqov-sim",
+        source_sha256: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> Job:
+        """Submit a Python ``@task``/``@workflow`` program to a managed runtime.
+
+        Uses the platform's versioned managed-native submission
+        (``marqov.public-submission/v1``).  The program runs on the platform's
+        own pinned SDK, not the version installed locally.  The returned
+        :class:`~marqov.platform.job.Job` is polled and read exactly like any
+        other job; a completed workflow's ``result().raw`` is the platform's
+        ``marqov.managed-result/v1`` projection.
+
+        Steps, in order (the first failure stops everything after it):
+
+        1. Validate and serialise the request locally.  Nothing is sent if
+           this fails.
+        2. Discover the team's runtimes and require one matching ``backend``
+           **and** ``programming_model`` exactly, with ``cap_cents`` inside
+           its range.  No other backend or runtime is ever substituted.
+        3. ``POST /api/jobs/submit`` with the ``Idempotency-Key``.
+        4. Verify the admission receipt refers to this source and input.
+
+        Args:
+            team_id:           Team UUID that owns and pays for the job.  Required.
+            entrypoint:        Name of the workflow (or task) function to call.
+            cap_cents:         Spending cap in cents covering compilation and
+                               tasks.  Required; there is no default.
+            script_id:         UUID of a script saved on the platform, **or**
+            source:            the Python source to submit inline.  Pass exactly one.
+            args, kwargs:      Arguments for ``entrypoint``.  Must be JSON
+                               values (dict keys must be ``str``; numbers finite).
+                               Integers are sent exactly, however large.
+            programming_model: ``"native_workflow"`` (default) or ``"single_task"``.
+            backend:           Runtime backend; must match a discovered runtime.
+            source_sha256:     Optional lowercase hex SHA-256 of the saved
+                               script's content.  The platform refuses the
+                               submission (409) if the saved script changed.
+            idempotency_key:   Optional UUID.  Reuse the same key to retry the
+                               same submission safely, including from another
+                               process; the platform returns the original
+                               admission instead of admitting twice.  A fresh
+                               key is generated when omitted.
+
+        Returns:
+            :class:`~marqov.platform.job.Job` for the admitted job.
+
+        Raises:
+            ValueError / TypeError: The request is invalid (nothing is sent),
+                or ``cap_cents`` is outside the discovered runtime's range.
+            MarqovPlatformError: ``code="runtime_not_enabled"`` when no
+                matching runtime is enabled for the team; the server's code for
+                a refusal (e.g. ``spend_limit_exceeded`` 402,
+                ``idempotency_conflict`` 409, ``managed_execution_unavailable``
+                503 — retry with the same ``idempotency_key``);
+                ``invalid_receipt`` / ``receipt_mismatch`` if the response
+                cannot be confirmed as this submission's admission.
+        """
+        body, input_text = build_public_submission(
+            team_id=team_id, entrypoint=entrypoint, cap_cents=cap_cents,
+            script_id=script_id, source=source, args=args, kwargs=kwargs,
+            programming_model=programming_model, backend=backend,
+            source_sha256=source_sha256,
+        )
+        if idempotency_key is not None:
+            require_uuid(idempotency_key, "idempotency_key")
+
+        runtimes = self.managed_runtimes(team_id)
+        runtime = next(
+            (r for r in runtimes
+             if r["backend"] == backend and r["programming_model"] == programming_model),
+            None,
+        )
+        if runtime is None:
+            enabled = [f"{r['backend']}/{r['programming_model']}" for r in runtimes] or ["none"]
+            raise MarqovPlatformError(
+                f"No managed runtime {backend}/{programming_model} is enabled for this team "
+                f"(enabled: {', '.join(enabled)}).",
+                code="runtime_not_enabled",
+            )
+        if not runtime["min_cap_cents"] <= cap_cents <= runtime["max_cap_cents"]:
+            raise ValueError(
+                f"cap_cents must be between {runtime['min_cap_cents']} and "
+                f"{runtime['max_cap_cents']} for this runtime, got {cap_cents}"
+            )
+
+        resp = self._transport.request(
+            "POST",
+            "/api/jobs/submit",
+            json=body,
+            idempotent_write=True,
+            idempotency_key=idempotency_key,
+        )
+        job_id = check_receipt(
+            resp, input_text=input_text, source=source, source_sha256=source_sha256
+        )
         return Job(self._transport, job_id)
 
     def job(self, job_id: str) -> Job:

@@ -1,0 +1,16 @@
+{
+  "kwargs_x_list_nesting_accepted": 30,
+  "body": {
+    "protocol_version": "marqov.public-submission/v1",
+    "team_id": "0f4c2d7e-5b1a-4c3e-9a8d-2e6f1b7c9d30",
+    "backend": "marqov-sim",
+    "programming_model": "native_workflow",
+    "cap_cents": 100,
+    "analysis_id": null,
+    "source": {
+      "kind": "script",
+      "script_id": "7b1e9c40-2d3f-4a51-9e8c-5f6a7b8c9d01"
+    },
+    "input": "{\"entrypoint\": \"run\", \"args\": [], \"kwargs\": {\"x\": [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}}"
+  }
+}

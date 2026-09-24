@@ -5,13 +5,16 @@ the hosted Marqov Platform from your existing Python code.  It is independent
 of the rest of the SDK — you can use it whether or not you use `@task`,
 `@workflow`, or any executor.
 
-> **Live-server caveat:** The examples below are not yet verified against a live
-> server — live verification is pending the staging environment. They are
-> unit-tested against a mocked transport and are correct against the specified
-> API contract.
-
-> **v1.0 scope:** v1.0 supports **free backends** (e.g. `dwave-sim`).
-> Paid QPU backends and `Circuit` submission are coming in a future update.
+> **What works today.** To run a Python `@task`/`@workflow` program on the
+> hosted platform, use `client.submit_native()` — see
+> [Native workflows on the hosted platform](native-workflows.md). Listing
+> backends, polling status and reading results work for any job. The request
+> shapes are tested against the hosted API's contract; authenticated live
+> verification is pending.
+>
+> **Does not currently work against the hosted API:** `client.submit()`
+> (sections 5 and 10 below), API-key `job.cancel()` and `platform_info()`.
+> See [Current limitations](native-workflows.md#current-limitations).
 
 ---
 
@@ -76,13 +79,19 @@ for b in backends:
     print(b.slug, b.name, "available:", b.is_available)
 ```
 
-Free backends (e.g. `dwave-sim`) have zero pricing.  Attempting to submit to a
-paid backend in v1.0 raises `PaidBackendNotSupportedYet` — paid backend support
-is coming in a future update.
+Listing a backend (or `is_available`) is the catalogue; it does not mean a
+particular team or program can execute there. That is decided when you submit.
 
 ---
 
-## 5. Submit a raw script
+## 5. Submit a raw script (not currently accepted by the hosted API)
+
+> **Does not currently work.** `client.submit(str, ...)` sends the generic
+> submission body. The hosted API refuses it for `@task`/`@workflow` and plain
+> Python source with `422 execution_unavailable`, and for inline code sent to a
+> paid backend with `422 script_required`. To run a native program, use
+> [`client.submit_native()`](native-workflows.md). The call shape below is kept
+> for reference.
 
 Pass a Python string as the program together with a `framework` identifier and
 a backend slug:
@@ -175,21 +184,18 @@ zero cost) is distinct from `None` (not yet fetched).
 
 ---
 
-## 10. Circuit submission (coming in a future update)
+## 10. Circuit submission (not accepted by the hosted API)
 
-Submitting a `marqov.Circuit` object directly is supported in the client code
-but is **not yet active on the server** — the platform-side circuit-submission
-variant is under development.  Do not rely on this path against a live server
-until it is announced.
-
-When it ships, the call will look like this (no `framework` argument — the
-circuit self-describes its format as OpenQASM 3):
+`client.submit(Circuit, ...)` sends the circuit in a `circuit` field that the
+hosted API does not accept, with no source field, so the request is refused with
+`400`. There is no server-side circuit submission today. The call shape is
+(no `framework` argument — the circuit self-describes its format as OpenQASM 3):
 
 ```python
 from marqov.circuits import Circuit
 from marqov.platform import MarqovClient
 
-# Coming in a future update — not yet live
+# Refused by the hosted API today (400) — see above
 client = MarqovClient()
 circuit = Circuit().h(0).cnot(0, 1)
 job = client.submit(circuit, backend="dwave-sim", shots=1000)
@@ -215,8 +221,9 @@ from marqov.platform import AuthenticationError, JobFailed, RateLimited
 client = MarqovClient()
 
 try:
-    job = client.submit(script, backend="dwave-sim", framework="marqov")
-    result = job.result(timeout=120.0)
+    job = client.submit_native(team_id=team_id, script_id=script_id,
+                               entrypoint="native_canary", cap_cents=100)
+    result = job.result(timeout=600.0)
 except AuthenticationError:
     print("Check your MARQOV_PLATFORM_KEY")
 except JobFailed as e:

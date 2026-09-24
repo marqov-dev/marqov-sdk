@@ -21,7 +21,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from marqov.platform import MarqovClient
+from marqov.platform import MarqovClient, MarqovPlatformError
 from marqov.platform.job import Job
 
 # ---------------------------------------------------------------------------
@@ -178,13 +178,36 @@ def test_platform_info_targets_a_served_endpoint():
     assert (sent[0]["method"], sent[0]["path"]) in API_KEY_ENDPOINTS
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="no public client method produces the versioned "
-                   "managed-native body; string submit uses the generic body, which the "
-                   "hosted API refuses for native @task/@workflow source (422 execution_unavailable)")
-def test_some_public_submit_method_produces_the_versioned_native_body():
+NATIVE_SOURCE = (
+    "from marqov import task, workflow\n@task\ndef a():\n    return 1\n"
+    "@workflow\ndef run():\n    return a()\n"
+)
+
+
+def test_legacy_string_submit_of_native_source_still_sends_the_generic_body():
+    """submit() is unchanged: it sends the generic body, which the hosted API
+    refuses for native @task/@workflow source (422 execution_unavailable).
+    Native programs use submit_native() instead."""
     client, sent = _capturing_client()
-    source = "from marqov import task, workflow\n@task\ndef a():\n    return 1\n@workflow\ndef run():\n    return a()\n"
-    client.submit(source, backend="marqov-sim", framework="marqov")
+    client.submit(NATIVE_SOURCE, backend="marqov-sim", framework="marqov")
     body = sent[0]["json"]
-    assert body.get("protocol_version") == "marqov.public-submission/v1"
+    assert "protocol_version" not in body
+    assert set(body) - {"sdk_version"} <= GENERIC_SUBMIT_FIELDS
+
+
+def test_submit_native_produces_the_versioned_native_body():
+    runtimes = {"runtimes": [{"backend": "marqov-sim", "programming_model": "native_workflow",
+                              "min_cap_cents": 11, "max_cap_cents": 10000}]}
+    client, sent = _capturing_client(runtimes)
+    team = "0f4c2d7e-5b1a-4c3e-9a8d-2e6f1b7c9d30"
+    # The capturing stub answers the POST with no admission receipt, so the
+    # client must refuse to treat it as admitted; only the body is checked here.
+    with pytest.raises(MarqovPlatformError) as info:
+        client.submit_native(team_id=team, source=NATIVE_SOURCE, entrypoint="run", cap_cents=100)
+    assert info.value.code == "invalid_receipt"
+    assert [(r["method"], r["path"]) for r in sent] == [
+        ("GET", "/api/jobs/managed-runtimes"), ("POST", "/api/jobs/submit")]
+    body = sent[1]["json"]
+    assert body["protocol_version"] == "marqov.public-submission/v1"
     assert V1_REQUIRED_FIELDS <= set(body) <= V1_REQUIRED_FIELDS | V1_OPTIONAL_FIELDS
+    uuid.UUID(sent[1]["headers"]["Idempotency-Key"])

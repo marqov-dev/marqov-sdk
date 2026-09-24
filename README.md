@@ -202,55 +202,50 @@ Platform is an opt-in value-add.
 `marqov.platform` is an **optional import** — loading `marqov` never loads the
 platform client. It is only activated when you import it explicitly.
 
-> **Live-server caveat:** The examples below are not yet verified against a live
-> server — live verification is pending our staging environment.
-
-> **v1.0 scope:** v1.0 supports **free backends** (e.g. `dwave-sim`).
-> Paid backends and `Circuit` submission are coming in a future update.
+> **What works today.** Managed native `@task`/`@workflow` programs run
+> through `client.submit_native()`; `client.backends()`, `client.job()`,
+> `job.status()` and `job.result()` work for any job. The request shapes are
+> tested against the hosted API's contract; authenticated live verification is
+> pending. See [Current limitations](docs/platform-client/native-workflows.md#current-limitations)
+> — in particular `client.submit()`, `Circuit` submission, API-key
+> `job.cancel()` and `platform_info()` do not currently work against the
+> hosted API.
 
 ### Quickstart
 
-**1. Set your API key** (get one from the Marqov Platform dashboard):
+**1. Set your API key and team** (both from the Marqov app):
 
 ```bash
 export MARQOV_PLATFORM_KEY="marqey_live_your_key_here"
+export MARQOV_TEAM_ID="your-team-uuid"
 ```
 
-**2. Submit a script and poll for results:**
+**2. Run a saved workflow: discover → submit → wait → read:**
 
 ```python
+import os
 from marqov.platform import MarqovClient
 
-# Key is read from MARQOV_PLATFORM_KEY automatically
-client = MarqovClient()
+client = MarqovClient()                     # reads MARQOV_PLATFORM_KEY
+team_id = os.environ["MARQOV_TEAM_ID"]
 
-script = """
-import asyncio
-from marqov import task
+print(client.managed_runtimes(team_id))     # [] means not enabled for this team
 
-@task
-async def bell(shots):
-    from marqov.circuits import Circuit
-    from marqov.executors import LocalExecutor
-    result = await LocalExecutor().execute(
-        Circuit().h(0).cnot(0, 1), shots=shots
-    )
-    return result.counts
-
-# An async @task called outside a @workflow isn't awaited automatically
-# (see marqov/workflows/decorators.py for details) — drive it with
-# asyncio.run() rather than calling bell(1000) bare.
-asyncio.run(bell(1000))
-"""
-
-job = client.submit(script, backend="dwave-sim", framework="marqov", shots=1000)
-print("Job ID:", job.id)
-
-# Block until complete (up to 5 minutes by default)
-result = job.result(timeout=300.0)
-print(result.counts)       # e.g. {'00': 507, '11': 493}
-print(result.probabilities) # e.g. {'00': 0.507, '11': 0.493}
+job = client.submit_native(
+    team_id=team_id,
+    script_id="your-saved-script-uuid",     # or source="...python..."
+    entrypoint="native_canary",             # the @workflow function to call
+    kwargs={"seed": 7},
+    cap_cents=100,                          # your spending cap for this run; required
+)
+result = job.result(timeout=600.0)
+for output in result.raw["outputs"]:
+    print(output["task_key"], output["display"].get("value"))
 ```
+
+The complete example, with the saved script and idempotent retry, is in
+[`docs/platform-client/native-workflows.md`](docs/platform-client/native-workflows.md)
+and [`examples/platform_native_workflow.py`](examples/platform_native_workflow.py).
 
 **3. Check available backends:**
 
@@ -258,6 +253,9 @@ print(result.probabilities) # e.g. {'00': 0.507, '11': 0.493}
 for b in client.backends():
     print(b.slug, b.name, "available:", b.is_available)
 ```
+
+Listing a backend (or `is_available`) is the catalogue; it does not mean a
+particular team or program can execute there. That is decided when you submit.
 
 **4. Reconnect to a job from a previous session:**
 
@@ -274,8 +272,9 @@ All platform errors inherit from `MarqovPlatformError`:
 from marqov.platform import AuthenticationError, JobFailed, RateLimited
 
 try:
-    job = client.submit(script, backend="dwave-sim", framework="marqov")
-    result = job.result(timeout=120.0)
+    job = client.submit_native(team_id=team_id, script_id=script_id,
+                               entrypoint="native_canary", cap_cents=100)
+    result = job.result(timeout=600.0)
 except AuthenticationError:
     print("Check your MARQOV_PLATFORM_KEY")
 except JobFailed as e:
@@ -292,6 +291,7 @@ For the full error taxonomy and retry guidance see
 ### Platform documentation
 
 - [Getting started](docs/platform-client/getting-started.md)
+- [Native workflows on the hosted platform](docs/platform-client/native-workflows.md)
 - [Error handling](docs/platform-client/error-handling.md)
 - [API reference](docs/platform-client/api-reference.md)
 

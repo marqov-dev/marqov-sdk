@@ -1,0 +1,10 @@
+{
+  "runtimes": [
+    {
+      "backend": "marqov-sim",
+      "programming_model": "native_workflow",
+      "min_cap_cents": 11,
+      "max_cap_cents": 10000
+    }
+  ]
+}

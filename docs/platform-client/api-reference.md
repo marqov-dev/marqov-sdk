@@ -53,16 +53,23 @@ job: Job = client.submit(
 
 Submit a quantum program to the platform and return a `Job` handle.
 
+> **Not currently accepted by the hosted API.** This method sends the generic
+> submission body. The hosted API refuses it for `@task`/`@workflow` and plain
+> Python source (`422 execution_unavailable`), for inline code sent to a paid
+> backend (`422 script_required`, which surfaces as `MarqovPlatformError`
+> rather than `PaidBackendNotSupportedYet`), and for a `Circuit` (`400`).
+> For native programs use [`client.submit_native()`](#clientsubmit_native).
+
 **`program`:**
 
 - `str` — treated as inline executable code. `framework` is **required**;
   omitting it raises `ValueError`.
-- `Circuit` — serialised as OpenQASM 3. `framework` must **not** be supplied;
-  passing it raises `ValueError`. Circuit submission requires a forthcoming
-  platform-side change and is not yet active on the server.
+- `Circuit` — serialised as OpenQASM 3 in a `circuit` field. `framework`
+  must **not** be supplied; passing it raises `ValueError`. The hosted API does
+  not accept the `circuit` field and refuses the request (`400`).
 
-**`backend`:** backend slug (e.g. `"dwave-sim"`). In v1.0, only free backends
-are supported. Paid backends raise `PaidBackendNotSupportedYet`.
+**`backend`:** backend slug (e.g. `"marqov-sim"`). The client does not check
+the backend; the platform decides whether the program can run there.
 
 **`shots`:** number of measurement shots. Default: `1000`.
 
@@ -72,9 +79,69 @@ are supported. Paid backends raise `PaidBackendNotSupportedYet`.
 - `ValueError` — `program` is `str` but `framework` was omitted, or `program`
   is a `Circuit` and `framework` was supplied.
 - `TypeError` — `program` is neither `str` nor `Circuit`.
-- `PaidBackendNotSupportedYet` — backend requires pre-run cost analysis (v1.0).
+- `PaidBackendNotSupportedYet` — HTTP 422 `analysis_required`.
 - `AuthenticationError` — HTTP 401.
 - `MarqovPlatformError` — any other non-2xx platform error.
+
+---
+
+### `client.managed_runtimes()`
+
+```python
+runtimes: list[dict] = client.managed_runtimes(team_id: str)
+```
+
+List the managed native runtimes enabled for a team
+(`GET /api/jobs/managed-runtimes`). Each entry is
+`{"backend", "programming_model", "min_cap_cents", "max_cap_cents"}`. An empty
+list means managed native execution is not enabled for the team. Discovery is
+advisory: it reserves and authorises nothing.
+
+**Raises:** `ValueError` if `team_id` is not a UUID (nothing is sent);
+`MarqovPlatformError` with `code="invalid_response"` on an unexpected
+response shape, or the server's error (e.g. `404` for a team the key cannot see).
+
+---
+
+### `client.submit_native()`
+
+```python
+job: Job = client.submit_native(
+    *,
+    team_id: str,
+    entrypoint: str,
+    cap_cents: int,
+    script_id: str | None = None,       # exactly one of script_id / source
+    source: str | None = None,
+    args: Sequence = (),
+    kwargs: Mapping[str, Any] | None = None,
+    programming_model: str = "native_workflow",   # or "single_task"
+    backend: str = "marqov-sim",
+    source_sha256: str | None = None,
+    idempotency_key: str | None = None,
+)
+```
+
+Run a Python `@task`/`@workflow` program on the managed native runtime using
+the versioned submission `marqov.public-submission/v1`.
+
+- `team_id` and `cap_cents` are required and have no defaults.
+- It validates locally, then requires a discovered runtime matching `backend`
+  **and** `programming_model` (never substituting another).
+- It submits with your `idempotency_key` (or a fresh UUID for each call) and
+  verifies that the admission receipt matches the submitted source and input.
+- The returned `Job` is polled and read as usual. A workflow's
+  `result().raw` is the platform's `marqov.managed-result/v1` projection.
+
+Full guide, the complete example and refusal codes:
+[Native workflows on the hosted platform](native-workflows.md).
+
+**Raises:**
+- `ValueError` / `TypeError` — invalid request (nothing sent), or `cap_cents`
+  outside the runtime's range.
+- `MarqovPlatformError` — `runtime_not_enabled`, `invalid_receipt`,
+  `receipt_mismatch`, or the server's refusal code (subclasses such as
+  `InvalidProgram`, `PermissionTierError` and `RateLimited` apply as usual).
 
 ---
 
@@ -111,9 +178,8 @@ info: PlatformInfo = client.platform_info()
 
 Return version metadata about the SDK and the platform API.
 
-> **Note:** The platform endpoint backing this method is not yet confirmed.
-> It is implemented against a provisional path. When the platform ships a
-> confirmed info/health endpoint, this method will be updated.
+> **Not available against the hosted API.** This method requests `/api/meta`,
+> which the hosted API does not serve.
 
 **Returns:** `PlatformInfo` with `sdk_version` (the installed `marqov` version)
 and `api_version` (from the server response).
@@ -211,9 +277,11 @@ job.cancel() -> None
 Send a best-effort cancellation request. Returns immediately without
 confirming the outcome.
 
-> **Note:** The platform cancel endpoint is not yet confirmed. This method
-> is implemented against a provisional path and will be updated when the
-> platform ships a confirmed cancellation endpoint.
+> **Does not work with an API key.** The hosted cancellation endpoint accepts
+> only signed-in browser sessions; an API key receives
+> `403 api_key_not_supported` (raised as `PermissionTierError`). Cancel from the
+> job page in the Marqov app, for funded jobs that have not yet reached a
+> provider.
 
 **Raises:** `MarqovPlatformError` if the request itself fails. For fire-and-
 forget behaviour, catch `MarqovPlatformError`.

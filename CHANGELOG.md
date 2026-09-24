@@ -5,6 +5,31 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
+## [Unreleased]
+
+### Added
+
+- `MarqovClient.managed_runtimes(team_id)` and `MarqovClient.submit_native(...)`
+  run Python `@task`/`@workflow` programs on the hosted managed native runtime
+  through its versioned submission contract.
+  - `team_id` and `cap_cents` are required.
+  - Exactly one of `script_id` or `source` is required.
+  - The runtime must match discovery exactly; no backend or runtime is
+    substituted.
+  - The request is validated locally before sending.
+  - A caller-supplied `idempotency_key` is honoured across retries.
+  - The admission receipt is verified.
+  
+  See [Native workflows on the hosted platform](docs/platform-client/native-workflows.md).
+
+### Changed
+
+- Platform-client documentation now states what the hosted API does not
+  currently accept: `submit()` for native or paid programs, `Circuit`
+  submission, API-key `job.cancel()` and `platform_info()`. Existing behaviour of
+  `submit()`, `Job`, `PlatformResult`, workflow capture and executors is
+  unchanged.
+
 ## [0.7.1] — 2026-09-13
 
 ### Added
