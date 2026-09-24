@@ -20,6 +20,13 @@ class MarqovPlatformError(Exception):
         code:    Optional machine-readable error code returned by the server
                  (e.g. ``"auth/token-expired"``).
         status:  Optional HTTP status code associated with the response.
+        idempotency_key: For a failure raised by
+                 :meth:`~marqov.platform.client.MarqovClient.submit_native`
+                 after its request may have been sent, the ``Idempotency-Key``
+                 that request used (``None`` otherwise).  Resubmit with
+                 ``idempotency_key=<this value>`` and the same arguments to learn
+                 the outcome: the platform returns the original admission instead
+                 of admitting twice.
 
     ``str()`` returns the message, and the code if present::
 
@@ -33,16 +40,19 @@ class MarqovPlatformError(Exception):
         *,
         code: str | None = None,
         status: int | None = None,
+        idempotency_key: str | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.code = code
         self.status = status
+        self.idempotency_key = idempotency_key
 
     def __str__(self) -> str:
-        if self.code:
-            return f"{self.message} [{self.code}]"
-        return self.message
+        text = f"{self.message} [{self.code}]" if self.code else self.message
+        if self.idempotency_key:
+            text += f" (idempotency_key={self.idempotency_key})"
+        return text
 
 
 class AuthenticationError(MarqovPlatformError):

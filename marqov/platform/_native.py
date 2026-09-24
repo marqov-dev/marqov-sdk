@@ -186,7 +186,13 @@ def parse_runtimes(response: Any) -> list[dict[str, Any]]:
 def check_receipt(
     response: Any, *, input_text: str, source: str | None, source_sha256: str | None
 ) -> str:
-    """Return the admitted job id, or raise if the receipt is not for this request."""
+    """Return the admitted job id, or raise if the receipt cannot be confirmed.
+
+    Always checks the closed structure, protocol and the input hash. Checks the
+    source hash only when the source is known locally (inline ``source``, or a
+    caller-supplied ``source_sha256``); for a saved script without
+    ``source_sha256`` the source content cannot be verified here.
+    """
     def sha(text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
