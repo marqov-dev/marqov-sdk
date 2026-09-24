@@ -18,7 +18,12 @@ release.
     substituted.
   - The request is validated locally before sending.
   - A caller-supplied `idempotency_key` is honoured across retries.
-  - The admission receipt is verified.
+  - The admission receipt's structure and input hash are verified, plus its
+    source hash when the source is known locally (inline source or
+    `source_sha256`).
+  - Any failure after the request may have been sent exposes the effective
+    key as `exc.idempotency_key`, so an ambiguous submission can be resolved
+    safely.
   
   See [Native workflows on the hosted platform](docs/platform-client/native-workflows.md).
 

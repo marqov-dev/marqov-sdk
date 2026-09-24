@@ -405,3 +405,163 @@ def test_the_example_runs_discover_submit_wait_read_against_the_fake_api(monkeyp
     post = api.posts()[0]
     assert post["json"]["source"] == {"kind": "script", "script_id": SAVED["source"]["script_id"]}
     assert post["json"]["cap_cents"] == 100
+
+
+# ---------------------------------------------------------------------------
+# Ambiguous outcomes: the effective idempotency key is always recoverable
+# ---------------------------------------------------------------------------
+
+API_KEY = "marqey_test_" + "x" * 32
+
+
+def _recording(handler):
+    """A session stub that records every POST's key and delegates to *handler*."""
+    api = FakeHostedApi()
+    keys: list[str] = []
+
+    def request(method, url, **kwargs):
+        if method == "POST":
+            keys.append((kwargs.get("headers") or {}).get("Idempotency-Key"))
+            return handler(api, method, url, **kwargs)
+        return api(method, url, **kwargs)
+
+    client = MarqovClient(api_key=API_KEY, base_url="http://test.invalid")
+    client._transport._session.request = request
+    return client, keys
+
+
+def _no_secrets(exc: BaseException) -> None:
+    text = str(exc) + repr(exc)
+    assert API_KEY not in text
+    assert "native_canary(seed" not in text and "def alice" not in text
+
+
+@pytest.mark.parametrize("caller_key", [None, KEY])
+def test_exhausted_connection_retries_expose_the_key_every_attempt_used(monkeypatch, caller_key):
+    import requests
+    from marqov.platform.errors import TransportError
+
+    def refuse(api, method, url, **kwargs):
+        raise requests.exceptions.ConnectionError("connection reset")
+
+    monkeypatch.setattr("marqov.platform._transport.time.sleep", lambda _s: None)
+    client, keys = _recording(refuse)
+    with pytest.raises(TransportError) as info:
+        client.submit_native(source=SOURCE, idempotency_key=caller_key, **BASE)
+    assert len(keys) > 1 and len(set(keys)) == 1          # one key, reused on every retry
+    assert info.value.idempotency_key == keys[0]
+    if caller_key is not None:
+        assert keys[0] == caller_key
+    uuid.UUID(info.value.idempotency_key)
+    assert info.value.idempotency_key in str(info.value)
+    _no_secrets(info.value)
+
+
+def test_write_timeout_exposes_the_key():
+    import requests
+    from marqov.platform.errors import TransportError
+
+    def slow(api, method, url, **kwargs):
+        raise requests.exceptions.ReadTimeout("read timed out")
+
+    client, keys = _recording(slow)
+    with pytest.raises(TransportError) as info:
+        client.submit_native(source=SOURCE, **BASE)
+    assert keys and info.value.idempotency_key == keys[0]
+    _no_secrets(info.value)
+
+
+def test_server_error_exposes_the_key():
+    def unavailable(api, method, url, **kwargs):
+        return FakeHostedApi._resp(503, {"error": {"code": "managed_execution_unavailable",
+                                                   "message": "retry", "status": 503}})
+
+    client, keys = _recording(unavailable)
+    with pytest.raises(MarqovPlatformError) as info:
+        client.submit_native(source=SOURCE, **BASE)
+    assert info.value.code == "managed_execution_unavailable"
+    assert info.value.idempotency_key == keys[0]
+    _no_secrets(info.value)
+
+
+def test_unreadable_success_response_is_reported_as_unknown_outcome_with_the_key():
+    from marqov.platform.errors import TransportError
+
+    def html(api, method, url, **kwargs):
+        resp = FakeHostedApi._resp(201, {})
+        resp.json.side_effect = ValueError("Expecting value: line 1 column 1")
+        return resp
+
+    client, keys = _recording(html)
+    with pytest.raises(TransportError) as info:
+        client.submit_native(source=SOURCE, **BASE)
+    assert info.value.code == "submission_outcome_unknown"
+    assert info.value.idempotency_key == keys[0]
+    assert isinstance(info.value.__cause__, ValueError)
+    _no_secrets(info.value)
+
+
+@pytest.mark.parametrize("receipt, code", [
+    ({"job_id": JOB}, "invalid_receipt"),
+    ({"protocol_version": "marqov.funded-admission-receipt/v1", "job_id": JOB, "submission_id": JOB,
+      "source_sha256": "a" * 64, "input_sha256": "b" * 64}, "receipt_mismatch"),
+])
+def test_receipt_validation_failures_expose_the_key(receipt, code):
+    def reply(api, method, url, **kwargs):
+        return FakeHostedApi._resp(201, receipt)
+
+    client, keys = _recording(reply)
+    with pytest.raises(MarqovPlatformError) as info:
+        client.submit_native(source=SOURCE, **BASE)
+    assert info.value.code == code
+    assert info.value.idempotency_key == keys[0]
+    _no_secrets(info.value)
+
+
+def test_failures_before_sending_carry_no_key():
+    client, keys = _recording(lambda *a, **k: pytest.fail("must not send"))
+    with pytest.raises(ValueError):
+        client.submit_native(source=SOURCE, **{**BASE, "cap_cents": 0})
+    empty = FakeHostedApi(runtimes={"runtimes": []})
+    client2, _ = _client(empty)
+    with pytest.raises(MarqovPlatformError) as info:
+        client2.submit_native(source=SOURCE, **BASE)
+    assert info.value.code == "runtime_not_enabled" and info.value.idempotency_key is None
+    assert keys == []
+
+
+def test_documented_recovery_resubmits_with_the_same_key(monkeypatch):
+    import requests
+
+    monkeypatch.setattr("marqov.platform._transport.time.sleep", lambda _s: None)
+    state = {"down": True}
+
+    def flaky(api, method, url, **kwargs):
+        if state["down"]:
+            raise requests.exceptions.ConnectionError("connection reset")
+        return api(method, url, **kwargs)
+
+    client, keys = _recording(flaky)
+    request = dict(source=SOURCE, **BASE)
+    with pytest.raises(MarqovPlatformError) as info:
+        client.submit_native(**request)
+    state["down"] = False
+    job = client.submit_native(**request, idempotency_key=info.value.idempotency_key)
+    assert job.id == JOB
+    assert set(keys) == {info.value.idempotency_key}
+
+
+def test_saved_script_without_source_sha256_cannot_verify_the_source_content():
+    """Documented limit: only structure and input hash are checked, so a receipt
+    reporting any well-formed source hash is accepted for a bare script_id."""
+    def reply(api, method, url, **kwargs):
+        body = kwargs["json"]
+        return FakeHostedApi._resp(201, {
+            "protocol_version": "marqov.funded-admission-receipt/v1", "job_id": JOB,
+            "submission_id": JOB, "source_sha256": "f" * 64, "input_sha256": _sha(body["input"])})
+
+    client, _ = _recording(reply)
+    assert client.submit_native(script_id=SAVED["source"]["script_id"], **BASE).id == JOB
+    with pytest.raises(MarqovPlatformError) as info:   # with source_sha256 the same receipt is refused
+        client.submit_native(script_id=SAVED["source"]["script_id"], source_sha256=SOURCE_SHA, **BASE)
+    assert info.value.code == "receipt_mismatch"
