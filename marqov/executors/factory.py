@@ -23,7 +23,7 @@ from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorCon
 from marqov.executors.base import BaseExecutor
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
 from marqov.executors.cudaq import _SLUG_TO_TARGET, CudaqExecutor, CudaqExecutorConfig
-from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig
+from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig, normalize_ibm_connection
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
 from marqov.executors.local import LocalExecutor
 from marqov.executors.qilisdk import QiliSDKExecutor, QiliSDKExecutorConfig
@@ -293,10 +293,17 @@ class ExecutorFactory:
             backend_slug.replace("-", "_"),
         )
 
+        # One shared normaliser decides what channel/instance mean, so a stored
+        # row written under the retired defaults still builds (with a warning)
+        # and "" behaves exactly like an absent key on every path.
+        channel, instance = normalize_ibm_connection(
+            backend_config.get("channel"), backend_config.get("instance")
+        )
+
         config = IBMExecutorConfig(
             backend_name=backend_name,
-            channel=backend_config.get("channel", "ibm_quantum"),
-            instance=backend_config.get("instance", "ibm-q/open/main"),
+            channel=channel,
+            instance=instance,
             token=backend_config.get("token"),
             optimization_level=backend_config.get("optimization_level", 1),
             resilience_level=backend_config.get("resilience_level", 1),

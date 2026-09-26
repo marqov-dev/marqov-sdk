@@ -52,20 +52,66 @@ check the platform dashboard for full detail when it doesn't.
 
 ## Conditional retry for writes
 
-The client's retry policy distinguishes between two categories of network failure
-on write requests (e.g. `submit()`):
+The client's retry policy splits network failures on a write request (e.g.
+`submit()`, `cancel()`) by the phase in which they happened:
 
-- **Provably never reached the server** (connection refused, DNS failure):
-  safe to retry freely. The same `Idempotency-Key` header is reused across
-  all retry attempts so the server can de-duplicate the request.
+- **Connect phase** (connection refused, DNS failure, connect timeout): the
+  request bytes never left the client, so it provably never reached the
+  server and is retried freely, up to 3 attempts with a doubling backoff. The
+  same `Idempotency-Key` header is reused across every attempt. Pinned by
+  `tests/test_platform_transport.py::TestConnectionErrorPhaseSplit::test_connect_phase_connection_error_on_write_is_retried`.
 
-- **Ambiguous** (timeout after the request was sent): the server may have
-  received and processed the request. The client raises `TransportError`
-  rather than retrying, to avoid creating a duplicate job. Recover by
-  reconnecting with `client.job(job_id)` if you know the ID.
+- **Ambiguous** (a read timeout, or the connection dropping once the request
+  may already have reached the server, which `requests` reports as a
+  `ConnectionError` too): the server may have received and processed the
+  request. The client raises
+  `TransportError` rather than retrying, so a write cannot be double-submitted.
+  The error's `idempotency_key` attribute (also shown in its message) holds
+  the `Idempotency-Key` that was sent, so you can reconcile against the
+  platform dashboard, and you can recover by reconnecting
+  with `client.job(job_id)` if you know the ID. Pinned by
+  `tests/test_platform_transport.py::TestConnectionErrorPhaseSplit::test_ambiguous_connection_error_on_write_is_not_retried`.
+
+A retry that the client does perform is only safe against duplication if the
+server de-duplicates on `Idempotency-Key`. That is a requirement the client
+places on the server, not something the client can guarantee: what the client
+guarantees is that it never changes the key between attempts of one call, and
+that it never replays a write after an ambiguous failure.
 
 Read requests (status polls, `backends()`) are always safe to retry on any
-transport failure.
+transport failure, in either phase. Pinned by
+`tests/test_platform_transport.py::TestConnectionErrorPhaseSplit::test_ambiguous_connection_error_on_read_is_retried`
+and
+`tests/test_platform_transport.py::TestConnectionErrorPhaseSplit::test_connect_phase_connection_error_on_read_is_retried`.
+
+### Retried HTTP statuses
+
+Once the server has answered, the client retries only the transient statuses
+**429, 502, 503 and 504**, and only for idempotent requests: GETs, and writes
+the client marks as idempotent (`submit()`, `cancel()`). Every other non-2xx
+raises on the first response. Pinned by
+`tests/test_platform_transport.py::TestRetryableStatusCodes::test_503_then_200_on_get_returns_body`,
+`tests/test_platform_transport.py::TestRetryableStatusCodes::test_502_and_504_retried_for_idempotent_write`
+and
+`tests/test_platform_transport.py::TestRetryableStatusCodes::test_500_is_not_retried`.
+
+When the attempts run out, the exception raised is the one mapped from the
+last response, not a generic `TransportError`, so a 503 still surfaces as
+`BackendUnavailable` and a 429 as `RateLimited` with its `retry_after`. Pinned
+by
+`tests/test_platform_transport.py::TestRetryableStatusCodes::test_503_every_attempt_raises_mapped_exception`
+and
+`tests/test_platform_transport.py::TestRetryableStatusCodes::test_429_retry_after_respected_and_surfaced_when_exhausted`.
+If a later attempt failed before any response arrived, that transport failure
+is what you get instead, not the earlier status. Pinned by
+`tests/test_platform_transport.py::TestRetryableStatusCodes::test_retryable_status_then_transport_failures_raises_transport_error`.
+
+A 429's `Retry-After` header is honoured as the wait before the next attempt
+only when it parses and asks for no longer than the backoff the client would
+otherwise spend on its remaining attempts. A longer wait is left to you: the
+client falls back to its own backoff and hands you the parsed value on
+`RateLimited.retry_after`. Pinned by
+`tests/test_platform_transport.py::TestRetryableStatusCodes::test_429_retry_after_beyond_budget_falls_back_to_default_backoff`.
 
 ---
 

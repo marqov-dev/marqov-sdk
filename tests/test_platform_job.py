@@ -481,7 +481,7 @@ class TestJobCancel:
         t.request.assert_called_once_with(
             "POST",
             "/api/jobs/job-abc/cancel",
-            idempotent_write=False,
+            idempotent_write=True,
         )
 
     def test_cancel_returns_none(self):

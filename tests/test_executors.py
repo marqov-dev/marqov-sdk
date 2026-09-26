@@ -1,6 +1,7 @@
 """Tests for marqov.executors module."""
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -402,6 +403,55 @@ class TestBraketExecutor:
         )
 
 
+class _FakeQuantinuumResult:
+    """Stand-in for pytket's BackendResult, exposing only get_counts()."""
+
+    def __init__(self, counts: dict[tuple[int, ...], int]) -> None:
+        self._counts = counts
+
+    def get_counts(self) -> dict[tuple[int, ...], int]:
+        return self._counts
+
+
+class _FakeQuantinuumBackend:
+    """Provider-shaped stand-in for pytket's QuantinuumBackend.
+
+    Records the circuit it is handed and derives its counts from that
+    circuit's actual measurement map, so a submission carrying no classical
+    bits reports an empty-width key instead of being masked by a hardcoded
+    counts dict. ``qubit_state`` gives the deterministic outcome of each
+    Marqov qubit index; each one is placed in whichever classical bit the
+    submitted circuit measures it into, so a reversed measurement map shows
+    up as a reversed counts key.
+    """
+
+    def __init__(self, qubit_state: dict[int, int]) -> None:
+        self.qubit_state = qubit_state
+        self.submitted: Any = None
+        self.shots: int | None = None
+        self.optimisation_level: int | None = None
+
+    def get_compiled_circuit(self, circuit: Any, optimisation_level: int = 2) -> Any:
+        self.optimisation_level = optimisation_level
+        return circuit
+
+    def process_circuit(self, circuit: Any, n_shots: int, **kwargs: Any) -> tuple[str, ...]:
+        self.submitted = circuit
+        self.shots = n_shots
+        return ("fake-job-id",)
+
+    @staticmethod
+    def get_jobid(handle: tuple[str, ...]) -> str:
+        return handle[0]
+
+    def get_result(self, handle: tuple[str, ...], **kwargs: Any) -> _FakeQuantinuumResult:
+        outcome = [0] * self.submitted.n_bits
+        for qubit, bit_index in self.submitted.qubit_readout.items():
+            outcome[bit_index] = self.qubit_state[qubit.index[0]]
+        assert self.shots is not None
+        return _FakeQuantinuumResult({tuple(outcome): self.shots})
+
+
 class TestQuantinuumExecutor:
     """Tests for QuantinuumExecutor."""
 
@@ -447,6 +497,80 @@ class TestQuantinuumExecutor:
     def test_pytket_counts_string_keys_passthrough(self) -> None:
         raw = {"00": 300, "11": 700}
         assert QuantinuumExecutor._pytket_counts_to_bitstring(raw) == {"00": 300, "11": 700}
+
+    @pytest.mark.asyncio
+    async def test_execute_submits_a_measured_circuit(self) -> None:
+        """execute() measures the converted circuit before submitting it."""
+        pytest.importorskip("pytket")
+
+        circuit = bell_state()
+        backend = _FakeQuantinuumBackend({0: 0, 1: 0})
+        executor = QuantinuumExecutor(
+            QuantinuumExecutorConfig(device_name="H2-1", simulator="state-vector")
+        )
+
+        with patch.object(
+            executor, "_get_backend", new_callable=AsyncMock, return_value=backend
+        ):
+            result = await executor.execute(circuit, shots=1000)
+
+        assert backend.submitted is not None
+        assert backend.submitted.n_qubits == circuit.num_qubits
+        assert backend.submitted.n_bits == backend.submitted.n_qubits, (
+            "the submitted circuit must carry one classical bit per qubit"
+        )
+        assert result.counts
+        for key in result.counts:
+            assert len(key) == circuit.num_qubits, (
+                f"counts key {key!r} is not {circuit.num_qubits} bits wide"
+            )
+
+    @pytest.mark.asyncio
+    async def test_execute_preserves_qubit_zero_leftmost_order(self) -> None:
+        """An asymmetric circuit reads back with qubit 0 as the leftmost bit."""
+        pytest.importorskip("pytket")
+
+        # X on qubit 0 of two qubits; the Z on qubit 1 only widens the circuit.
+        circuit = Circuit().x(0).z(1)
+        backend = _FakeQuantinuumBackend({0: 1, 1: 0})
+        executor = QuantinuumExecutor(
+            QuantinuumExecutorConfig(device_name="H2-1", simulator="state-vector")
+        )
+
+        with patch.object(
+            executor, "_get_backend", new_callable=AsyncMock, return_value=backend
+        ):
+            result = await executor.execute(circuit, shots=500)
+
+        assert result.counts == {"10": 500}
+
+    @pytest.mark.asyncio
+    async def test_execute_does_not_double_measure(self) -> None:
+        """A circuit that already carries measurements is submitted unchanged."""
+        pytest.importorskip("pytket")
+        from pytket import Circuit as TketCircuit
+        from pytket.circuit import OpType
+
+        circuit = bell_state()
+        premeasured = TketCircuit(circuit.num_qubits)
+        premeasured.H(0)
+        premeasured.CX(0, 1)
+        premeasured.measure_all()
+        backend = _FakeQuantinuumBackend({0: 0, 1: 0})
+        executor = QuantinuumExecutor(
+            QuantinuumExecutorConfig(device_name="H2-1", simulator="state-vector")
+        )
+
+        with patch.object(
+            executor, "_get_backend", new_callable=AsyncMock, return_value=backend
+        ):
+            with patch.object(Circuit, "to_pytket", return_value=premeasured):
+                result = await executor.execute(circuit, shots=100)
+
+        assert backend.submitted.n_bits == circuit.num_qubits
+        # Exactly one measurement per qubit: a second measure_all() would add more.
+        assert backend.submitted.n_gates_of_type(OpType.Measure) == circuit.num_qubits
+        assert result.counts == {"00": 100}
 
     @pytest.mark.asyncio
     async def test_execute_converts_tuple_counts(self) -> None:

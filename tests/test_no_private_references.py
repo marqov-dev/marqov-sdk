@@ -8,7 +8,8 @@ needs a gate, not vigilance.
 What it bans (over ``marqov/``, ``docs/``, and ``tests/`` — the leak that started
 this was a test comment, so tests are in scope too):
   - private repo names (``marqov-platform``, ``marqov-research``),
-  - internal source paths (``platform/src``, ``app/api/``, ``route.ts``, ``.ts:<line>``),
+  - internal source paths (``platform/src``, ``app/api/``, and any TypeScript
+    filename such as ``route.ts``),
   - DB migration / schema internals (``supabase/migrations``, ``*.sql``, ``job_runs``,
     ``selectCols``),
   - unqualified / private issue numbers (``#1234``, ``marqov-platform#1234``).
@@ -38,7 +39,7 @@ _SELF = Path(__file__).name
 # (label, pattern) — each matches one class of private-internal reference.
 _BANNED: list[tuple[str, re.Pattern[str]]] = [
     ("private repo name", re.compile(r"marqov-platform|marqov-research")),
-    ("internal source path", re.compile(r"platform/src|app/api/|route\.ts|\.ts:\d")),
+    ("internal source path", re.compile(r"platform/src|app/api/|\.tsx?\b")),
     ("db migration / schema", re.compile(r"supabase/migrations|\.sql\b|\bjob_runs\b|selectCols")),
 ]
 
