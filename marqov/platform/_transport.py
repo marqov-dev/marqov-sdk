@@ -44,6 +44,87 @@ _MAX_RETRIES = 3
 #: Initial backoff (seconds) between retries; doubles each attempt.
 _RETRY_BACKOFF_BASE = 0.5
 
+#: HTTP statuses retried for idempotent requests (GETs and idempotent writes).
+#: These are transient server-side or gateway conditions, not client errors.
+_RETRYABLE_STATUS_CODES = frozenset({429, 502, 503, 504})
+
+#: Substrings that identify a connect-phase failure when urllib3's exception
+#: classes cannot be imported. Only used as a fallback: an unmatched message is
+#: treated as ambiguous, which is the safe direction for a write.
+_CONNECT_PHASE_MARKERS = (
+    "failed to establish a new connection",
+    "connection refused",
+    "name or service not known",
+    "nodename nor servname",
+    "temporary failure in name resolution",
+    "getaddrinfo failed",
+    "connecttimeouterror",
+    "newconnectionerror",
+)
+
+
+def _remaining_backoff_budget(attempt: int) -> float:
+    """Total default backoff (seconds) still to come after `attempt` failed.
+
+    ``attempt`` is zero-based, so after attempt 0 of 3 the transport would
+    otherwise sleep ``_RETRY_BACKOFF_BASE`` and then ``2 * _RETRY_BACKOFF_BASE``.
+    """
+    return float(
+        sum(
+            _RETRY_BACKOFF_BASE * (2 ** (i - 1))
+            for i in range(attempt + 1, _MAX_RETRIES)
+        )
+    )
+
+
+def _is_connect_phase_failure(exc: BaseException) -> bool:
+    """Report whether `exc` failed before the request bytes were sent.
+
+    ``requests`` collapses connect-phase failures (refused, DNS, connect
+    timeout) and post-send failures (the peer closing the socket, a reset
+    mid-response) onto the same :class:`requests.exceptions.ConnectionError`,
+    so the wrapped urllib3 cause is what distinguishes them. A connect-phase
+    failure provably never reached the server; anything else is ambiguous.
+
+    urllib3 is an install-time dependency of ``requests`` but is not declared
+    by this package, so it is imported defensively and the exception's string
+    form is used as a fallback.
+    """
+    # requests raises ConnectTimeout for a urllib3 ConnectTimeoutError that is
+    # not a NewConnectionError, so the class itself is already conclusive.
+    if isinstance(exc, requests.exceptions.ConnectTimeout):
+        return True
+
+    try:
+        # NewConnectionError subclasses ConnectTimeoutError, so one target
+        # covers both.
+        from urllib3.exceptions import ConnectTimeoutError
+    except ImportError:  # pragma: no cover - urllib3 ships with requests
+        lowered = str(exc).lower()
+        return any(marker in lowered for marker in _CONNECT_PHASE_MARKERS)
+
+    # Walk the wrapped causes: requests passes the urllib3 error as an arg,
+    # and a MaxRetryError carries the underlying failure on ``.reason``.
+    seen: set[int] = set()
+    pending: list[BaseException] = [exc]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, ConnectTimeoutError):
+            return True
+        candidates = (
+            *getattr(current, "args", ()),
+            getattr(current, "reason", None),
+            current.__cause__,
+            current.__context__,
+        )
+        for candidate in candidates:
+            if isinstance(candidate, BaseException):
+                pending.append(candidate)
+    return False
+
 
 def _parse_retry_after(raw: str) -> int | None:
     """Parse a ``Retry-After`` header value into whole seconds.
@@ -157,6 +238,14 @@ class Transport:
         call and **reused across all retries** so the server can safely dedupe
         replays.
 
+        Idempotent requests (GETs and ``idempotent_write=True`` writes) are
+        also retried on the transient statuses 429, 502, 503 and 504, using the
+        same doubling backoff.  A 429's ``Retry-After`` is honoured when it
+        parses and asks for no longer than the remaining backoff budget.  Once
+        attempts are exhausted the mapped exception for the last response is
+        raised, so a rate limit still surfaces as ``RateLimited`` with its
+        ``retry_after``.
+
         Args:
             method:           HTTP method (``"GET"``, ``"POST"``, …).
             path:             URL path appended to ``base_url``
@@ -165,11 +254,17 @@ class Transport:
             params:           URL query parameters.
             idempotent_write: When ``True`` the request is a write that is
                               safe to retry only on failures that provably never
-                              reached the server (``ConnectionError`` — refused /
-                              DNS).  ``Timeout`` / ``ReadTimeout`` are **not**
-                              retried because the server may have processed the
-                              request.  When ``False`` (reads / GETs) any
-                              transport failure is retried.
+                              reached the server (connect-phase failures:
+                              refused, DNS, connect timeout).  ``Timeout`` /
+                              ``ReadTimeout`` and post-send connection failures
+                              are **not** retried because the server may have
+                              processed the request; the raised
+                              ``TransportError`` carries the idempotency key so
+                              the caller can reconcile.  It also opts the
+                              request into the retryable-status policy below.
+                              When ``False`` any transport failure is retried
+                              for reads, while a write is never retried on a
+                              retryable status.
             idempotency_key:  Caller-chosen ``Idempotency-Key`` for a write.
                               Sent verbatim and reused across retries.  When
                               omitted a fresh UUID4 is generated for this call.
@@ -221,10 +316,18 @@ class Transport:
         if idempotency_key is not None:
             extra_headers["Idempotency-Key"] = idempotency_key
 
+        # A GET/HEAD/OPTIONS carries no key and is idempotent by method; a
+        # write is only replayable when the caller marked it as such.
+        idempotent_request = idempotent_write or idempotency_key is None
+
         last_exc: Exception | None = None
+        last_resp: requests.Response | None = None
+        next_sleep: float | None = None
         for attempt in range(_MAX_RETRIES):
             if attempt > 0:
-                time.sleep(_RETRY_BACKOFF_BASE * (2 ** (attempt - 1)))
+                default_backoff = _RETRY_BACKOFF_BASE * (2 ** (attempt - 1))
+                time.sleep(next_sleep if next_sleep is not None else default_backoff)
+            next_sleep = None
 
             try:
                 resp = self._session.request(
@@ -236,35 +339,72 @@ class Transport:
                     timeout=self._timeout,
                 )
             except requests.exceptions.ConnectionError as exc:
-                # Provably never reached the server — safe to retry regardless
-                # of write/read mode.
+                # Connect-phase failures (refused, DNS, connect timeout)
+                # provably never reached the server and stay freely retryable.
+                # Everything else in this class (the peer closing the socket
+                # after the body was written, a reset mid-response) is
+                # ambiguous: the server may already hold the request.
+                if idempotent_write and not _is_connect_phase_failure(exc):
+                    raise TransportError(
+                        "Connection failed after the request may have reached "
+                        "the server and was not retried, to avoid a duplicate "
+                        f"write ({exc!r})",
+                        idempotency_key=idempotency_key,
+                    ) from exc
                 last_exc = exc
+                # This attempt failed before any response, so an earlier
+                # retryable response is no longer what the caller should see.
+                last_resp = None
                 continue
             except requests.exceptions.Timeout as exc:  # ReadTimeout is a subclass of Timeout; listed for documentation clarity
                 # Ambiguous: the server may have received and processed the
                 # request.  Retry only for idempotent reads.
                 if idempotent_write:
                     raise TransportError(
-                        f"Request timed out and was not retried ({exc!r})"
+                        f"Request timed out and was not retried ({exc!r})",
+                        idempotency_key=idempotency_key,
                     ) from exc
                 # Reads: retryable
                 last_exc = exc
+                last_resp = None
                 continue
             except requests.exceptions.RequestException as exc:
                 # Other transport failure: treat like Timeout (ambiguous).
                 if idempotent_write:
-                    raise TransportError(f"Transport error: {exc!r}") from exc
+                    raise TransportError(
+                        f"Transport error: {exc!r}",
+                        idempotency_key=idempotency_key,
+                    ) from exc
                 last_exc = exc
+                last_resp = None
                 continue
 
             # --- HTTP response received -------------------------------------
             if resp.ok:
                 return resp.json()
 
+            # Transient server-side statuses are retried for idempotent
+            # requests only; a write that was not marked idempotent must not
+            # be replayed even though the server answered.
+            if (
+                idempotent_request
+                and resp.status_code in _RETRYABLE_STATUS_CODES
+                and attempt < _MAX_RETRIES - 1
+            ):
+                last_resp = resp
+                last_exc = None
+                if resp.status_code == 429:
+                    next_sleep = self._retry_after_sleep(resp, attempt)
+                continue
+
             # Map non-2xx → exception
             return self._raise_for_response(resp)
 
         # All retries exhausted
+        if last_resp is not None:
+            # Raise the mapped exception for the final response so, for
+            # example, RateLimited still surfaces with its retry_after.
+            return self._raise_for_response(last_resp)
         raise TransportError(
             f"Request failed after {_MAX_RETRIES} attempts: {last_exc!r}"
         ) from last_exc
@@ -272,6 +412,24 @@ class Transport:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _retry_after_sleep(resp: requests.Response, attempt: int) -> float | None:
+        """Return the ``Retry-After`` wait to honour before the next attempt.
+
+        The header is honoured only when it parses and asks for no more than
+        the transport would otherwise spend on its remaining retries; a longer
+        wait belongs to the caller, which still receives the parsed value on
+        :class:`~marqov.platform.errors.RateLimited` once attempts run out.
+        Returns ``None`` to fall back to the default doubling backoff.
+        """
+        raw = resp.headers.get("Retry-After")
+        if raw is None:
+            return None
+        parsed = _parse_retry_after(raw)
+        if parsed is None or parsed > _remaining_backoff_budget(attempt):
+            return None
+        return float(parsed)
 
     def _raise_for_response(self, resp: requests.Response) -> typing.NoReturn:
         """Parse an error response and raise the appropriate exception.

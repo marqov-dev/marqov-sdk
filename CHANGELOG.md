@@ -50,6 +50,17 @@ release.
   unused, matching `IBMExecutorConfig`: `execute()` blocks on the backend's
   `get_result()` rather than polling. (marqov-sdk#130)
 
+- The platform transport no longer retries a write after a connection failure
+  that happened once the request had been sent, so a submit or cancel cannot be
+  double-submitted. Only connect-phase failures (refused, DNS, connect timeout)
+  are still retried; an ambiguous failure raises `TransportError` with the
+  idempotency key on its `idempotency_key` attribute. Idempotent requests now also retry the
+  transient statuses 429, 502, 503 and 504, honouring a `Retry-After` that fits
+  the remaining backoff budget and raising the mapped exception for the last
+  response when attempts run out. `Job.cancel()` now uses the idempotent-write
+  policy. See [error handling](docs/platform-client/error-handling.md).
+  (marqov-sdk#149)
+
 ## [0.8.0] — 2026-09-25
 
 ### Added

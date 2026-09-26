@@ -307,6 +307,10 @@ class Job:
         the server may have already transitioned the job to a terminal state,
         in which case this call is a no-op from the server's perspective.
 
+        The request is sent under the transport's idempotent-write policy: it
+        carries an ``Idempotency-Key`` reused across retries, and an ambiguous
+        network failure raises rather than replaying the cancel.
+
         .. warning::
             **§11 TBC assumption**: The ``/api/jobs/{id}/cancel`` endpoint
             does **not** currently exist in the platform.  The only known
@@ -326,5 +330,5 @@ class Job:
         self._transport.request(
             "POST",
             f"/api/jobs/{self._job_id}/cancel",
-            idempotent_write=False,
+            idempotent_write=True,
         )

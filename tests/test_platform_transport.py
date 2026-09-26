@@ -15,7 +15,13 @@ import pytest
 import requests
 import requests.exceptions
 
-from marqov.platform._transport import Transport, _DEFAULT_BASE_URL
+from http.client import RemoteDisconnected
+
+from marqov.platform._transport import (
+    Transport,
+    _DEFAULT_BASE_URL,
+    _MAX_RETRIES,
+)
 from marqov.platform.errors import (
     AuthenticationError,
     BackendUnavailable,
@@ -384,10 +390,13 @@ class TestRetryPolicy:
     """Verify the conditional retry logic for writes vs. reads."""
 
     def test_idempotent_write_retries_connection_error_with_same_idempotency_key(self):
-        """ConnectionError on idempotent_write=True → retried; Idempotency-Key reused.
+        """Connect-phase ConnectionError on a write → retried; Idempotency-Key reused.
 
         The same UUID must appear in every attempt so the server can dedupe.
         The server uses the Idempotency-Key header to detect replays.
+        Only connect-phase failures are retried for a write, so the exception
+        is built the way ``requests`` builds a refused connection rather than
+        from a bare string.
         """
         transport = Transport(api_key="marqey_test_x", base_url="http://test")
         success_resp = _mock_response(200, {"job_id": "j1"})
@@ -401,7 +410,7 @@ class TestRetryPolicy:
             headers = kwargs.get("headers", {})
             captured_idempotency_keys.append(headers.get("Idempotency-Key", ""))
             if call_count == 1:
-                raise requests.exceptions.ConnectionError("Connection refused")
+                raise _connect_phase_connection_error()
             return success_resp
 
         with patch.object(transport._session, "request", side_effect=side_effect):
@@ -490,21 +499,22 @@ class TestRetryPolicy:
         assert call_count == 2
 
     def test_idempotent_write_connection_error_exhausted_raises_transport_error(self):
-        """All retries exhausted on ConnectionError for write → TransportError."""
+        """All retries exhausted on a connect-phase failure for a write → TransportError."""
         transport = Transport(api_key="marqey_test_x", base_url="http://test")
 
         with patch.object(
             transport._session,
             "request",
-            side_effect=requests.exceptions.ConnectionError("refused"),
+            side_effect=_connect_phase_connection_error(),
         ):
-            with pytest.raises(TransportError):
-                transport.request(
-                    "POST",
-                    "/api/jobs/submit",
-                    json={},
-                    idempotent_write=True,
-                )
+            with patch("marqov.platform._transport.time.sleep"):
+                with pytest.raises(TransportError):
+                    transport.request(
+                        "POST",
+                        "/api/jobs/submit",
+                        json={},
+                        idempotent_write=True,
+                    )
 
     def test_get_all_retries_exhausted_raises_transport_error(self):
         """All GET retries exhausted → TransportError."""
@@ -660,7 +670,7 @@ class TestIdempotencyKey:
             key = kwargs.get("headers", {}).get("Idempotency-Key", "")
             collected_keys.append(key)
             if len(collected_keys) < 2:
-                raise requests.exceptions.ConnectionError("refused")
+                raise _connect_phase_connection_error()
             return success_resp
 
         with patch.object(transport._session, "request", side_effect=side_effect):
@@ -963,3 +973,366 @@ class TestConnectTimeoutRetry:
             f"Idempotency-Key changed across ConnectTimeout retry: {captured_keys}"
         )
         assert captured_keys[0] != "", "Idempotency-Key must be non-empty"
+
+
+# ---------------------------------------------------------------------------
+# Connection-failure phase split (marqov-sdk#149)
+# ---------------------------------------------------------------------------
+
+
+def _aborted_connection_error() -> requests.exceptions.ConnectionError:
+    """Build the ConnectionError requests raises for a post-send disconnect.
+
+    ``requests`` wraps a urllib3 ``ProtocolError`` in ``ConnectionError``
+    (``requests/adapters.py``), and urllib3 raises that ProtocolError when the
+    peer closes the socket after the request body has been written.
+    """
+    from urllib3.exceptions import ProtocolError
+
+    protocol_error = ProtocolError(
+        "Connection aborted.", RemoteDisconnected("Remote end closed connection")
+    )
+    return requests.exceptions.ConnectionError(protocol_error)
+
+
+def _connect_phase_connection_error() -> requests.exceptions.ConnectionError:
+    """Build the ConnectionError requests raises when the connect never lands.
+
+    ``requests`` wraps urllib3's ``MaxRetryError``, whose ``reason`` is a
+    ``NewConnectionError``, in ``ConnectionError``.
+    """
+    from urllib3.exceptions import MaxRetryError, NewConnectionError
+
+    new_conn = NewConnectionError(
+        None, "Failed to establish a new connection: [Errno 61] Connection refused"
+    )
+    max_retry = MaxRetryError(None, "http://test/api/jobs/submit", reason=new_conn)
+    return requests.exceptions.ConnectionError(max_retry)
+
+
+class TestConnectionErrorPhaseSplit:
+    """Post-send connection failures are ambiguous and must not replay a write."""
+
+    def test_ambiguous_connection_error_on_write_is_not_retried(self):
+        """A post-send disconnect on a write: 1 attempt, TransportError, key in message."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+
+        captured_keys: list[str] = []
+
+        def side_effect(*args, **kwargs):
+            captured_keys.append(kwargs.get("headers", {}).get("Idempotency-Key", ""))
+            raise _aborted_connection_error()
+
+        with patch.object(transport._session, "request", side_effect=side_effect):
+            with pytest.raises(TransportError) as excinfo:
+                transport.request(
+                    "POST",
+                    "/api/jobs/submit",
+                    json={"backend": "sv1"},
+                    idempotent_write=True,
+                )
+
+        assert len(captured_keys) == 1, f"Expected 1 attempt, got {len(captured_keys)}"
+        assert captured_keys[0] != ""
+        assert captured_keys[0] in str(excinfo.value), (
+            "The idempotency key must be in the message so the caller can reconcile"
+        )
+        assert excinfo.value.idempotency_key == captured_keys[0]
+
+    def test_connect_phase_connection_error_on_write_is_retried(self):
+        """A connect-phase failure on a write: still 3 attempts, one shared key."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+
+        captured_keys: list[str] = []
+
+        def side_effect(*args, **kwargs):
+            captured_keys.append(kwargs.get("headers", {}).get("Idempotency-Key", ""))
+            raise _connect_phase_connection_error()
+
+        with patch.object(transport._session, "request", side_effect=side_effect):
+            with patch("marqov.platform._transport.time.sleep"):
+                with pytest.raises(TransportError):
+                    transport.request(
+                        "POST",
+                        "/api/jobs/submit",
+                        json={"backend": "sv1"},
+                        idempotent_write=True,
+                    )
+
+        assert len(captured_keys) == 3, f"Expected 3 attempts, got {len(captured_keys)}"
+        assert len(set(captured_keys)) == 1, (
+            f"Idempotency-Key changed across retries: {captured_keys}"
+        )
+
+    def test_ambiguous_connection_error_on_read_is_retried(self):
+        """A post-send disconnect on a read is still retried to success."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        success_resp = _mock_response(200, {"id": "j1", "status": "completed"})
+
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise _aborted_connection_error()
+            return success_resp
+
+        with patch.object(transport._session, "request", side_effect=side_effect):
+            with patch("marqov.platform._transport.time.sleep"):
+                result = transport.request("GET", "/api/jobs/j1/status")
+
+        assert result["status"] == "completed"
+        assert call_count == 2
+
+    def test_connect_phase_connection_error_on_read_is_retried(self):
+        """A connect-phase failure on a read is retried to success."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        success_resp = _mock_response(200, {"id": "j1", "status": "pending"})
+
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise _connect_phase_connection_error()
+            return success_resp
+
+        with patch.object(transport._session, "request", side_effect=side_effect):
+            with patch("marqov.platform._transport.time.sleep"):
+                result = transport.request("GET", "/api/jobs/j1/status")
+
+        assert result["status"] == "pending"
+        assert call_count == 2
+
+    def test_timeout_on_write_message_carries_idempotency_key(self):
+        """The ambiguous-timeout TransportError also carries the key."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+
+        captured_keys: list[str] = []
+
+        def side_effect(*args, **kwargs):
+            captured_keys.append(kwargs.get("headers", {}).get("Idempotency-Key", ""))
+            raise requests.exceptions.ReadTimeout("timed out")
+
+        with patch.object(transport._session, "request", side_effect=side_effect):
+            with pytest.raises(TransportError) as excinfo:
+                transport.request(
+                    "POST",
+                    "/api/jobs/submit",
+                    json={},
+                    idempotent_write=True,
+                )
+
+        assert len(captured_keys) == 1
+        assert captured_keys[0] in str(excinfo.value)
+        assert excinfo.value.idempotency_key == captured_keys[0]
+
+    def test_other_request_exception_on_write_message_carries_idempotency_key(self):
+        """The generic ambiguous TransportError also carries the key."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+
+        captured_keys: list[str] = []
+
+        def side_effect(*args, **kwargs):
+            captured_keys.append(kwargs.get("headers", {}).get("Idempotency-Key", ""))
+            raise requests.exceptions.ChunkedEncodingError("broken chunk")
+
+        with patch.object(transport._session, "request", side_effect=side_effect):
+            with pytest.raises(TransportError) as excinfo:
+                transport.request(
+                    "POST",
+                    "/api/jobs/submit",
+                    json={},
+                    idempotent_write=True,
+                )
+
+        assert len(captured_keys) == 1
+        assert captured_keys[0] in str(excinfo.value)
+        assert excinfo.value.idempotency_key == captured_keys[0]
+
+
+# ---------------------------------------------------------------------------
+# Retryable HTTP statuses (marqov-sdk#149)
+# ---------------------------------------------------------------------------
+
+
+class TestRetryableStatusCodes:
+    """502/503/504/429 are retried for idempotent requests."""
+
+    def test_503_then_200_on_get_returns_body(self):
+        """503 then 200 for a GET: 2 attempts, body returned."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        responses = [
+            _mock_response(503, {"error": {"code": "unavailable", "message": "down"}}),
+            _mock_response(200, {"id": "j1", "status": "completed"}),
+        ]
+
+        with patch.object(
+            transport._session, "request", side_effect=responses
+        ) as mock_req:
+            with patch("marqov.platform._transport.time.sleep"):
+                result = transport.request("GET", "/api/jobs/j1/status")
+
+        assert result["status"] == "completed"
+        assert mock_req.call_count == 2
+
+    def test_503_every_attempt_raises_mapped_exception(self):
+        """503 on every attempt: _MAX_RETRIES attempts, then the mapped exception."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        resp = _mock_response(
+            503, {"error": {"code": "backend_retired", "message": "gone"}}
+        )
+
+        with patch.object(
+            transport._session, "request", side_effect=[resp] * _MAX_RETRIES
+        ) as mock_req:
+            with patch("marqov.platform._transport.time.sleep"):
+                with pytest.raises(BackendUnavailable) as excinfo:
+                    transport.request("GET", "/api/jobs/j1/status")
+
+        assert mock_req.call_count == _MAX_RETRIES
+        assert excinfo.value.status == 503
+
+    @pytest.mark.parametrize("status", [502, 504])
+    def test_502_and_504_retried_for_idempotent_write(self, status):
+        """502/504 are retried for idempotent_write=True with one shared key."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        responses = [
+            _mock_response(status, None),
+            _mock_response(200, {"job_id": "j1"}),
+        ]
+        captured_keys: list[str] = []
+
+        def side_effect(*args, **kwargs):
+            captured_keys.append(kwargs.get("headers", {}).get("Idempotency-Key", ""))
+            return responses[len(captured_keys) - 1]
+
+        with patch.object(transport._session, "request", side_effect=side_effect):
+            with patch("marqov.platform._transport.time.sleep"):
+                result = transport.request(
+                    "POST", "/api/jobs/submit", json={}, idempotent_write=True
+                )
+
+        assert result == {"job_id": "j1"}
+        assert len(captured_keys) == 2
+        assert len(set(captured_keys)) == 1
+
+    def test_503_not_retried_for_non_idempotent_write(self):
+        """A write that is not marked idempotent is never status-retried."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        resp = _mock_response(503, None)
+
+        with patch.object(transport._session, "request", return_value=resp) as mock_req:
+            with pytest.raises(TransportError):
+                transport.request("POST", "/api/jobs/j1/cancel", json={})
+
+        assert mock_req.call_count == 1
+
+    def test_500_is_not_retried(self):
+        """500 is not in the retryable set."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        resp = _mock_response(500, None)
+
+        with patch.object(transport._session, "request", return_value=resp) as mock_req:
+            with pytest.raises(TransportError):
+                transport.request("GET", "/api/jobs/j1/status")
+
+        assert mock_req.call_count == 1
+
+    def test_retryable_status_then_transport_failures_raises_transport_error(self):
+        """A later transport failure supersedes an earlier retryable response.
+
+        The exception raised on exhaustion must describe the final attempt, not
+        a stale 503 from an earlier one.
+        """
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _mock_response(
+                    503, {"error": {"code": "backend_retired", "message": "gone"}}
+                )
+            raise _connect_phase_connection_error()
+
+        with patch.object(transport._session, "request", side_effect=side_effect):
+            with patch("marqov.platform._transport.time.sleep"):
+                with pytest.raises(TransportError) as excinfo:
+                    transport.request("GET", "/api/jobs/j1/status")
+
+        assert call_count == _MAX_RETRIES
+        assert not isinstance(excinfo.value, BackendUnavailable)
+        assert "ConnectionError" in str(excinfo.value)
+
+    def test_429_retry_after_respected_and_surfaced_when_exhausted(self):
+        """429 with a parseable Retry-After sleeps for it, then raises RateLimited."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        resp = _mock_response(
+            429,
+            {"error": {"code": "rate_limited", "message": "slow down"}},
+            headers={"Retry-After": "1"},
+        )
+
+        with patch.object(
+            transport._session, "request", side_effect=[resp] * _MAX_RETRIES
+        ) as mock_req:
+            with patch("marqov.platform._transport.time.sleep") as mock_sleep:
+                with pytest.raises(RateLimited) as excinfo:
+                    transport.request("GET", "/api/jobs/j1/status")
+
+        assert mock_req.call_count == _MAX_RETRIES
+        assert excinfo.value.retry_after == 1
+        assert mock_sleep.call_args_list == [call(1.0), call(1.0)]
+
+    def test_429_retry_after_beyond_budget_falls_back_to_default_backoff(self):
+        """A Retry-After larger than the remaining budget is not slept on."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        resp = _mock_response(
+            429,
+            {"error": {"code": "rate_limited", "message": "slow down"}},
+            headers={"Retry-After": "600"},
+        )
+
+        with patch.object(
+            transport._session, "request", side_effect=[resp] * _MAX_RETRIES
+        ):
+            with patch("marqov.platform._transport.time.sleep") as mock_sleep:
+                with pytest.raises(RateLimited) as excinfo:
+                    transport.request("GET", "/api/jobs/j1/status")
+
+        assert excinfo.value.retry_after == 600
+        assert mock_sleep.call_args_list == [call(0.5), call(1.0)]
+
+
+# ---------------------------------------------------------------------------
+# Job.cancel() uses the idempotent-write policy (marqov-sdk#149)
+# ---------------------------------------------------------------------------
+
+
+class TestCancelUsesWritePolicy:
+    """cancel() must not be replayed on an ambiguous failure."""
+
+    def test_cancel_on_ambiguous_failure_is_not_retried(self):
+        """cancel() on a post-send disconnect: 1 attempt, raises TransportError."""
+        from marqov.platform.job import Job
+
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        job = Job(transport, "job-abc")
+
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise _aborted_connection_error()
+
+        with patch.object(transport._session, "request", side_effect=side_effect):
+            with pytest.raises(TransportError):
+                job.cancel()
+
+        assert call_count == 1, f"Expected 1 attempt, got {call_count}"
