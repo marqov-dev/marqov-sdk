@@ -24,6 +24,23 @@ from marqov.platform import MarqovClient
 from marqov.platform.errors import MarqovPlatformError
 from marqov.platform.job import Job
 
+
+def _refused():
+    """The ConnectionError requests raises when the connect never lands.
+
+    Only this connect-phase shape is retried for a write; a bare
+    ConnectionError (a reset after the request was sent) is ambiguous.
+    """
+    import requests
+    from urllib3.exceptions import MaxRetryError, NewConnectionError
+
+    new_conn = NewConnectionError(
+        None, "Failed to establish a new connection: [Errno 61] Connection refused"
+    )
+    return requests.exceptions.ConnectionError(
+        MaxRetryError(None, "http://test/api/jobs/native", reason=new_conn)
+    )
+
 FIXTURES = Path(__file__).parent / "fixtures" / "public_submission_v1"
 SAVED = json.loads((FIXTURES / "saved_script.json").read_text())
 INLINE = json.loads((FIXTURES / "inline_source.json").read_text())
@@ -163,8 +180,6 @@ def test_large_integers_are_sent_exactly():
 
 
 def test_caller_idempotency_key_is_sent_and_reused_across_transport_retries(monkeypatch):
-    import requests
-
     api = FakeHostedApi()
     calls = {"n": 0}
 
@@ -172,7 +187,7 @@ def test_caller_idempotency_key_is_sent_and_reused_across_transport_retries(monk
         if method == "POST":
             calls["n"] += 1
             if calls["n"] == 1:
-                raise requests.exceptions.ConnectionError("refused")
+                raise _refused()
         return api(method, url, **kwargs)
 
     client, _ = _client(api)
@@ -438,11 +453,10 @@ def _no_secrets(exc: BaseException) -> None:
 
 @pytest.mark.parametrize("caller_key", [None, KEY])
 def test_exhausted_connection_retries_expose_the_key_every_attempt_used(monkeypatch, caller_key):
-    import requests
     from marqov.platform.errors import TransportError
 
     def refuse(api, method, url, **kwargs):
-        raise requests.exceptions.ConnectionError("connection reset")
+        raise _refused()
 
     monkeypatch.setattr("marqov.platform._transport.time.sleep", lambda _s: None)
     client, keys = _recording(refuse)
@@ -454,6 +468,21 @@ def test_exhausted_connection_retries_expose_the_key_every_attempt_used(monkeypa
         assert keys[0] == caller_key
     uuid.UUID(info.value.idempotency_key)
     assert info.value.idempotency_key in str(info.value)
+    _no_secrets(info.value)
+
+
+def test_post_send_connection_reset_is_not_retried_and_exposes_the_key():
+    import requests
+    from marqov.platform.errors import TransportError
+
+    def reset(api, method, url, **kwargs):
+        raise requests.exceptions.ConnectionError("connection reset by peer")
+
+    client, keys = _recording(reset)
+    with pytest.raises(TransportError) as info:
+        client.submit_native(source=SOURCE, idempotency_key=KEY, **BASE)
+    assert keys == [KEY]  # one attempt: never replayed
+    assert info.value.idempotency_key == KEY
     _no_secrets(info.value)
 
 
