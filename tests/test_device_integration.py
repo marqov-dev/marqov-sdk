@@ -579,6 +579,20 @@ class TestRunAzureBranch:
         assert all(isinstance(value, int) for value in counts.values())
         assert sum(counts.values()) == 100
 
+    def test_v1_counts_sum_to_shots_when_bins_do_not_divide_evenly(self) -> None:
+        """Three outcomes at 1/3 each over 100 shots: rounding each bin gives 99."""
+        third = 1 / 3
+        job = _StubAzureJob(
+            {"Histogram": ["[0, 0]", third, "[1, 0]", third, "[1, 1]", third]},
+            "microsoft.quantum-results.v1",
+        )
+
+        counts, _ = self._run(job, shots=100)
+
+        assert set(counts) == {"00", "01", "11"}
+        assert sum(counts.values()) == 100
+        assert sorted(counts.values()) == [33, 33, 34]
+
     def test_unsupported_output_format_raises_naming_the_format(self) -> None:
         job = _StubAzureJob({"Histogram": []}, "microsoft.quantum-results.v99")
 
