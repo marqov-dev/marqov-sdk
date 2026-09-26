@@ -5,7 +5,7 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
-## [Unreleased]
+## [0.8.1] — 2026-09-26
 
 ### Fixed
 
@@ -47,11 +47,6 @@ release.
   the workflow instead of retrying its workflow task indefinitely.
   (marqov-sdk#141)
 
-- The CLI's `list` command no longer shadows the `list` builtin. The command
-  function is renamed to `list_workflows` internally (the command itself is
-  still invoked as `marqov list`); previously the shadowed builtin broke
-  every `marqov run ... --arg key=value` invocation. See marqov-sdk#148.
-
 - `QuantinuumExecutor.execute()` measures the converted circuit before
   submitting it. Marqov's `Circuit` IR carries no measurements, so the
   submitted pytket circuit had zero classical bits and every run returned
@@ -61,32 +56,6 @@ release.
 - `QuantinuumExecutorConfig.poll_interval_seconds` is documented as currently
   unused, matching `IBMExecutorConfig`: `execute()` blocks on the backend's
   `get_result()` rather than polling. (marqov-sdk#130)
-
-- The CLI's `list` command no longer shadows the `list` builtin. The command
-  function is renamed to `list_workflows` internally (the command itself is
-  still invoked as `marqov list`); previously the shadowed builtin broke
-  every `marqov run ... --arg key=value` invocation. See marqov-sdk#148.
-
-- The Temporal task activity now drains the child process's stderr while the
-  child runs, so a task that writes more than the pipe buffer holds (verbose
-  provider logging, progress output) can no longer block the child in `write()`
-  and stall the activity until its timeout. Only the last 32 KiB are kept, and
-  the crash message says how many earlier bytes were dropped. A failing
-  heartbeat loop is now logged at error level instead of being discarded
-  silently. (marqov-sdk#140)
-
-- The task activity validates the child process's result envelope instead of
-  forwarding it verbatim. A task that writes a `result.json` naming another
-  node, carrying unexpected keys, or containing content that cannot be parsed
-  as JSON (invalid JSON, non-UTF-8 bytes, or nesting too deep to decode) now
-  fails the activity with a non-retryable error, so one task can no longer
-  overwrite a sibling's result. Child-supplied text quoted in those errors is
-  truncated, keeping the failure message within Temporal's payload limit. The
-  activity still never deserializes the result value. (marqov-sdk#141)
-- Malformed activity payloads raise a Temporal `ApplicationError` in the job
-  workflow rather than a bare `json.JSONDecodeError`, so a bad payload fails
-  the workflow instead of retrying its workflow task indefinitely.
-  (marqov-sdk#141)
 
 - **IBM connections work again on current `qiskit-ibm-runtime`.** The default
   channel is now `ibm_quantum_platform` (IBM retired `ibm_quantum`, and the
