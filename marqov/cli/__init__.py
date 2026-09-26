@@ -323,11 +323,11 @@ def worker_start(
     asyncio.run(run_worker())
 
 
-@main.command()
+@main.command(name="list")
 @click.option("--host", default="localhost", help="Temporal server host")
 @click.option("--port", default=7233, help="Temporal server port")
 @click.option("--limit", default=10, help="Maximum number of workflows to list")
-def list(host: str, port: int, limit: int) -> None:
+def list_workflows(host: str, port: int, limit: int) -> None:
     """List recent workflows.
 
     Examples:
@@ -335,7 +335,7 @@ def list(host: str, port: int, limit: int) -> None:
         marqov list --limit 20
     """
 
-    async def list_workflows():
+    async def _run():
         click.echo(f"Connecting to Temporal at {host}:{port}...")
         client = await Client.connect(f"{host}:{port}")
 
@@ -358,7 +358,7 @@ def list(host: str, port: int, limit: int) -> None:
         if count == 0:
             click.echo("No workflows found.")
 
-    asyncio.run(list_workflows())
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":

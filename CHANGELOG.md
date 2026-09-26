@@ -5,6 +5,15 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
+## [Unreleased]
+
+### Fixed
+
+- The CLI's `list` command no longer shadows the `list` builtin. The command
+  function is renamed to `list_workflows` internally (the command itself is
+  still invoked as `marqov list`); previously the shadowed builtin broke
+  every `marqov run ... --arg key=value` invocation. See marqov-sdk#148.
+
 ## [0.8.0] — 2026-09-25
 
 ### Added
