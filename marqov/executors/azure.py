@@ -364,21 +364,22 @@ class AzureQuantumExecutor(BaseExecutor):
             qubits = sorted(cirq_circuit.all_qubits())
             cirq_circuit.append(cirq.measure(*qubits, key="result"))
 
-        # Submit job
-        job = await loop.run_in_executor(
-            None,
-            partial(service.run, cirq_circuit, repetitions=shots),
-        )
-        self._current_job_id = str(job.id()) if hasattr(job, "id") else None
-
-        # Wait for result
+        # Submit the job and wait for it. AzureQuantumService.run() creates the
+        # job, blocks until it completes, and returns a cirq.Result, not a job
+        # handle, so the timeout wraps this call rather than a second one.
+        run_cirq = partial(service.run, cirq_circuit, repetitions=shots)
         if self.config.timeout_seconds is not None:
             result = await asyncio.wait_for(
-                loop.run_in_executor(None, lambda: job.results()),
+                loop.run_in_executor(None, run_cirq),
                 timeout=self.config.timeout_seconds,
             )
         else:
-            result = await loop.run_in_executor(None, lambda: job.results())
+            result = await loop.run_in_executor(None, run_cirq)
+
+        # run() hands back a result, not a job, so there is no job id to
+        # record. Reporting one would mean switching to service.create_job()
+        # plus job.results(), which is a separate change.
+        self._current_job_id = None
 
         # Convert Cirq result to counts
         # Cirq results are typically a list of measurement results
@@ -388,12 +389,10 @@ class AzureQuantumExecutor(BaseExecutor):
             # with Marqov's big-endian convention (qubit 0 = leftmost).
             raw_histogram = dict(result.histogram(key="result"))
             num_qubits = len(sorted(cirq_circuit.all_qubits()))
-            # format() places bit 0 at rightmost (little-endian).
-            # Reverse to get big-endian (qubit 0 = leftmost).
-            counts = {
-                format(k, f"0{num_qubits}b")[::-1]: v
-                for k, v in raw_histogram.items()
-            }
+            # Cirq's default histogram fold is big-endian: the first measured
+            # qubit is the most significant bit, so format() already puts
+            # qubit 0 leftmost. No reversal here, unlike the Qiskit path.
+            counts = {format(k, f"0{num_qubits}b"): v for k, v in raw_histogram.items()}
         else:
             # Convert measurement results to counts
             measurements = result.measurements if hasattr(result, "measurements") else result
