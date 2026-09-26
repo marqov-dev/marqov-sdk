@@ -147,6 +147,18 @@ class TestCirqExecutionPath:
         assert sum(result.counts.values()) == 200
 
     @pytest.mark.asyncio
+    async def test_no_timeout_path_uses_the_result_directly(self, cirq_module: Any) -> None:
+        """With timeout_seconds=None the run() result is used as-is, as with a timeout."""
+        service = _FakeCirqService()
+        executor = _executor("cirq", service)
+        executor.config.timeout_seconds = None
+
+        result = await executor.execute(Circuit().x(0).z(1), shots=50)
+
+        assert result.counts == {"10": 50}
+        assert service.calls[0][1] == 50
+
+    @pytest.mark.asyncio
     async def test_job_id_is_none(self, cirq_module: Any) -> None:
         """service.run() returns a result, so no job id can be recorded."""
         executor = _executor("cirq", _FakeCirqService())
