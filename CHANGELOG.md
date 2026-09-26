@@ -108,6 +108,18 @@ release.
   previous unbounded behaviour. See
   [marqov-sdk#133](https://github.com/marqov-dev/marqov-sdk/issues/133).
 
+- **Azure Cirq execution path:** `AzureQuantumExecutor` no longer treats the
+  value returned by `AzureQuantumService.run()` as a job handle. That call
+  already blocks and returns a `cirq.Result`, so every Cirq run previously
+  failed with `AttributeError: 'ResultDict' object has no attribute 'results'`.
+  The Cirq histogram conversion also dropped its extra reversal: cirq folds
+  histograms big-endian, which is already Marqov's qubit-0-leftmost
+  convention, so the reversal was inverting correct bitstrings. Cirq runs
+  report `job_id` as `None`, since `run()` exposes no job id. The Qiskit path
+  is unchanged. Both paths are now covered by tests that drive the real
+  executor with fake services returning genuine framework result objects.
+  (marqov-sdk#131)
+
 ### Documentation
 
 - The IonQ histogram bit-order claim in `_histogram_to_counts` is marked
