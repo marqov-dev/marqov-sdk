@@ -22,6 +22,19 @@ release.
   heartbeat loop is now logged at error level instead of being discarded
   silently. (marqov-sdk#140)
 
+- The task activity validates the child process's result envelope instead of
+  forwarding it verbatim. A task that writes a `result.json` naming another
+  node, carrying unexpected keys, or containing content that cannot be parsed
+  as JSON (invalid JSON, non-UTF-8 bytes, or nesting too deep to decode) now
+  fails the activity with a non-retryable error, so one task can no longer
+  overwrite a sibling's result. Child-supplied text quoted in those errors is
+  truncated, keeping the failure message within Temporal's payload limit. The
+  activity still never deserializes the result value. (marqov-sdk#141)
+- Malformed activity payloads raise a Temporal `ApplicationError` in the job
+  workflow rather than a bare `json.JSONDecodeError`, so a bad payload fails
+  the workflow instead of retrying its workflow task indefinitely.
+  (marqov-sdk#141)
+
 ## [0.8.0] — 2026-09-25
 
 ### Added

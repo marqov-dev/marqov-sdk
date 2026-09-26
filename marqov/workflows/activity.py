@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from marqov.workflows._child_env import build_child_env, new_task_workdir
 
@@ -97,6 +98,36 @@ async def _drain_stderr(stream: asyncio.StreamReader, tail: _StderrTail) -> None
         if not chunk:
             return
         tail.feed(chunk)
+
+
+# Bounds for child-derived text quoted back in failure messages.  The child
+# wrote up to MAX_RESULT_BYTES of attacker-chosen content, and an oversized
+# failure message would blow Temporal's payload limit: the failure response is
+# then rejected and the non-retryable signal is lost.  Every fragment of a
+# validation message that came from the child goes through _clip first.
+_MAX_QUOTED_CHARS: int = 200
+_MAX_QUOTED_KEYS: int = 10
+_MAX_QUOTED_KEY_CHARS: int = 40
+_MAX_QUOTED_KEY_LIST_CHARS: int = 400
+
+
+def _clip(text: str, limit: int = _MAX_QUOTED_CHARS) -> str:
+    """Return ``text`` truncated to ``limit`` characters, marking truncation."""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "..."
+
+
+def _clip_keys(keys: list[str]) -> str:
+    """Render an envelope's keys for a message, bounded in count and length.
+
+    Both the number of keys and each key are bounded, and so is the rendered
+    list: the child chooses how many keys it writes and how long each one is.
+    """
+    shown = [_clip(repr(key), _MAX_QUOTED_KEY_CHARS) for key in keys[:_MAX_QUOTED_KEYS]]
+    if len(keys) > _MAX_QUOTED_KEYS:
+        shown.append(f"... ({len(keys)} keys total)")
+    return "[" + _clip(", ".join(shown), _MAX_QUOTED_KEY_LIST_CHARS) + "]"
 
 
 def _deserialize_value(value: Any) -> Any:
@@ -172,8 +203,10 @@ async def execute_task(
 
     The activity process NEVER calls cloudpickle.loads on func_ref, args, or
     the result — all deserialization happens inside a scrubbed child process.
-    The result is returned **opaquely** as a JSON string containing the raw
-    serialized blob produced by the child.
+    The result VALUE is returned **opaquely** as a JSON string containing the
+    raw serialized blob produced by the child.  The result ENVELOPE is parsed
+    and validated here (shape plus node_id), because the child owns its
+    workdir and must not be able to name a different node.
 
     Args:
         node_id: Unique identifier for this node.
@@ -186,6 +219,11 @@ async def execute_task(
 
     Returns:
         JSON-encoded result with node_id and opaque result blob.
+
+    Raises:
+        ApplicationError: Non-retryable, if the child wrote a result envelope
+            that is not a JSON object with exactly ``node_id`` and ``result``,
+            or whose ``node_id`` does not match this activity's ``node_id``.
     """
     workdir = new_task_workdir(node_id)
     result_path = workdir / "result.json"
@@ -278,8 +316,8 @@ async def execute_task(
     # The child writes failures to error.json and successes to result.json.
     # Reading error.json is safe: it's small, structured, and written by our
     # own child wrapper code (not by user task code).
-    # The success path forwards result.json OPAQUELY (bytes → string) without
-    # ever calling json.loads on the result content.
+    # The success path validates the result ENVELOPE and forwards the result
+    # VALUE opaquely: the activity never calls cloudpickle.loads on it.
     error_path = workdir / "error.json"
     if error_path.exists():
         error_size = error_path.stat().st_size
@@ -302,15 +340,63 @@ async def execute_task(
                 f"payload limit). Large results must spill to S3 + pass a reference "
                 f"(follow-up); returning multi-MiB results inline is unsupported."
             )
-        # Forward result.json content OPAQUELY as a raw string — do NOT
-        # json.loads the result value here. The activity wraps it in an
-        # envelope so the caller can extract node_id and the opaque blob.
-        result_text = result_path.read_text()
-        # We need the node_id in the envelope but must not parse result content.
-        # Produce the envelope by string construction, not json.loads+json.dumps.
-        # result_text is already valid JSON: {"node_id": ..., "result": <blob>}
-        # We just forward it directly — the schema matches what callers expect.
-        return result_text
+        # The child owns its workdir, so result.json is whatever the child
+        # chose to write. Validate the ENVELOPE before returning it: the
+        # parent must not forward a node_id the child picked, and must not
+        # hand malformed bytes to the workflow, where a json.loads failure
+        # would wedge the workflow task (marqov-sdk#141).
+        #
+        # Parsing the envelope here is bounded: the MAX_RESULT_BYTES check
+        # above runs first, so json.loads never sees more than the cap. The
+        # security property that matters is unchanged: the activity still
+        # never cloudpickle.loads the child's result. The result VALUE stays
+        # opaque, it is re-serialised as-is and deserialised only by the next
+        # task's child.
+        #
+        # read_text and json.loads are both inside the try: non-UTF-8 bytes
+        # raise UnicodeDecodeError and deeply nested input raises
+        # RecursionError, and neither is a JSONDecodeError. Uncaught, they
+        # would surface as ordinary retryable activity failures rather than
+        # the non-retryable failure a malformed envelope deserves.
+        # (JSONDecodeError and UnicodeDecodeError are both ValueError.)
+        try:
+            envelope = json.loads(result_path.read_text())
+        except (ValueError, RecursionError) as exc:
+            raise ApplicationError(
+                f"Task {node_id} wrote a result.json that could not be parsed as "
+                f"JSON: {_clip(f'{type(exc).__name__}: {exc}')}",
+                non_retryable=True,
+            ) from exc
+
+        if not isinstance(envelope, dict):
+            raise ApplicationError(
+                f"Task {node_id} wrote a result.json that is not a JSON object "
+                f"(got {type(envelope).__name__}).",
+                non_retryable=True,
+            )
+
+        expected_keys = {"node_id", "result"}
+        actual_keys = set(envelope)
+        if actual_keys != expected_keys:
+            raise ApplicationError(
+                f"Task {node_id} wrote a result envelope with keys "
+                f"{_clip_keys(sorted(actual_keys))}; expected exactly "
+                f"{sorted(expected_keys)}.",
+                non_retryable=True,
+            )
+
+        claimed_node_id = envelope["node_id"]
+        if claimed_node_id != node_id:
+            raise ApplicationError(
+                f"Task {node_id} wrote a result envelope claiming node_id "
+                f"{_clip(repr(claimed_node_id))}; expected {node_id!r}. Refusing to "
+                f"forward a result that could overwrite another node's value.",
+                non_retryable=True,
+            )
+
+        # Re-serialise from the parsed object with the activity's own node_id,
+        # so the returned bytes are the activity's envelope, not the child's.
+        return json.dumps({"node_id": node_id, "result": envelope["result"]})
 
     # No result file — child crashed before writing anything.
     rc = proc.returncode
