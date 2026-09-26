@@ -50,6 +50,44 @@ release.
   unused, matching `IBMExecutorConfig`: `execute()` blocks on the backend's
   `get_result()` rather than polling. (marqov-sdk#130)
 
+- The CLI's `list` command no longer shadows the `list` builtin. The command
+  function is renamed to `list_workflows` internally (the command itself is
+  still invoked as `marqov list`); previously the shadowed builtin broke
+  every `marqov run ... --arg key=value` invocation. See marqov-sdk#148.
+
+- The Temporal task activity now drains the child process's stderr while the
+  child runs, so a task that writes more than the pipe buffer holds (verbose
+  provider logging, progress output) can no longer block the child in `write()`
+  and stall the activity until its timeout. Only the last 32 KiB are kept, and
+  the crash message says how many earlier bytes were dropped. A failing
+  heartbeat loop is now logged at error level instead of being discarded
+  silently. (marqov-sdk#140)
+
+- The task activity validates the child process's result envelope instead of
+  forwarding it verbatim. A task that writes a `result.json` naming another
+  node, carrying unexpected keys, or containing content that cannot be parsed
+  as JSON (invalid JSON, non-UTF-8 bytes, or nesting too deep to decode) now
+  fails the activity with a non-retryable error, so one task can no longer
+  overwrite a sibling's result. Child-supplied text quoted in those errors is
+  truncated, keeping the failure message within Temporal's payload limit. The
+  activity still never deserializes the result value. (marqov-sdk#141)
+- Malformed activity payloads raise a Temporal `ApplicationError` in the job
+  workflow rather than a bare `json.JSONDecodeError`, so a bad payload fails
+  the workflow instead of retrying its workflow task indefinitely.
+  (marqov-sdk#141)
+
+- **IBM connections work again on current `qiskit-ibm-runtime`.** The default
+  channel is now `ibm_quantum_platform` (IBM retired `ibm_quantum`, and the
+  library rejects it before authenticating), and `instance` is optional
+  instead of defaulting to the dead `ibm-q/open/main`: when omitted, the
+  service auto-discovers the instance from the token, so a CRN is only needed
+  when a token maps to more than one instance. A single normaliser shared by
+  `IBMExecutorConfig`, `ExecutorFactory` and `MarqovDevice` translates stored
+  legacy values rather than forwarding them: `channel="ibm_quantum"` becomes
+  `ibm_quantum_platform` and a `hub/group/project` instance is dropped, each
+  with a `DeprecationWarning`, and `""` now behaves like an absent key on every
+  path. Pinned by `tests/test_ibm_channel.py`. (marqov-sdk#115, marqov-sdk#168)
+
 ## [0.8.0] — 2026-09-25
 
 ### Added
