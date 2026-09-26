@@ -438,7 +438,7 @@ class Transport:
 
         Guaranteed to raise — never returns normally.
 
-        Error envelope shape (source: error-envelope.ts):
+        Error responses use this JSON envelope:
             ``{ "error": { "code": "...", "message": "...", "status": ... } }``
         """
         status = resp.status_code
