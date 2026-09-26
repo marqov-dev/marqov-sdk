@@ -88,6 +88,21 @@ release.
   with a `DeprecationWarning`, and `""` now behaves like an absent key on every
   path. Pinned by `tests/test_ibm_channel.py`. (marqov-sdk#115, marqov-sdk#168)
 
+- IonQ job polling is bounded. An unrecognized job status (for example
+  `deleted`) now raises a `RuntimeError` naming the status and job id instead
+  of polling forever, `IonQExecutorConfig.timeout_seconds` defaults to one hour
+  instead of no timeout, and a timed-out or cancelled wait issues a best-effort
+  cancel for the submitted IonQ job. Pass `timeout_seconds=None` to keep the
+  previous unbounded behaviour. See
+  [marqov-sdk#133](https://github.com/marqov-dev/marqov-sdk/issues/133).
+
+### Documentation
+
+- The IonQ histogram bit-order claim in `_histogram_to_counts` is marked
+  unverified and cites IonQ's Direct API guide, which documents little-endian
+  histogram keys. The current conversion is unchanged and now pinned by an
+  asymmetric-bitstring test, so any future change of convention is deliberate.
+
 ## [0.8.0] — 2026-09-25
 
 ### Added
