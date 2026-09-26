@@ -35,7 +35,7 @@ rather than a failure, but the first upload of a version is still one-way.
 - [ ] Full suite green, right extras + fresh metadata:
       ```
       uv sync --extra qiskit --extra cirq --extra pennylane --extra pytket \
-              --extra pyquil --extra dev --reinstall-package marqov
+              --extra pyquil --extra braket --extra dev --reinstall-package marqov
       uv run pytest -q          # incl. test_version (source == installed)
       ```
       Traps: use SEPARATE `--extra` flags (a comma-list is read as one nonexistent
