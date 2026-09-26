@@ -35,6 +35,21 @@ release.
   the workflow instead of retrying its workflow task indefinitely.
   (marqov-sdk#141)
 
+- The CLI's `list` command no longer shadows the `list` builtin. The command
+  function is renamed to `list_workflows` internally (the command itself is
+  still invoked as `marqov list`); previously the shadowed builtin broke
+  every `marqov run ... --arg key=value` invocation. See marqov-sdk#148.
+
+- `QuantinuumExecutor.execute()` measures the converted circuit before
+  submitting it. Marqov's `Circuit` IR carries no measurements, so the
+  submitted pytket circuit had zero classical bits and every run returned
+  `{"": shots}`. Measurements are added only when the converted circuit has
+  no classical bits, and qubit 0 stays the leftmost bit of the counts keys.
+  (marqov-sdk#130)
+- `QuantinuumExecutorConfig.poll_interval_seconds` is documented as currently
+  unused, matching `IBMExecutorConfig`: `execute()` blocks on the backend's
+  `get_result()` rather than polling. (marqov-sdk#130)
+
 ## [0.8.0] — 2026-09-25
 
 ### Added

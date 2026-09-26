@@ -37,7 +37,9 @@ class QuantinuumExecutorConfig:
         api_handler: API handler for the job.
         compilation_config: Compilation configuration for the job.
         options: Options for the job.
-        poll_interval_seconds: Polling interval for the job.
+        poll_interval_seconds: Currently unused. `execute()` blocks
+                                synchronously on `backend.get_result()`
+                                rather than polling.
         timeout_seconds: Timeout for the job.
         optimisation_level: Optimisation level for the job.
     """
@@ -128,10 +130,8 @@ class QuantinuumExecutor(BaseExecutor):
         compiled = backend.get_compiled_circuit(
             tket_circuit, optimisation_level=self.config.optimisation_level
         )
-        from pytket.extensions.quantinuum import QuantinuumBackend
-
         handle = backend.process_circuit(compiled, n_shots=shots, **kwargs)
-        job_id = QuantinuumBackend.get_jobid(handle)
+        job_id = backend.get_jobid(handle)
         get_result_kwargs: dict[str, Any] = {}
         if self.config.timeout_seconds is not None:
             get_result_kwargs["timeout"] = self.config.timeout_seconds
@@ -175,6 +175,15 @@ class QuantinuumExecutor(BaseExecutor):
 
         backend = await self._get_backend()
         tket_circuit = circuit.to_pytket()
+        if tket_circuit.n_bits == 0:
+            # Marqov's Circuit IR carries no measurements, so `to_pytket()`
+            # yields a unitary-only circuit with zero classical bits and
+            # nothing to read out. Every executor here adds its own
+            # measurements; pytket's `measure_all` adds a `c` register and
+            # measures q[i] into c[i], which keeps qubit 0 as the leftmost
+            # bit of the counts keys. Guarded on `n_bits` so a future
+            # measured IR is not measured twice.
+            tket_circuit.measure_all()
         result, job_id = await loop.run_in_executor(
             None, partial(self._run_sync, backend, tket_circuit, shots, **kwargs)
         )
