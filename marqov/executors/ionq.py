@@ -29,6 +29,7 @@ Example:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import time
 from dataclasses import dataclass
@@ -44,10 +45,21 @@ if TYPE_CHECKING:
 _SUCCESS_STATUSES = frozenset({"completed"})
 # Job statuses that mean the job has finished without usable results.
 _FAILURE_STATUSES = frozenset({"failed", "canceled", "cancelled"})
+# Job statuses that mean the job is still in progress and worth polling again.
+# Anything outside these three sets is treated as unknown and raises, so an
+# unmodelled terminal state (e.g. "deleted") surfaces as a failure instead of an
+# endless poll. A status IonQ legitimately uses for in-progress work belongs
+# here, as a one-line addition.
+_PENDING_STATUSES = frozenset({"submitted", "ready", "running"})
 
 # Per-request HTTP timeout (seconds). Overall job completion is bounded separately
 # by IonQExecutorConfig.timeout_seconds around polling.
 _HTTP_TIMEOUT_SECONDS = 30
+
+# Default overall budget for a single job (seconds). Longer than any IonQ queue
+# the SDK has been used against, and still finite: an unconfigured executor must
+# not be able to wait forever. Set timeout_seconds=None to opt back out.
+_DEFAULT_TIMEOUT_SECONDS = 3600.0
 
 
 @dataclass
@@ -61,8 +73,10 @@ class IonQExecutorConfig:
             environment variable at request time.
         base_url: Base URL for the IonQ REST API.
         poll_interval_seconds: Polling interval while waiting for a job to finish.
-        timeout_seconds: Maximum time to wait for job completion. None for no
-            timeout.
+        timeout_seconds: Maximum time to wait for job completion, one hour by
+            default. On timeout the executor issues a best-effort cancel for the
+            submitted job. Set to None for an unbounded wait, which leaves a
+            stuck job with nothing to stop it.
         noise_model: Optional simulator noise model (e.g. "aria-1", "forte-1").
             Only applied when ``target`` is the simulator.
     """
@@ -71,7 +85,7 @@ class IonQExecutorConfig:
     api_key: str | None = None
     base_url: str = "https://api.ionq.co/v0.3"
     poll_interval_seconds: float = 1.0
-    timeout_seconds: float | None = None
+    timeout_seconds: float | None = _DEFAULT_TIMEOUT_SECONDS
     noise_model: str | None = None
 
 
@@ -211,8 +225,25 @@ class IonQExecutor(BaseExecutor):
     ) -> dict[str, int]:
         """Convert an IonQ probability histogram into measurement counts.
 
-        IonQ returns a sparse histogram mapping big-endian state indices (as
-        strings) to probabilities, where the leftmost bit corresponds to qubit 0.
+        IonQ returns a sparse histogram mapping state indices (as strings) to
+        probabilities. This conversion formats each index with ``format()`` and
+        does not reverse it, so the most significant bit of the index becomes the
+        leftmost character, which under Marqov's convention (qubit 0 leftmost)
+        reads as qubit 0.
+
+        Unverified against hardware, and disputed by the vendor documentation.
+        IonQ's Direct API guide
+        (https://docs.ionq.com/guides/direct-api-submission) states that "the
+        output keys are little-endian integers: qubit i from the submitted
+        program occupies the bit with value 2^i, so the rightmost bit of the
+        key's binary form is qubit zero", which would require reversing the
+        formatted string. The ordering is deliberately left unchanged here: no
+        live IonQ run is on record either way, and flipping it on a documentation
+        reading alone would silently change every existing caller's results. The
+        current behaviour is pinned by an asymmetric test
+        (``TestHistogramToCounts::test_asymmetric_index_pins_current_bit_order``)
+        so a future change is deliberate, and resolving it needs a live run
+        against a known asymmetric circuit.
 
         Counts are allocated with the largest-remainder (Hamilton) method so the
         totals sum exactly to ``shots`` — naive per-bin rounding can drift above or
@@ -254,9 +285,11 @@ class IonQExecutor(BaseExecutor):
             ExecutionResult with measurement counts and metadata.
 
         Raises:
-            RuntimeError: If the job fails or is canceled by IonQ.
+            RuntimeError: If the job fails, is canceled by IonQ, or reports a
+                status the executor does not recognize.
             ValueError: If no API key is available.
             TimeoutError: If the job does not finish within ``timeout_seconds``.
+                The remote job is sent a best-effort cancel first.
         """
         circuit = self._validate_circuit(circuit)
 
@@ -277,14 +310,20 @@ class IonQExecutor(BaseExecutor):
         job_id = submit_response["id"]
         self._current_job_id = job_id
 
-        # Poll until the job reaches a terminal state.
-        if self.config.timeout_seconds is not None:
-            job = await asyncio.wait_for(
-                self._poll_until_done(job_id),
-                timeout=self.config.timeout_seconds,
-            )
-        else:
-            job = await self._poll_until_done(job_id)
+        # Poll until the job reaches a terminal state. If the wait is cut short,
+        # the job is still queued or running on IonQ's side, and billable, so ask
+        # IonQ to stop it before propagating.
+        try:
+            if self.config.timeout_seconds is not None:
+                job = await asyncio.wait_for(
+                    self._poll_until_done(job_id),
+                    timeout=self.config.timeout_seconds,
+                )
+            else:
+                job = await self._poll_until_done(job_id)
+        except (TimeoutError, asyncio.CancelledError):
+            await self._cancel_interrupted_job(job_id)
+            raise
 
         wall_time = time.perf_counter() - start_time
 
@@ -322,18 +361,51 @@ class IonQExecutor(BaseExecutor):
     async def _poll_until_done(self, job_id: str) -> dict[str, Any]:
         """Poll a job until it reaches a terminal state.
 
+        Returns as soon as the job reports a success or failure status. A status
+        that is neither terminal nor a known in-progress one is treated as an
+        unmodelled terminal state and raises, because polling it again would
+        never finish.
+
         Args:
             job_id: The IonQ job id to poll.
 
         Returns:
             The terminal job object.
+
+        Raises:
+            RuntimeError: If IonQ reports a status outside the success, failure
+                and pending sets.
         """
         while True:
             job = await self._request("GET", f"/jobs/{job_id}")
             status = job.get("status")
             if status in _SUCCESS_STATUSES or status in _FAILURE_STATUSES:
                 return job
+            if status not in _PENDING_STATUSES:
+                raise RuntimeError(
+                    f"IonQ job {job_id} reported unknown status {status!r}. "
+                    "Polling stopped because this status is not a known "
+                    "in-progress state; if IonQ uses it for work still in "
+                    "flight, add it to marqov.executors.ionq._PENDING_STATUSES."
+                )
             await asyncio.sleep(self.config.poll_interval_seconds)
+
+    async def _cancel_interrupted_job(self, job_id: str) -> None:
+        """Issue a best-effort cancel for a job whose wait was cut short.
+
+        Called when the executor stops waiting on a job that has not reached a
+        terminal state (a timeout, or cancellation of the awaiting task), so the
+        remote job does not keep running and billing with nobody watching it.
+        Failures are swallowed: the original TimeoutError or CancelledError is
+        the interesting one, and a failed cancel must not mask it.
+
+        Args:
+            job_id: The IonQ job id to cancel.
+        """
+        # cancel() already swallows request failures; the suppress here covers a
+        # further cancellation arriving while the cancel request is in flight.
+        with contextlib.suppress(Exception, asyncio.CancelledError):
+            await self.cancel(job_id)
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         """Make an authenticated request to the IonQ API (off the event loop).

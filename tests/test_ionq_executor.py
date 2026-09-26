@@ -6,6 +6,7 @@ to run against the real API via the IONQ_API_KEY environment variable.
 """
 
 import asyncio
+import math
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -61,8 +62,19 @@ class TestIonQExecutorConfig:
         assert config.api_key is None
         assert config.base_url == "https://api.ionq.co/v0.3"
         assert config.poll_interval_seconds == 1.0
-        assert config.timeout_seconds is None
+        assert config.timeout_seconds == 3600.0
         assert config.noise_model is None
+
+    def test_default_timeout_is_finite(self) -> None:
+        """An unconfigured executor cannot wait forever."""
+        timeout = IonQExecutorConfig().timeout_seconds
+        assert timeout is not None
+        assert math.isfinite(timeout)
+        assert timeout > 0
+
+    def test_timeout_can_be_disabled_explicitly(self) -> None:
+        """Passing None still selects the unbounded wait."""
+        assert IonQExecutorConfig(timeout_seconds=None).timeout_seconds is None
 
     def test_custom_values(self) -> None:
         """Config stores custom values."""
@@ -118,6 +130,21 @@ class TestHistogramToCounts:
     def test_empty_histogram(self) -> None:
         """An empty histogram yields no counts."""
         assert IonQExecutor._histogram_to_counts({}, 100, 2) == {}
+
+    def test_asymmetric_index_pins_current_bit_order(self) -> None:
+        """Pin the current, unreversed index to bitstring mapping.
+
+        State index 4 over three qubits is a non-palindromic outcome, so it fails
+        if the conversion is ever reversed. The current conversion emits "100",
+        which under Marqov's qubit 0 is leftmost convention reads as qubit 0
+        measuring 1. IonQ documents its integer histogram keys as little-endian
+        (rightmost bit is qubit 0), which would make index 4 mean qubit 2
+        measured 1, that is "001". This test pins today's behaviour so any change
+        of convention is a deliberate, reviewed change rather than a silent one.
+        See the _histogram_to_counts docstring for the citation and the open
+        question.
+        """
+        assert IonQExecutor._histogram_to_counts({"4": 1.0}, 100, 3) == {"100": 100}
 
 
 class TestExtractHistogram:
@@ -386,6 +413,162 @@ class TestIonQExecutorExecute:
         with _patch_qasm(num_qubits=1):
             with pytest.raises(RuntimeError, match="boom"):
                 await executor.execute(circuit, shots=10)
+
+
+class TestIonQPollingTerminalStates:
+    """Tests for bounded polling: unknown statuses, timeouts and cancellation.
+
+    These drive the real ``execute()`` through the injected ``session=`` seam.
+    None of them wraps the call in ``asyncio.wait_for``: a hang here is a real
+    hang, which is the regression being guarded against.
+    """
+
+    @staticmethod
+    def _counting_router(job_status: str, job_id: str = "job-1"):  # noqa: ANN205
+        """Build a router stuck on ``job_status`` that counts poll and cancel calls.
+
+        Returns:
+            A tuple of (router, calls) where ``calls`` records ``poll`` and
+            ``cancel`` request counts.
+        """
+        calls = {"poll": 0, "cancel": 0}
+
+        def router(method, url, **kwargs):  # noqa: ANN001, ANN202
+            if method == "POST" and url.endswith("/jobs"):
+                return {"id": job_id, "status": "submitted"}
+            if method == "PUT" and url.endswith(f"/jobs/{job_id}/status/cancel"):
+                calls["cancel"] += 1
+                return {}
+            if method == "GET" and url.endswith(f"/jobs/{job_id}"):
+                calls["poll"] += 1
+                return {"status": job_status}
+            raise AssertionError(f"unexpected request: {method} {url}")
+
+        return router, calls
+
+    @pytest.mark.asyncio
+    async def test_unknown_status_raises_instead_of_looping(self) -> None:
+        """A status outside all three sets fails fast, naming status and job id."""
+        router, calls = self._counting_router("deleted", job_id="job-unknown")
+        config = IonQExecutorConfig(api_key="k", poll_interval_seconds=0.0)
+        executor = IonQExecutor(config, session=_make_session(router))
+
+        with _patch_qasm(num_qubits=1):
+            with pytest.raises(RuntimeError, match="unknown status 'deleted'"):
+                await executor.execute(Circuit().h(0), shots=10)
+
+        # Fail on the first sighting rather than after a retry budget.
+        assert calls["poll"] == 1
+
+    @pytest.mark.asyncio
+    async def test_unknown_status_error_names_job_id(self) -> None:
+        """The error carries the job id so a stuck job can be looked up."""
+        router, _ = self._counting_router("quarantined", job_id="job-42")
+        config = IonQExecutorConfig(api_key="k", poll_interval_seconds=0.0)
+        executor = IonQExecutor(config, session=_make_session(router))
+
+        with _patch_qasm(num_qubits=1):
+            with pytest.raises(RuntimeError, match="job-42"):
+                await executor.execute(Circuit().h(0), shots=10)
+
+    @pytest.mark.parametrize("status", ["submitted", "ready", "running"])
+    @pytest.mark.asyncio
+    async def test_known_pending_statuses_keep_polling(self, status: str) -> None:
+        """Documented in-progress statuses are polled, not treated as unknown."""
+        calls = {"n": 0}
+
+        def router(method, url, **kwargs):  # noqa: ANN001, ANN202
+            if method == "POST":
+                return {"id": "job-p", "status": "submitted"}
+            calls["n"] += 1
+            if calls["n"] < 3:
+                return {"status": status}
+            return {"status": "completed", "data": {"histogram": {"0": 1.0}}}
+
+        config = IonQExecutorConfig(api_key="k", poll_interval_seconds=0.0)
+        executor = IonQExecutor(config, session=_make_session(router))
+
+        with _patch_qasm(num_qubits=1):
+            result = await executor.execute(Circuit().h(0), shots=100)
+
+        assert calls["n"] == 3
+        assert result.counts == {"0": 100}
+
+    @pytest.mark.asyncio
+    async def test_timeout_cancels_the_remote_job(self) -> None:
+        """A timed-out job raises and issues PUT /jobs/<id>/status/cancel."""
+        router, calls = self._counting_router("running", job_id="job-t")
+        config = IonQExecutorConfig(
+            api_key="k", poll_interval_seconds=0.0, timeout_seconds=0.05
+        )
+        executor = IonQExecutor(config, session=_make_session(router))
+
+        with _patch_qasm(num_qubits=1):
+            with pytest.raises(TimeoutError):
+                await executor.execute(Circuit().h(0), shots=10)
+
+        assert calls["cancel"] == 1
+
+    @pytest.mark.asyncio
+    async def test_cancellation_cancels_the_remote_job(self) -> None:
+        """Cancelling the awaiting task also asks IonQ to stop the job."""
+        router, calls = self._counting_router("running", job_id="job-c")
+        config = IonQExecutorConfig(
+            api_key="k", poll_interval_seconds=0.01, timeout_seconds=None
+        )
+        executor = IonQExecutor(config, session=_make_session(router))
+
+        with _patch_qasm(num_qubits=1):
+            task = asyncio.ensure_future(executor.execute(Circuit().h(0), shots=10))
+            # Let the job reach the polling loop before cancelling.
+            while calls["poll"] < 2:
+                await asyncio.sleep(0.01)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert calls["cancel"] == 1
+
+    @pytest.mark.asyncio
+    async def test_successful_run_issues_no_cancel(self) -> None:
+        """The happy path never touches the cancel endpoint."""
+        calls = {"cancel": 0}
+
+        def router(method, url, **kwargs):  # noqa: ANN001, ANN202
+            if method == "POST":
+                return {"id": "job-ok", "status": "submitted"}
+            if method == "PUT":
+                calls["cancel"] += 1
+                return {}
+            return {"status": "completed", "data": {"histogram": {"0": 1.0}}}
+
+        executor = IonQExecutor(
+            IonQExecutorConfig(api_key="k"), session=_make_session(router)
+        )
+        with _patch_qasm(num_qubits=1):
+            await executor.execute(Circuit().h(0), shots=10)
+
+        assert calls["cancel"] == 0
+
+    @pytest.mark.asyncio
+    async def test_cancel_failure_does_not_mask_the_timeout(self) -> None:
+        """A failing cancel request is swallowed; the TimeoutError still surfaces."""
+
+        def router(method, url, **kwargs):  # noqa: ANN001, ANN202
+            if method == "POST":
+                return {"id": "job-x", "status": "submitted"}
+            if method == "PUT":
+                raise RuntimeError("cancel endpoint down")
+            return {"status": "running"}
+
+        config = IonQExecutorConfig(
+            api_key="k", poll_interval_seconds=0.0, timeout_seconds=0.05
+        )
+        executor = IonQExecutor(config, session=_make_session(router))
+
+        with _patch_qasm(num_qubits=1):
+            with pytest.raises(TimeoutError):
+                await executor.execute(Circuit().h(0), shots=10)
 
 
 class TestRequestHeaders:
