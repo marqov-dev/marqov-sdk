@@ -549,6 +549,7 @@ class TestQuantinuumExecutor:
         """A circuit that already carries measurements is submitted unchanged."""
         pytest.importorskip("pytket")
         from pytket import Circuit as TketCircuit
+        from pytket.circuit import OpType
 
         circuit = bell_state()
         premeasured = TketCircuit(circuit.num_qubits)
@@ -567,6 +568,8 @@ class TestQuantinuumExecutor:
                 result = await executor.execute(circuit, shots=100)
 
         assert backend.submitted.n_bits == circuit.num_qubits
+        # Exactly one measurement per qubit: a second measure_all() would add more.
+        assert backend.submitted.n_gates_of_type(OpType.Measure) == circuit.num_qubits
         assert result.counts == {"00": 100}
 
     @pytest.mark.asyncio
