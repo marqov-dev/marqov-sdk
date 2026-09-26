@@ -207,10 +207,17 @@ class MarqovDevice:
         elif is_ibm(self._params):
             from qiskit_ibm_runtime import QiskitRuntimeService
 
-            kwargs = {
-                "channel": self._params.get("ibm_channel", "ibm_quantum"),
-                "instance": self._params.get("ibm_instance", "ibm-q/open/main"),
-            }
+            from marqov.executors.ibm import normalize_ibm_connection
+
+            # Same normaliser as ExecutorFactory and IBMExecutorConfig: retired
+            # values are translated with a warning, and an absent instance is
+            # omitted so the service auto-discovers it from the token.
+            channel, instance = normalize_ibm_connection(
+                self._params.get("ibm_channel"), self._params.get("ibm_instance")
+            )
+            kwargs = {"channel": channel}
+            if instance:
+                kwargs["instance"] = instance
             if self._params.get("ibm_token"):
                 kwargs["token"] = self._params["ibm_token"]
 

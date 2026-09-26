@@ -19,7 +19,9 @@ Example:
 from __future__ import annotations
 
 import asyncio
+import re
 import time
+import warnings
 from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -31,16 +33,77 @@ if TYPE_CHECKING:
     from marqov.circuits import Circuit
 
 
+DEFAULT_IBM_CHANNEL = "ibm_quantum_platform"
+RETIRED_IBM_CHANNEL = "ibm_quantum"
+
+# The retired IBM Quantum instance form was "hub/group/project": exactly two
+# slashes and no CRN prefix. IBM Cloud instances are CRNs ("crn:v1:...").
+_LEGACY_INSTANCE_RE = re.compile(r"^[^/:]+/[^/:]+/[^/:]+$")
+
+
+def normalize_ibm_connection(
+    channel: str | None, instance: str | None
+) -> tuple[str, str | None]:
+    """Normalise the IBM ``channel`` and ``instance`` values at every call site.
+
+    This is the single place that decides what those two values mean, shared
+    by :class:`IBMExecutorConfig`, :class:`~marqov.executors.factory.ExecutorFactory`
+    and :class:`~marqov.device.MarqovDevice`, so a stored config written under
+    the old defaults keeps working and a blank value never reaches the service.
+
+    - ``channel``: ``None`` or ``""`` becomes ``ibm_quantum_platform``. The
+      retired ``ibm_quantum`` channel is translated to ``ibm_quantum_platform``
+      with a :class:`DeprecationWarning`. Any other value (``ibm_cloud``, or a
+      future channel name) passes through untouched.
+    - ``instance``: ``None`` or ``""`` becomes ``None``, which omits the kwarg
+      so the service auto-discovers the instance from the token. The retired
+      ``hub/group/project`` form is dropped to ``None`` with a
+      :class:`DeprecationWarning`. Any other value (a CRN) passes through.
+
+    Returns:
+        ``(channel, instance)`` ready to pass to ``QiskitRuntimeService``.
+    """
+    if not channel:
+        channel = DEFAULT_IBM_CHANNEL
+    elif channel == RETIRED_IBM_CHANNEL:
+        warnings.warn(
+            f"IBM retired the {RETIRED_IBM_CHANNEL!r} channel and qiskit-ibm-runtime "
+            f"rejects it; using {DEFAULT_IBM_CHANNEL!r} instead. Update your stored "
+            f"config to channel={DEFAULT_IBM_CHANNEL!r}.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        channel = DEFAULT_IBM_CHANNEL
+
+    if not instance:
+        instance = None
+    elif _LEGACY_INSTANCE_RE.match(instance):
+        warnings.warn(
+            f"IBM retired the hub/group/project instance form ({instance!r}); "
+            f"ignoring it. The service auto-discovers the instance from the token, "
+            f"and a CRN is only needed when a token maps to more than one instance.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        instance = None
+
+    return channel, instance
+
+
 @dataclass
 class IBMExecutorConfig:
     """Configuration for IBM Quantum executor.
 
     Attributes:
         backend_name: IBM Quantum backend name (e.g., "ibm_kingston").
-        channel: Service channel — "ibm_quantum" for Open/paid plans,
-                 "ibm_cloud" for IBM Cloud Quantum instances.
-        instance: IBM Quantum instance in "hub/group/project" format.
-                  Defaults to "ibm-q/open/main" (Open Plan).
+        channel: Service channel: "ibm_quantum_platform" (default) or
+                 "ibm_cloud". The retired "ibm_quantum" channel is translated
+                 to the default with a DeprecationWarning.
+        instance: IBM Cloud instance CRN. Optional: when None the service
+                  auto-discovers the instance from the token, so only pass
+                  this when the token maps to more than one instance. The
+                  retired "hub/group/project" form is dropped with a
+                  DeprecationWarning.
         token: IBM Quantum API token. If None, uses saved credentials
                from QiskitRuntimeService.save_account().
         optimization_level: Transpiler optimization level (0-3).
@@ -54,13 +117,16 @@ class IBMExecutorConfig:
     """
 
     backend_name: str
-    channel: str = "ibm_quantum"
-    instance: str = "ibm-q/open/main"
+    channel: str = DEFAULT_IBM_CHANNEL
+    instance: str | None = None
     token: str | None = None
     optimization_level: int = 1
     resilience_level: int = 1
     poll_interval_seconds: float = 2.0
     timeout_seconds: float | None = None
+
+    def __post_init__(self) -> None:
+        self.channel, self.instance = normalize_ibm_connection(self.channel, self.instance)
 
 
 class IBMExecutor(BaseExecutor):
@@ -94,10 +160,13 @@ class IBMExecutor(BaseExecutor):
         if self._service is None:
             from qiskit_ibm_runtime import QiskitRuntimeService
 
-            kwargs: dict[str, Any] = {
-                "channel": self.config.channel,
-                "instance": self.config.instance,
-            }
+            # config.channel and config.instance are already normalised by
+            # IBMExecutorConfig.__post_init__; instance is None unless a CRN
+            # was supplied, and an absent instance must be omitted so the
+            # service auto-discovers it from the token.
+            kwargs: dict[str, Any] = {"channel": self.config.channel}
+            if self.config.instance:
+                kwargs["instance"] = self.config.instance
             if self.config.token:
                 kwargs["token"] = self.config.token
 

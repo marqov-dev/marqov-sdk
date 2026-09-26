@@ -398,55 +398,51 @@ async def test_error_json_exists_result_json_absent_on_failure(mock_activity_ctx
 
 
 # ---------------------------------------------------------------------------
-# 8. Success path: json.loads is NEVER called on result.json content by the
-#    activity. result.json bytes are forwarded opaquely.
+# 8. Success path: the activity parses the result ENVELOPE (it must validate
+#    node_id, see marqov-sdk#141) but never cloudpickle.loads the result VALUE.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_success_path_never_json_loads_result_content(mock_activity_ctx):
-    """On success, the activity must forward result.json bytes WITHOUT calling
-    json.loads on the result content.
+async def test_success_path_never_cloudpickle_loads_result_value(mock_activity_ctx):
+    """On success, the activity keeps the result VALUE opaque.
 
-    We spy on json.loads inside the activity module.  The activity is
-    permitted to call json.loads on error.json (to check for errors), but
-    MUST NOT call it on the content of result.json.
+    Since marqov-sdk#141 the activity parses the envelope with json.loads so
+    it can reject a forged node_id.  That parse is bounded by the
+    MAX_RESULT_BYTES check, which runs first.  The boundary that still holds
+    is the one that matters: the activity never calls cloudpickle.loads on
+    anything the child produced.
     """
-    import marqov.workflows.activity as activity_mod
 
-    def returns_data() -> dict:
-        return {"answer": 42}
+    class _Opaque:
+        def __init__(self, val: int) -> None:
+            self.val = val
+
+    def returns_data() -> Any:
+        return _Opaque(42)
 
     func_ref = _enc(returns_data)
     args_json = json.dumps([])
     kwargs_json = json.dumps({})
 
-    json_loads_calls: list[str] = []
-    real_json_loads = json.loads
+    loads_calls: list = []
+    real_loads = cloudpickle.loads
 
-    def spy_json_loads(s, *args, **kwargs):
-        json_loads_calls.append(str(s)[:80])
-        return real_json_loads(s, *args, **kwargs)
+    def spy_loads(data: bytes, *args: Any, **kwargs: Any) -> Any:
+        loads_calls.append(data[:16])
+        return real_loads(data, *args, **kwargs)
 
-    with patch.object(activity_mod.json, "loads", side_effect=spy_json_loads):
+    with patch.object(cloudpickle, "loads", side_effect=spy_loads):
         result_raw = await execute_task("node-success", func_ref, args_json, kwargs_json)
 
-    # The outer envelope is expected to be parsed by the caller, not the activity.
-    # Check: the activity must not have parsed result.json content (only possibly
-    # error.json, which is small and structured and ours).
-    # result.json contains {"node_id": ..., "result": <blob>} — the "result" field
-    # value (the blob itself) must not be json.loads'd by the activity.
-    outer = real_json_loads(result_raw)
+    assert loads_calls == [], (
+        "Activity process called cloudpickle.loads on child output: "
+        f"boundary violated! Calls: {loads_calls}"
+    )
+
+    outer = json.loads(result_raw)
     assert outer["node_id"] == "node-success"
-    # Confirm the activity never tried to json.loads the result content bytes.
-    # (It's acceptable for the activity to read result.json as bytes/text and
-    # forward it — but NOT to json.loads the result field inside it.)
-    result_blob_str = json.dumps(outer["result"])
-    for call_arg in json_loads_calls:
-        assert result_blob_str not in call_arg, (
-            "Activity called json.loads on the result content — boundary violated!\n"
-            f"json.loads was called with: {call_arg!r}"
-        )
+    assert outer["result"].get("__cloudpickle__") is True
 
 
 # ---------------------------------------------------------------------------
@@ -568,3 +564,248 @@ def test_build_child_env_fail_closed_no_allowlist_env_var():
         f"build_child_env included unexpected keys when using minimal-safe fallback: "
         f"{unexpected}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 11. Result envelope validation (marqov-sdk#141)
+#
+# The child owns its workdir, so it can write anything it likes to
+# result.json.  The activity must therefore validate the envelope instead of
+# forwarding the child's bytes verbatim.  Every task body below does the
+# forging itself: patching result.json from the test process would not
+# exercise the real path.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_forged_node_id_is_rejected(mock_activity_ctx):
+    """A child claiming a different node_id must fail the activity, not return."""
+    from temporalio.exceptions import ApplicationError
+
+    def forge_node_id() -> None:
+        import json as _json
+        import os as _os
+
+        workdir = _os.environ["MARQOV_TASK_WORKDIR"]
+        with open(_os.path.join(workdir, "result.json"), "w") as handle:
+            _json.dump({"node_id": "victim-node", "result": {"stolen": True}}, handle)
+        _os._exit(0)
+
+    with pytest.raises(ApplicationError) as excinfo:
+        await execute_task(
+            "attacker-node", _enc(forge_node_id), json.dumps([]), json.dumps({})
+        )
+
+    assert excinfo.value.non_retryable is True
+    message = str(excinfo.value)
+    assert "attacker-node" in message
+    assert "victim-node" in message
+
+
+@pytest.mark.asyncio
+async def test_forged_node_id_cannot_poison_sibling(mock_activity_ctx):
+    """A forging sibling contributes nothing to the results a workflow would keep."""
+    from temporalio.exceptions import ApplicationError
+
+    def honest() -> int:
+        return 11
+
+    def forge_honest_node_id() -> None:
+        import json as _json
+        import os as _os
+
+        workdir = _os.environ["MARQOV_TASK_WORKDIR"]
+        with open(_os.path.join(workdir, "result.json"), "w") as handle:
+            _json.dump({"node_id": "honest-node", "result": 666}, handle)
+        _os._exit(0)
+
+    completed_results: dict[str, Any] = {}
+
+    honest_json = await execute_task(
+        "honest-node", _enc(honest), json.dumps([]), json.dumps({})
+    )
+    honest_envelope = json.loads(honest_json)
+    completed_results[honest_envelope["node_id"]] = honest_envelope["result"]
+
+    with pytest.raises(ApplicationError):
+        forged_json = await execute_task(
+            "forging-node", _enc(forge_honest_node_id), json.dumps([]), json.dumps({})
+        )
+        # Unreachable: only a returned value could reach completed_results.
+        forged_envelope = json.loads(forged_json)
+        completed_results[forged_envelope["node_id"]] = forged_envelope["result"]
+
+    assert completed_results == {"honest-node": 11}
+
+
+@pytest.mark.asyncio
+async def test_non_json_result_is_rejected(mock_activity_ctx):
+    """Non-JSON bytes in result.json must fail the activity, not be forwarded."""
+    from temporalio.exceptions import ApplicationError
+
+    def forge_non_json() -> None:
+        import os as _os
+
+        workdir = _os.environ["MARQOV_TASK_WORKDIR"]
+        with open(_os.path.join(workdir, "result.json"), "w") as handle:
+            handle.write("not json at all")
+        _os._exit(0)
+
+    with pytest.raises(ApplicationError) as excinfo:
+        await execute_task(
+            "garbage-node", _enc(forge_non_json), json.dumps([]), json.dumps({})
+        )
+
+    assert excinfo.value.non_retryable is True
+    assert "garbage-node" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_extra_envelope_keys_are_rejected(mock_activity_ctx):
+    """The envelope must carry exactly node_id and result."""
+    from temporalio.exceptions import ApplicationError
+
+    def forge_extra_key() -> None:
+        import json as _json
+        import os as _os
+
+        workdir = _os.environ["MARQOV_TASK_WORKDIR"]
+        with open(_os.path.join(workdir, "result.json"), "w") as handle:
+            _json.dump(
+                {"node_id": "extra-node", "result": 1, "smuggled": "payload"}, handle
+            )
+        _os._exit(0)
+
+    with pytest.raises(ApplicationError) as excinfo:
+        await execute_task(
+            "extra-node", _enc(forge_extra_key), json.dumps([]), json.dumps({})
+        )
+
+    assert excinfo.value.non_retryable is True
+
+
+@pytest.mark.asyncio
+async def test_happy_path_envelope_unchanged(mock_activity_ctx):
+    """An ordinary complex result still round-trips under the activity's node_id."""
+
+    class _Payload:
+        def __init__(self, val: int) -> None:
+            self.val = val
+
+    def build() -> Any:
+        return _Payload(5)
+
+    result_json = await execute_task(
+        "happy-node", _enc(build), json.dumps([]), json.dumps({})
+    )
+    envelope = json.loads(result_json)
+
+    assert set(envelope) == {"node_id", "result"}
+    assert envelope["node_id"] == "happy-node"
+    assert envelope["result"].get("__cloudpickle__") is True
+    assert _deserialize_value(envelope["result"]).val == 5
+
+
+# ---------------------------------------------------------------------------
+# 12. Validation failures stay bounded and stay non-retryable
+#
+# Everything quoted back in a validation message came from the child, so it
+# must be clipped: an oversized failure message would exceed Temporal's
+# payload limit, the failure response would be rejected, and the
+# non-retryable signal would be lost.  Malformed bytes that raise something
+# other than JSONDecodeError must still land as a non-retryable failure
+# rather than an ordinary retryable one.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_huge_forged_node_id_message_is_bounded(mock_activity_ctx):
+    """A 1 MiB forged node_id must not produce a 1 MiB failure message."""
+    from temporalio.exceptions import ApplicationError
+
+    def forge_huge_node_id() -> None:
+        import json as _json
+        import os as _os
+
+        workdir = _os.environ["MARQOV_TASK_WORKDIR"]
+        with open(_os.path.join(workdir, "result.json"), "w") as handle:
+            _json.dump({"node_id": "V" * (1024 * 1024), "result": 1}, handle)
+        _os._exit(0)
+
+    with pytest.raises(ApplicationError) as excinfo:
+        await execute_task(
+            "bounded-node", _enc(forge_huge_node_id), json.dumps([]), json.dumps({})
+        )
+
+    assert excinfo.value.non_retryable is True
+    message = str(excinfo.value)
+    assert len(message) < 2000, f"Failure message is {len(message)} chars"
+    assert "bounded-node" in message
+
+
+@pytest.mark.asyncio
+async def test_huge_forged_keys_message_is_bounded(mock_activity_ctx):
+    """Many long forged envelope keys must not produce an unbounded message."""
+    from temporalio.exceptions import ApplicationError
+
+    def forge_many_keys() -> None:
+        import json as _json
+        import os as _os
+
+        workdir = _os.environ["MARQOV_TASK_WORKDIR"]
+        envelope = {f"k{index}" + "P" * 4096: index for index in range(200)}
+        with open(_os.path.join(workdir, "result.json"), "w") as handle:
+            _json.dump(envelope, handle)
+        _os._exit(0)
+
+    with pytest.raises(ApplicationError) as excinfo:
+        await execute_task(
+            "keys-node", _enc(forge_many_keys), json.dumps([]), json.dumps({})
+        )
+
+    assert excinfo.value.non_retryable is True
+    assert len(str(excinfo.value)) < 2000
+
+
+@pytest.mark.asyncio
+async def test_invalid_utf8_result_is_rejected(mock_activity_ctx):
+    """Non-UTF-8 bytes raise UnicodeDecodeError; it must still be non-retryable."""
+    from temporalio.exceptions import ApplicationError
+
+    def forge_invalid_utf8() -> None:
+        import os as _os
+
+        workdir = _os.environ["MARQOV_TASK_WORKDIR"]
+        with open(_os.path.join(workdir, "result.json"), "wb") as handle:
+            handle.write(b'{"node_id": "\xff\xfe", "result": 1}')
+        _os._exit(0)
+
+    with pytest.raises(ApplicationError) as excinfo:
+        await execute_task(
+            "utf8-node", _enc(forge_invalid_utf8), json.dumps([]), json.dumps({})
+        )
+
+    assert excinfo.value.non_retryable is True
+    assert len(str(excinfo.value)) < 2000
+
+
+@pytest.mark.asyncio
+async def test_deeply_nested_result_is_rejected(mock_activity_ctx):
+    """Deeply nested JSON raises RecursionError; it must still be non-retryable."""
+    from temporalio.exceptions import ApplicationError
+
+    def forge_deep_nesting() -> None:
+        import os as _os
+
+        workdir = _os.environ["MARQOV_TASK_WORKDIR"]
+        with open(_os.path.join(workdir, "result.json"), "w") as handle:
+            handle.write("[" * 100_000)
+        _os._exit(0)
+
+    with pytest.raises(ApplicationError) as excinfo:
+        await execute_task(
+            "deep-node", _enc(forge_deep_nesting), json.dumps([]), json.dumps({})
+        )
+
+    assert excinfo.value.non_retryable is True
+    assert len(str(excinfo.value)) < 2000

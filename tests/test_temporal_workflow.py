@@ -502,3 +502,117 @@ class TestJobWorkflowActivityReferences:
 
         assert "prepare_node_inputs" in activity_names_called
         assert "execute_task" in activity_names_called
+
+
+class TestJobWorkflowMalformedPayloads:
+    """A malformed activity payload must fail the workflow, not its workflow task.
+
+    A bare json.JSONDecodeError is not a temporalio FailureError, so Temporal
+    would retry the workflow task forever and the job would never reach a
+    terminal state (marqov-sdk#141).
+    """
+
+    def _create_workflow_input(
+        self,
+        nodes: dict[str, dict[str, Any]],
+        execution_levels: list[list[str]],
+        output_nodes: list[str],
+    ) -> dict[str, Any]:
+        return {
+            "nodes": nodes,
+            "execution_levels": execution_levels,
+            "output_nodes": output_nodes,
+        }
+
+    @pytest.mark.asyncio
+    async def test_non_json_activity_result_raises_failure_error(self) -> None:
+        """A non-JSON execute_task return becomes a FailureError."""
+        from temporalio.exceptions import ApplicationError, FailureError
+
+        nodes = {
+            "task": {"node_id": "task", "func_ref": "f", "args": [], "kwargs": {}}
+        }
+        workflow_input = self._create_workflow_input(
+            nodes=nodes,
+            execution_levels=[["task"]],
+            output_nodes=["task"],
+        )
+
+        prepare_response = json.dumps({
+            "node_id": "task",
+            "func_ref": "f",
+            "args": [],
+            "kwargs": {},
+        })
+
+        with patch("marqov.workflows.temporal_workflow.workflow") as mock_workflow:
+            _setup_workflow_mock(mock_workflow)
+            mock_workflow.execute_activity = AsyncMock(
+                side_effect=[prepare_response, "not json at all"]
+            )
+
+            workflow = JobWorkflow()
+            with pytest.raises(FailureError) as excinfo:
+                await workflow.run(workflow_input)
+
+        assert not isinstance(excinfo.value, json.JSONDecodeError)
+        assert isinstance(excinfo.value, ApplicationError)
+        assert excinfo.value.non_retryable is True
+        assert "task" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_activity_result_missing_keys_raises_failure_error(self) -> None:
+        """An envelope without the expected keys becomes a FailureError."""
+        from temporalio.exceptions import FailureError
+
+        nodes = {
+            "task": {"node_id": "task", "func_ref": "f", "args": [], "kwargs": {}}
+        }
+        workflow_input = self._create_workflow_input(
+            nodes=nodes,
+            execution_levels=[["task"]],
+            output_nodes=["task"],
+        )
+
+        prepare_response = json.dumps({
+            "node_id": "task",
+            "func_ref": "f",
+            "args": [],
+            "kwargs": {},
+        })
+
+        with patch("marqov.workflows.temporal_workflow.workflow") as mock_workflow:
+            _setup_workflow_mock(mock_workflow)
+            mock_workflow.execute_activity = AsyncMock(
+                side_effect=[prepare_response, json.dumps({"oops": 1})]
+            )
+
+            workflow = JobWorkflow()
+            with pytest.raises(FailureError):
+                await workflow.run(workflow_input)
+
+    @pytest.mark.asyncio
+    async def test_non_json_prepare_result_raises_failure_error(self) -> None:
+        """A malformed prepare_node_inputs payload becomes a FailureError."""
+        from temporalio.exceptions import FailureError
+
+        nodes = {
+            "task": {"node_id": "task", "func_ref": "f", "args": [], "kwargs": {}}
+        }
+        workflow_input = self._create_workflow_input(
+            nodes=nodes,
+            execution_levels=[["task"]],
+            output_nodes=["task"],
+        )
+
+        with patch("marqov.workflows.temporal_workflow.workflow") as mock_workflow:
+            _setup_workflow_mock(mock_workflow)
+            mock_workflow.execute_activity = AsyncMock(
+                side_effect=["definitely not json"]
+            )
+
+            workflow = JobWorkflow()
+            with pytest.raises(FailureError) as excinfo:
+                await workflow.run(workflow_input)
+
+        assert not isinstance(excinfo.value, json.JSONDecodeError)
