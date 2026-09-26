@@ -450,7 +450,9 @@ class TestIonQPollingTerminalStates:
     async def test_unknown_status_raises_instead_of_looping(self) -> None:
         """A status outside all three sets fails fast, naming status and job id."""
         router, calls = self._counting_router("deleted", job_id="job-unknown")
-        config = IonQExecutorConfig(api_key="k", poll_interval_seconds=0.0)
+        config = IonQExecutorConfig(
+            api_key="k", poll_interval_seconds=0.0, timeout_seconds=2.0
+        )
         executor = IonQExecutor(config, session=_make_session(router))
 
         with _patch_qasm(num_qubits=1):
@@ -464,7 +466,9 @@ class TestIonQPollingTerminalStates:
     async def test_unknown_status_error_names_job_id(self) -> None:
         """The error carries the job id so a stuck job can be looked up."""
         router, _ = self._counting_router("quarantined", job_id="job-42")
-        config = IonQExecutorConfig(api_key="k", poll_interval_seconds=0.0)
+        config = IonQExecutorConfig(
+            api_key="k", poll_interval_seconds=0.0, timeout_seconds=2.0
+        )
         executor = IonQExecutor(config, session=_make_session(router))
 
         with _patch_qasm(num_qubits=1):
@@ -485,7 +489,9 @@ class TestIonQPollingTerminalStates:
                 return {"status": status}
             return {"status": "completed", "data": {"histogram": {"0": 1.0}}}
 
-        config = IonQExecutorConfig(api_key="k", poll_interval_seconds=0.0)
+        config = IonQExecutorConfig(
+            api_key="k", poll_interval_seconds=0.0, timeout_seconds=2.0
+        )
         executor = IonQExecutor(config, session=_make_session(router))
 
         with _patch_qasm(num_qubits=1):
