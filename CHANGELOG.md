@@ -9,6 +9,18 @@ release.
 
 ### Fixed
 
+- `MarqovDevice.run` on the IBM branch no longer crashes with an
+  `AttributeError`: count extraction now calls the same implementation
+  `IBMExecutor` uses, so it resolves the classical register by capability and
+  returns bitstrings in the SDK's qubit-0-leftmost convention. A result with
+  no resolvable register raises instead of returning `{}`. (marqov-sdk#161)
+- `MarqovDevice.run` on the Azure branch returns integer counts keyed by
+  bitstrings instead of `get_results()`'s normalised probabilities keyed by
+  display strings such as `'[0]'`. Bit order matches `AzureQuantumExecutor`.
+  Output data formats other than `microsoft.quantum-results.v1` and
+  `microsoft.quantum-results.v2` raise a `ValueError` naming the format.
+  (marqov-sdk#161)
+
 - The CLI's `list` command no longer shadows the `list` builtin. The command
   function is renamed to `list_workflows` internally (the command itself is
   still invoked as `marqov list`); previously the shadowed builtin broke
@@ -88,6 +100,14 @@ release.
   with a `DeprecationWarning`, and `""` now behaves like an absent key on every
   path. Pinned by `tests/test_ibm_channel.py`. (marqov-sdk#115, marqov-sdk#168)
 
+- IonQ job polling is bounded. An unrecognized job status (for example
+  `deleted`) now raises a `RuntimeError` naming the status and job id instead
+  of polling forever, `IonQExecutorConfig.timeout_seconds` defaults to one hour
+  instead of no timeout, and a timed-out or cancelled wait issues a best-effort
+  cancel for the submitted IonQ job. Pass `timeout_seconds=None` to keep the
+  previous unbounded behaviour. See
+  [marqov-sdk#133](https://github.com/marqov-dev/marqov-sdk/issues/133).
+
 - **Azure Cirq execution path:** `AzureQuantumExecutor` no longer treats the
   value returned by `AzureQuantumService.run()` as a job handle. That call
   already blocks and returns a `cirq.Result`, so every Cirq run previously
@@ -99,6 +119,13 @@ release.
   is unchanged. Both paths are now covered by tests that drive the real
   executor with fake services returning genuine framework result objects.
   (marqov-sdk#131)
+
+### Documentation
+
+- The IonQ histogram bit-order claim in `_histogram_to_counts` is marked
+  unverified and cites IonQ's Direct API guide, which documents little-endian
+  histogram keys. The current conversion is unchanged and now pinned by an
+  asymmetric-bitstring test, so any future change of convention is deliberate.
 
 ## [0.8.0] — 2026-09-25
 
