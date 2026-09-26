@@ -120,6 +120,17 @@ release.
   executor with fake services returning genuine framework result objects.
   (marqov-sdk#131)
 
+- The platform transport no longer retries a write after a connection failure
+  that happened once the request had been sent, so a submit or cancel cannot be
+  double-submitted. Only connect-phase failures (refused, DNS, connect timeout)
+  are still retried; an ambiguous failure raises `TransportError` with the
+  idempotency key on its `idempotency_key` attribute. Idempotent requests now also retry the
+  transient statuses 429, 502, 503 and 504, honouring a `Retry-After` that fits
+  the remaining backoff budget and raising the mapped exception for the last
+  response when attempts run out. `Job.cancel()` now uses the idempotent-write
+  policy. See [error handling](docs/platform-client/error-handling.md).
+  (marqov-sdk#149)
+
 ### Documentation
 
 - The IonQ histogram bit-order claim in `_histogram_to_counts` is marked
