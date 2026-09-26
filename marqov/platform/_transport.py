@@ -105,6 +105,9 @@ def _is_connect_phase_failure(exc: BaseException) -> bool:
 
     # Walk the wrapped causes: requests passes the urllib3 error as an arg,
     # and a MaxRetryError carries the underlying failure on ``.reason``.
+    # Implicit ``__context__`` is deliberately not followed: an exception raised
+    # while handling an earlier connect-phase failure (for example a reset on a
+    # later attempt) must not inherit its "never reached the server" verdict.
     seen: set[int] = set()
     pending: list[BaseException] = [exc]
     while pending:
@@ -118,7 +121,6 @@ def _is_connect_phase_failure(exc: BaseException) -> bool:
             *getattr(current, "args", ()),
             getattr(current, "reason", None),
             current.__cause__,
-            current.__context__,
         )
         for candidate in candidates:
             if isinstance(candidate, BaseException):

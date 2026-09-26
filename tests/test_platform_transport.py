@@ -1039,6 +1039,35 @@ class TestConnectionErrorPhaseSplit:
         )
         assert excinfo.value.idempotency_key == captured_keys[0]
 
+    def test_post_send_failure_raised_while_handling_a_connect_failure_is_ambiguous(self):
+        """An implicit __context__ never upgrades a post-send failure to pre-send.
+
+        A reset raised while an earlier connect-phase error was being handled
+        carries that error as its implicit ``__context__``. The request did
+        reach the server, so the write must still not be replayed.
+        """
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+
+        captured_keys: list[str] = []
+
+        def side_effect(*args, **kwargs):
+            captured_keys.append(kwargs.get("headers", {}).get("Idempotency-Key", ""))
+            post_send = _aborted_connection_error()
+            post_send.__context__ = _connect_phase_connection_error()
+            raise post_send
+
+        with patch.object(transport._session, "request", side_effect=side_effect):
+            with pytest.raises(TransportError) as excinfo:
+                transport.request(
+                    "POST",
+                    "/api/jobs/submit",
+                    json={"backend": "sv1"},
+                    idempotent_write=True,
+                )
+
+        assert len(captured_keys) == 1, f"Expected 1 attempt, got {len(captured_keys)}"
+        assert excinfo.value.idempotency_key == captured_keys[0]
+
     def test_connect_phase_connection_error_on_write_is_retried(self):
         """A connect-phase failure on a write: still 3 attempts, one shared key."""
         transport = Transport(api_key="marqey_test_x", base_url="http://test")
