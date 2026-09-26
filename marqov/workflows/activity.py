@@ -23,6 +23,7 @@ import json
 import os
 import signal
 import sys
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,55 @@ _CHILD_SCRIPT = str(Path(__file__).parent / "_task_child.py")
 # Results larger than this need spill-to-S3 + a reference (follow-up, not this build).
 MAX_ERROR_BYTES: int = 64 * 1024         # 64 KiB
 MAX_RESULT_BYTES: int = 3 * 1024 * 1024  # 3 MiB — under Temporal's ~4 MiB gRPC limit
+
+# The child's stderr is drained continuously (see _StderrTail) so that a chatty
+# task cannot fill the OS pipe and block forever in write().  Only the last
+# MAX_STDERR_TAIL_BYTES are kept: a runaway task must not be able to grow the
+# worker's memory, and the tail is the part that explains a crash.
+MAX_STDERR_TAIL_BYTES: int = 32 * 1024   # 32 KiB
+
+
+class _StderrTail:
+    """Bounded ring buffer over a child's stderr.
+
+    Keeps at most ``limit`` bytes (the most recent ones) and counts how many
+    earlier bytes were discarded, so a truncated tail is never mistaken for
+    the child's whole output.
+    """
+
+    def __init__(self, limit: int = MAX_STDERR_TAIL_BYTES) -> None:
+        self._limit = limit
+        self._chunks: deque[bytes] = deque()
+        self._size = 0
+        self.dropped = 0
+
+    def feed(self, data: bytes) -> None:
+        """Append a chunk, evicting the oldest bytes past the limit."""
+        self._chunks.append(data)
+        self._size += len(data)
+        while self._chunks and self._size - len(self._chunks[0]) >= self._limit:
+            oldest = self._chunks.popleft()
+            self._size -= len(oldest)
+            self.dropped += len(oldest)
+        if self._size > self._limit:
+            excess = self._size - self._limit
+            head = self._chunks.popleft()
+            self._chunks.appendleft(head[excess:])
+            self._size -= excess
+            self.dropped += excess
+
+    def text(self) -> str:
+        """Decode the retained tail, replacing any bytes split by truncation."""
+        return b"".join(self._chunks).decode(errors="replace")
+
+
+async def _drain_stderr(stream: asyncio.StreamReader, tail: _StderrTail) -> None:
+    """Read ``stream`` to EOF, keeping only the last bytes in ``tail``."""
+    while True:
+        chunk = await stream.read(8192)
+        if not chunk:
+            return
+        tail.feed(chunk)
 
 
 def _deserialize_value(value: Any) -> Any:
@@ -163,15 +213,39 @@ async def execute_task(
 
     async def _heartbeat_loop() -> None:
         """Send heartbeats to Temporal until cancelled."""
-        while True:
-            await asyncio.sleep(_HEARTBEAT_INTERVAL_S)
-            activity.heartbeat(f"executing {node_id}")
+        try:
+            while True:
+                await asyncio.sleep(_HEARTBEAT_INTERVAL_S)
+                activity.heartbeat(f"executing {node_id}")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Heartbeating has stopped. Without this log the operator would see
+            # only a Temporal heartbeat timeout, never the actual cause.
+            activity.logger.exception("Heartbeat loop failed for node %s", node_id)
+            raise
 
     heartbeat_task = asyncio.create_task(_heartbeat_loop())
     child_task = asyncio.create_task(proc.wait())
 
+    # Drain the child's stderr for the whole of its lifetime.  asyncio's
+    # StreamReader stops reading once its buffer hits its limit, so an
+    # undrained pipe fills, the child blocks in write() and proc.wait() never
+    # returns.  This is the ONLY reader of proc.stderr.
+    stderr_tail = _StderrTail()
+    stderr_task: asyncio.Task[None] | None = None
+    if proc.stderr is not None:
+        stderr_task = asyncio.create_task(_drain_stderr(proc.stderr, stderr_tail))
+
     try:
         await child_task
+        if stderr_task is not None:
+            # The child has exited; let the reader reach EOF so the tail is
+            # complete before it is used in an error message.
+            try:
+                await asyncio.wait_for(stderr_task, timeout=2)
+            except asyncio.TimeoutError:
+                pass
     except asyncio.CancelledError:
         # Activity was cancelled by Temporal — kill the child and propagate.
         _kill_process_group(proc)
@@ -185,8 +259,20 @@ async def execute_task(
         heartbeat_task.cancel()
         try:
             await heartbeat_task
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
             pass
+        except Exception:
+            # Already reported by _heartbeat_loop; do not let it mask the
+            # activity's own outcome (result, child error, or cancellation).
+            pass
+        if stderr_task is not None:
+            stderr_task.cancel()
+            try:
+                await stderr_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                activity.logger.exception("Stderr reader failed for node %s", node_id)
 
     # --- Separate error channel -------------------------------------------
     # The child writes failures to error.json and successes to result.json.
@@ -228,16 +314,15 @@ async def execute_task(
 
     # No result file — child crashed before writing anything.
     rc = proc.returncode
-    stderr_bytes = b""
-    if proc.stderr is not None:
-        try:
-            stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=2)
-        except (asyncio.TimeoutError, Exception):
-            pass
-    stderr_snippet = stderr_bytes.decode(errors="replace")[-2000:] if stderr_bytes else ""
+    stderr_snippet = stderr_tail.text()
+    dropped_note = (
+        f" (last {MAX_STDERR_TAIL_BYTES} bytes; {stderr_tail.dropped} earlier bytes dropped)"
+        if stderr_tail.dropped
+        else ""
+    )
     raise RuntimeError(
         f"Task {node_id} child exited with code {rc} and no result.\n"
-        f"Stderr: {stderr_snippet}"
+        f"Stderr{dropped_note}: {stderr_snippet}"
     )
 
 
