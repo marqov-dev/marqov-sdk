@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from marqov.executors._counts import extract_sampler_counts
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 
 if TYPE_CHECKING:
@@ -163,57 +164,17 @@ class IBMExecutor(BaseExecutor):
     def _extract_counts(result) -> dict[str, int]:
         """Extract measurement counts from a SamplerV2 result.
 
+        Thin wrapper over the shared implementation, which MarqovDevice.run
+        calls as well: one extraction, so bit order and the multi-register
+        guard cannot diverge between the two paths (marqov-sdk#161).
+
         Args:
             result: SamplerV2 PrimitiveResult.
 
         Returns:
             Dictionary mapping bitstrings to counts.
         """
-        pub_result = result[0]
-        data_bin = pub_result.data
-
-        # SamplerV2 returns a BitArray per classical register. Find it by
-        # capability (it exposes get_counts), NOT by taking dir()[0]: dir() is
-        # alphabetical and DataBin also exposes mapping helpers ('items',
-        # 'keys', 'ndim', 'shape', 'size', 'values'), so dir()[0] is 'items' —
-        # a bound method — for any register sorting after it (e.g. the 'meas'
-        # register that measure_all() creates).
-        keys = getattr(data_bin, "keys", None)
-        if callable(keys):
-            # Qiskit >= 1.2: DataBin declares its register names.
-            names = list(keys())
-        else:
-            names = [n for n in dir(data_bin) if not n.startswith("_")]
-
-        bit_arrays = [
-            candidate
-            for candidate in (getattr(data_bin, name, None) for name in names)
-            if hasattr(candidate, "get_counts")
-        ]
-
-        if not bit_arrays:
-            return {}
-
-        if len(bit_arrays) > 1:
-            # Each BitArray covers one register. Returning just the first one
-            # yields a bitstring narrower than the measurement, silently
-            # mis-indexing every downstream consumer (fidelity, SPAM,
-            # expectation values). Joining them needs a defined register order
-            # and a decision about whether the reversal applies within or
-            # across registers — so fail loudly rather than guess.
-            raise NotImplementedError(
-                f"Result has multiple classical registers ({len(bit_arrays)}); "
-                "Marqov cannot yet combine them into a single bitstring. "
-                "Use a single classical register (e.g. measure_all())."
-            )
-
-        # Qiskit is little-endian (qubit 0 = rightmost); Marqov's convention is
-        # qubit 0 = leftmost. Reverse, exactly as AzureQuantumExecutor does for
-        # the same framework.
-        return {
-            bitstring[::-1]: count
-            for bitstring, count in bit_arrays[0].get_counts().items()
-        }
+        return extract_sampler_counts(result)
 
     async def execute(
         self,

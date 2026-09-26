@@ -5,6 +5,22 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
+## [Unreleased]
+
+### Fixed
+
+- `MarqovDevice.run` on the IBM branch no longer crashes with an
+  `AttributeError`: count extraction now calls the same implementation
+  `IBMExecutor` uses, so it resolves the classical register by capability and
+  returns bitstrings in the SDK's qubit-0-leftmost convention. A result with
+  no resolvable register raises instead of returning `{}`. (marqov-sdk#161)
+- `MarqovDevice.run` on the Azure branch returns integer counts keyed by
+  bitstrings instead of `get_results()`'s normalised probabilities keyed by
+  display strings such as `'[0]'`. Bit order matches `AzureQuantumExecutor`.
+  Output data formats other than `microsoft.quantum-results.v1` and
+  `microsoft.quantum-results.v2` raise a `ValueError` naming the format.
+  (marqov-sdk#161)
+
 ## [0.8.0] — 2026-09-25
 
 ### Added

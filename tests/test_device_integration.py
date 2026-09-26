@@ -1,6 +1,7 @@
 """Integration tests for MarqovDevice type conversion and execution."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -322,3 +323,264 @@ class TestBraketEventLoopSafety:
         with patch.object(MarqovDevice, "_get_provider_device", return_value=mock_aws):
             counts = device.run(Circuit().rx(0.5, 0), shots=100)
         assert counts == {"0": 100}
+
+
+class _StubSamplerJob:
+    """Stands in for a qiskit_ibm_runtime job handle."""
+
+    def __init__(self, result) -> None:
+        self._result = result
+
+    def result(self):
+        return self._result
+
+
+def _stub_sampler_v2(result, recorder: dict):
+    """Build a SamplerV2 replacement that hands back a prepared result.
+
+    The stub sits exactly where ``qiskit_ibm_runtime.SamplerV2`` sits, so
+    everything between MarqovDevice.run and the provider SDK (transpilation
+    and count extraction) is the real code under test.
+    """
+
+    class _StubSamplerV2:
+        def __init__(self, mode=None) -> None:
+            recorder["mode"] = mode
+
+        def run(self, pubs, shots=None):
+            recorder["pubs"] = pubs
+            recorder["shots"] = shots
+            return _StubSamplerJob(result)
+
+    return _StubSamplerV2
+
+
+class TestRunIBMBranch:
+    """MarqovDevice.run down the IBM branch, stubbed at the provider SDK.
+
+    The counts must match IBMExecutor's convention: qubit 0 leftmost. X on
+    qubit 0 of a 2-qubit circuit is the probe, because Bell and GHZ states are
+    palindromes and so cannot detect a reversed bitstring.
+    """
+
+    @staticmethod
+    def _ibm_device() -> MarqovDevice:
+        return MarqovDevice(
+            "ibm-fake-backend",
+            {"backend": "ibm-fake-backend", "ibm_token": "fake-token"},
+        )
+
+    @staticmethod
+    def _fake_backend():
+        from qiskit.providers.fake_provider import GenericBackendV2
+
+        return GenericBackendV2(num_qubits=5, seed=42)
+
+    @staticmethod
+    def _x0_sampler_result(shots: int = 100):
+        """A genuine PrimitiveResult carrying DataBin(meas=BitArray(...))."""
+        from qiskit import QuantumCircuit
+        from qiskit.primitives import StatevectorSampler
+
+        qc = QuantumCircuit(2)
+        qc.x(0)
+        qc.measure_all()
+        return StatevectorSampler().run([qc], shots=shots).result()
+
+    def _run(self, result, shots: int = 100):
+        recorder: dict = {}
+        device = self._ibm_device()
+        with patch.object(
+            MarqovDevice, "_get_provider_device", return_value=self._fake_backend()
+        ):
+            with patch(
+                "qiskit_ibm_runtime.SamplerV2",
+                _stub_sampler_v2(result, recorder),
+            ):
+                counts = device.run(Circuit().x(0).h(1), shots=shots)
+        return counts, recorder
+
+    def test_run_returns_counts_with_qubit0_leftmost(self) -> None:
+        counts, recorder = self._run(self._x0_sampler_result())
+
+        assert counts == {"10": 100}
+        assert recorder["shots"] == 100
+
+    def test_run_agrees_with_ibm_executor_extraction(self) -> None:
+        """Both paths share one implementation, so they cannot diverge."""
+        from marqov.executors.ibm import IBMExecutor
+
+        result = self._x0_sampler_result()
+        counts, _ = self._run(result)
+
+        assert counts == IBMExecutor._extract_counts(result)
+
+    def test_unresolvable_register_raises_with_field_names(self) -> None:
+        """A DataBin with no BitArray must raise, not return {} silently."""
+        from qiskit.primitives.containers import DataBin, PrimitiveResult
+        from qiskit.primitives.containers.pub_result import PubResult
+
+        result = PrimitiveResult([PubResult(DataBin(alpha=1.0))])
+
+        with pytest.raises(ValueError, match="no measurement data") as exc:
+            self._run(result)
+        assert "alpha" in str(exc.value)
+
+    def test_multiple_classical_registers_raise(self) -> None:
+        from qiskit import ClassicalRegister, QuantumCircuit
+        from qiskit.primitives import StatevectorSampler
+
+        reg_a, reg_b = ClassicalRegister(1, "a"), ClassicalRegister(1, "b")
+        qc = QuantumCircuit(2)
+        qc.add_register(reg_a)
+        qc.add_register(reg_b)
+        qc.x(0)
+        qc.measure(0, reg_a[0])
+        qc.measure(1, reg_b[0])
+        result = StatevectorSampler().run([qc], shots=100).result()
+
+        with pytest.raises(NotImplementedError, match="multiple classical registers"):
+            self._run(result)
+
+
+class _StubAzureJob:
+    """Stands in for an azure.quantum Job: serves the raw results blob.
+
+    ``get_results`` is the method the branch must NOT use: it hands back
+    normalized probabilities under display keys, not counts.
+    """
+
+    def __init__(self, payload: dict, output_data_format: str) -> None:
+        self.details = SimpleNamespace(
+            output_data_format=output_data_format,
+            output_data_uri="https://example.invalid/results.json",
+        )
+        self._blob = json.dumps(payload).encode("utf8")
+
+    def wait_until_completed(self, **kwargs) -> None:
+        return None
+
+    def download_data(self, uri: str) -> bytes:
+        assert uri == self.details.output_data_uri
+        return self._blob
+
+    def get_results(self, **kwargs):
+        raise AssertionError(
+            "run() must not use get_results(): it returns probabilities"
+        )
+
+
+class _StubAzureTarget:
+    """Stands in for the object workspace.get_targets(...) returns."""
+
+    def __init__(self, job: _StubAzureJob) -> None:
+        self._job = job
+        self.submitted: dict = {}
+
+    def submit(self, circuit, shots: int = 1000, **kwargs):
+        self.submitted = {"circuit": circuit, "shots": shots}
+        return self._job
+
+
+def _v2_payload(histogram: list[dict], shots: int) -> dict:
+    """A microsoft.quantum-results.v2 blob as azure-quantum reads it."""
+    return {
+        "DataFormat": "microsoft.quantum-results.v2",
+        "Results": [
+            {
+                "Histogram": histogram,
+                "Shots": [entry["Outcome"] for entry in histogram for _ in range(entry["Count"])],
+            }
+        ],
+    }
+
+
+class TestRunAzureBranch:
+    """MarqovDevice.run down the Azure branch, stubbed at the provider SDK.
+
+    The contract is counts keyed by bitstrings in the SDK's convention
+    (qubit 0 leftmost), not azure-quantum's normalized probabilities keyed by
+    display strings such as '[0]'.
+    """
+
+    @staticmethod
+    def _azure_device() -> MarqovDevice:
+        return MarqovDevice(
+            "quantinuum-sim-h1-1e",
+            {
+                "backend": "quantinuum-sim-h1-1e",
+                "azure_subscription_id": "fake-sub-id",
+                "azure_resource_group": "fake-rg",
+                "azure_workspace_name": "fake-ws",
+            },
+        )
+
+    def _run(self, job: _StubAzureJob, shots: int = 100):
+        target = _StubAzureTarget(job)
+        device = self._azure_device()
+        with patch.object(MarqovDevice, "_get_provider_device", return_value=target):
+            counts = device.run(Circuit().x(0).h(1), shots=shots)
+        return counts, target
+
+    def test_v2_histogram_counts_are_returned_as_integer_counts(self) -> None:
+        """X on qubit 0: display '[0, 1]' must come back as '10'."""
+        job = _StubAzureJob(
+            _v2_payload(
+                [
+                    {"Outcome": [0, 1], "Display": "[0, 1]", "Count": 60},
+                    {"Outcome": [0, 0], "Display": "[0, 0]", "Count": 40},
+                ],
+                shots=100,
+            ),
+            "microsoft.quantum-results.v2",
+        )
+
+        counts, target = self._run(job, shots=100)
+
+        assert counts == {"10": 60, "00": 40}
+        assert all(isinstance(value, int) for value in counts.values())
+        assert {len(key) for key in counts} == {2}
+        assert set("".join(counts)) <= {"0", "1"}
+        assert sum(counts.values()) == 100
+        assert target.submitted["shots"] == 100
+
+    def test_v2_bit_order_agrees_with_azure_executor(self) -> None:
+        """Same provider outcome, same endianness as AzureQuantumExecutor.
+
+        AzureQuantumExecutor reads the qiskit provider's counts, which join the
+        provider's outcome list into a qiskit bitstring, then reverses them
+        into the SDK's convention. The device path must land on the same keys.
+        """
+        histogram = [{"Outcome": [0, 1], "Display": "[0, 1]", "Count": 100}]
+        job = _StubAzureJob(
+            _v2_payload(histogram, shots=100), "microsoft.quantum-results.v2"
+        )
+
+        counts, _ = self._run(job, shots=100)
+
+        # What AzureQuantumExecutor does to the qiskit provider's counts, which
+        # for this outcome are keyed '01' (the joined outcome list).
+        qiskit_counts = {"01": 100}
+        executor_counts = {
+            key.replace(" ", "")[::-1]: value for key, value in qiskit_counts.items()
+        }
+        assert counts == executor_counts
+
+    def test_v1_probability_histogram_is_converted_to_counts(self) -> None:
+        """A payload shaped like {'[0]': 0.5, ...} must never be returned as is."""
+        job = _StubAzureJob(
+            {"Histogram": ["[0, 1]", 0.5, "[1, 1]", 0.5]},
+            "microsoft.quantum-results.v1",
+        )
+
+        counts, _ = self._run(job, shots=100)
+
+        assert counts == {"10": 50, "11": 50}
+        assert all(isinstance(value, int) for value in counts.values())
+        assert sum(counts.values()) == 100
+
+    def test_unsupported_output_format_raises_naming_the_format(self) -> None:
+        job = _StubAzureJob({"Histogram": []}, "microsoft.quantum-results.v99")
+
+        with pytest.raises(ValueError, match="microsoft.quantum-results.v99"):
+            self._run(job)
