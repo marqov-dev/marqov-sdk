@@ -890,3 +890,100 @@ class TestSerialization:
         orig_state = original.simulate().tensor.flatten()
         rest_state = restored.simulate().tensor.flatten()
         assert np.allclose(np.abs(orig_state), np.abs(rest_state))
+
+
+class TestToPennylane:
+    """Tests for Circuit.to_pennylane(), the single Circuit -> PennyLane boundary.
+
+    The gate-by-gate expectations follow marqov-dev/marqov-sdk#38 (Siddha
+    Mavuram, "to_pennylane Closes #27"); the exact-state and refusal checks
+    are added here.
+    """
+
+    @staticmethod
+    def _every_gate_circuit(angle: float = 0.5) -> Circuit:
+        return (
+            Circuit()
+            .cnot(0, 1).h(0).x(0).y(0).z(0).s(0).t(0)
+            .rx(angle, 0).ry(angle, 1).rz(angle, 0)
+            .cz(0, 1).swap(0, 1)
+        )
+
+    def test_every_canonical_gate_maps_to_its_pennylane_operation(self) -> None:
+        """Each canonical gate maps one-to-one, in order, with its angle."""
+        import pennylane as qml
+
+        script = self._every_gate_circuit(0.5).to_pennylane()
+        expected = [
+            qml.CNOT(wires=[0, 1]), qml.Hadamard(0), qml.PauliX(0), qml.PauliY(0),
+            qml.PauliZ(0), qml.S(0), qml.T(0), qml.RX(0.5, wires=0),
+            qml.RY(0.5, wires=1), qml.RZ(0.5, wires=0), qml.CZ(wires=[0, 1]),
+            qml.SWAP(wires=[0, 1]),
+        ]
+        assert len(script.operations) == len(expected)
+        for got, want in zip(script.operations, expected):
+            qml.assert_equal(got, want)
+
+    def test_exported_unitary_matches_quantumflow_exactly(self) -> None:
+        """The whole-circuit unitary, including global phase, is unchanged.
+
+        Compared against QuantumFlow's operator, not ``simulate()``: in
+        marqov-quantumflow 1.0.0, ``Y.run`` and ``Rz.run`` differ from their own
+        ``asoperator()`` by a global phase, so the simulated state is only
+        equal up to phase (see the probability check below).
+        """
+        import numpy as np
+        import pennylane as qml
+
+        circuit = self._every_gate_circuit(0.37).ry(1.1, 2).cnot(2, 0)
+        script = circuit.to_pennylane()
+        wires = sorted(script.wires.tolist())
+        dim = 2 ** len(wires)
+        expected = circuit._qf.asgate().asoperator().reshape(dim, dim)
+        assert np.allclose(qml.matrix(script, wire_order=wires), expected)
+
+    def test_exported_probabilities_match_quantumflow(self) -> None:
+        """Computational-basis probabilities match the QuantumFlow simulation."""
+        import numpy as np
+        import pennylane as qml
+
+        circuit = self._every_gate_circuit(0.37).ry(1.1, 2).cnot(2, 0)
+        script = circuit.to_pennylane()
+        wires = sorted(script.wires.tolist())
+        tape = qml.tape.QuantumScript(script.operations, [qml.probs(wires=wires)])
+        (probs,) = qml.execute([tape], qml.device("default.qubit", wires=wires))
+        expected = np.abs(circuit.simulate().tensor.flatten()) ** 2
+        assert np.allclose(probs, expected)
+
+    def test_carries_no_measurements_and_no_shots(self) -> None:
+        """Measurement and shots belong to the executor, not to the gate export."""
+        script = bell_state().to_pennylane()
+        assert script.measurements == []
+        assert script.shots.total_shots is None
+
+    def test_roundtrip_preserves_state(self) -> None:
+        """to_pennylane -> from_pennylane reproduces the exact state."""
+        import numpy as np
+
+        original = self._every_gate_circuit(0.9)
+        restored = Circuit.from_pennylane(original.to_pennylane())
+        assert np.allclose(
+            original.simulate().tensor.flatten(), restored.simulate().tensor.flatten()
+        )
+
+    def test_unbound_parameter_is_refused(self) -> None:
+        """A symbolic (unbound) angle raises instead of being cast or dropped."""
+        import sympy
+
+        circuit = Circuit().rx(sympy.Symbol("theta"), 0)
+        with pytest.raises(ValueError, match="unbound"):
+            circuit.to_pennylane()
+
+    def test_gate_outside_canonical_set_is_refused(self) -> None:
+        """A QuantumFlow gate with no mapping raises NotImplementedError."""
+        import quantumflow as qf
+
+        circuit = Circuit().h(0)
+        circuit._qf += qf.CCNot(0, 1, 2)
+        with pytest.raises(NotImplementedError, match="CCNot"):
+            circuit.to_pennylane()

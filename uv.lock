@@ -1459,6 +1459,7 @@ all = [
     { name = "amazon-braket-sdk" },
     { name = "cirq-core" },
     { name = "pennylane" },
+    { name = "pennylane-lightning" },
     { name = "pyquil" },
     { name = "pytket" },
     { name = "pytket-qiskit" },
@@ -1499,12 +1500,18 @@ ionq = [
     { name = "qiskit" },
     { name = "requests" },
 ]
+lightning-kokkos = [
+    { name = "pennylane" },
+    { name = "pennylane-lightning" },
+    { name = "pennylane-lightning-kokkos", marker = "sys_platform != 'win32'" },
+]
 openqasm = [
     { name = "qiskit" },
     { name = "qiskit-qasm3-import" },
 ]
 pennylane = [
     { name = "pennylane" },
+    { name = "pennylane-lightning" },
 ]
 pyquil = [
     { name = "pyquil" },
@@ -1545,8 +1552,13 @@ requires-dist = [
     { name = "marqov-quantumflow", specifier = "==1.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
     { name = "numpy", specifier = ">=1.26.0,<2.4" },
-    { name = "pennylane", marker = "extra == 'all'", specifier = ">=0.35.0" },
-    { name = "pennylane", marker = "extra == 'pennylane'", specifier = ">=0.35.0" },
+    { name = "pennylane", marker = "extra == 'all'", specifier = ">=0.45.0" },
+    { name = "pennylane", marker = "extra == 'lightning-kokkos'", specifier = ">=0.45.0" },
+    { name = "pennylane", marker = "extra == 'pennylane'", specifier = ">=0.45.0" },
+    { name = "pennylane-lightning", marker = "extra == 'all'", specifier = ">=0.45.0" },
+    { name = "pennylane-lightning", marker = "extra == 'lightning-kokkos'", specifier = ">=0.45.0" },
+    { name = "pennylane-lightning", marker = "extra == 'pennylane'", specifier = ">=0.45.0" },
+    { name = "pennylane-lightning-kokkos", marker = "sys_platform != 'win32' and extra == 'lightning-kokkos'", specifier = ">=0.45.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pyquil", marker = "extra == 'all'", specifier = ">=4.0.0" },
     { name = "pyquil", marker = "extra == 'pyquil'", specifier = ">=4.0.0" },
@@ -1587,7 +1599,7 @@ requires-dist = [
     { name = "structlog", specifier = ">=24.0.0" },
     { name = "temporalio", specifier = ">=1.7.0" },
 ]
-provides-extras = ["all", "azure", "braket", "cirq", "cudaq", "dev", "ibm", "ionq", "openqasm", "pennylane", "pyquil", "pytket", "qiskit", "quantinuum", "qutip", "rigetti"]
+provides-extras = ["all", "azure", "braket", "cirq", "cudaq", "dev", "ibm", "ionq", "lightning-kokkos", "openqasm", "pennylane", "pyquil", "pytket", "qiskit", "quantinuum", "qutip", "rigetti"]
 
 [[package]]
 name = "marqov-quantumflow"
@@ -2193,7 +2205,7 @@ wheels = [
 
 [[package]]
 name = "pennylane"
-version = "0.45.0"
+version = "0.45.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "appdirs" },
@@ -2213,7 +2225,7 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/66/4f30c4b25980d9616848d69a98016f7fbbb74f74d74ae8f04792df5192fd/pennylane-0.45.0-py3-none-any.whl", hash = "sha256:763ca3520de74b05c9e9dc4b5bc3e4d7f0a05697308a0a01da35e2106ab4ddf6", size = 5414354, upload-time = "2026-05-12T20:00:53.805Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/b1/87dcc5c26dd73cf44897b98f8276bc39c38a7300ee0c40a7e507ded03d56/pennylane-0.45.1-py3-none-any.whl", hash = "sha256:b8cc7f590c43281b6e35b3a35707e9583c6b7babeb31dcf6f1cbde32a754ab93", size = 5414360, upload-time = "2026-06-26T21:40:32.556Z" },
 ]
 
 [[package]]
@@ -2239,6 +2251,28 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/74/cecb20d032bc5f98ec2a6b373fc464a6979de6a306f7bb1db0fd61ecd922/pennylane_lightning-0.45.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7992ba71246751cabebfc371b8cbe6b953bfdb746c2044c8161a9373d1eda33c", size = 25528043, upload-time = "2026-05-12T19:11:27.129Z" },
     { url = "https://files.pythonhosted.org/packages/21/2a/e17e7a8746be2539c255ca6c53dfb7e7e3bb1d54c71e2219065021a8fd0d/pennylane_lightning-0.45.0-cp314-cp314-win_amd64.whl", hash = "sha256:3e0869f6fe2091bf9cb88f501257ccb18d2dd4a21e7a0d5d66239c10897a36e6", size = 5435459, upload-time = "2026-05-12T19:11:29.87Z" },
     { url = "https://files.pythonhosted.org/packages/84/03/c1f12a8d137c135551c9fb71890021d8958dc0d6152505907cf35854df68/pennylane_lightning-0.45.0-py3-none-any.whl", hash = "sha256:24f6c1f7db13dec80fdbe167579c5c42f1098c8f798ba9513e1b8d0906f64cc1", size = 1046727, upload-time = "2026-05-12T19:11:31.98Z" },
+]
+
+[[package]]
+name = "pennylane-lightning-kokkos"
+version = "0.45.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pennylane" },
+    { name = "pennylane-lightning" },
+    { name = "scipy-openblas32" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/90/9c/caaccf7ca81b09bab89f83c5cfca7e28ece458dd46cdc89c758c18f41e19/pennylane_lightning_kokkos-0.45.0.tar.gz", hash = "sha256:6a61c919f1619e1b16c3ed5aec1705d53912a6430c60b9756ff02f312a5edddc", size = 769393, upload-time = "2026-05-12T19:12:46.91Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ef/e2/3c112c9b28e6bc32d4aac5dbc87ebc7e7b44c742857c0bda6e25ee181edc/pennylane_lightning_kokkos-0.45.0-cp312-cp312-macosx_13_0_arm64.whl", hash = "sha256:879587f942e1d05393991f4bc6a9c5bd91a2439e3f3f371231f5b55ad1a5e6aa", size = 1012669, upload-time = "2026-05-12T19:12:02.834Z" },
+    { url = "https://files.pythonhosted.org/packages/83/11/b6970508504d0b9093b28bcb34d7aa443088cbe3ee61437d093cc00fd6b7/pennylane_lightning_kokkos-0.45.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:84557392e13a6d08e8dbd68822f08391c3804ae44a292e70a69342cad1dcd08e", size = 20436153, upload-time = "2026-05-12T19:12:06.035Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/9d/98aa75bdf4f482ce9650dc9ed5a0a2ce68e3f52b51e3c0d7c927d6cd66b6/pennylane_lightning_kokkos-0.45.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:37e6f150108e4ce20a268a91220c4e766812234599b87867ee8985b94f6993b8", size = 21107453, upload-time = "2026-05-12T19:12:10.316Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/c4/16c3f137c221700ee306104d9f51ae3e2ae204e06bd853ae8dd89d2d2b0a/pennylane_lightning_kokkos-0.45.0-cp313-cp313-macosx_13_0_arm64.whl", hash = "sha256:c9df43e508a6bec8494519e4223b7350103d939a1a9c200d3c72c96c9df1d88e", size = 1012661, upload-time = "2026-05-12T19:12:13.09Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/5c/ab8227ad45ffa7ce43838f93bd156517fa4e8b4ec0025df89f0b6a8a7a14/pennylane_lightning_kokkos-0.45.0-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f1ceaeaa4538ff6d7e0f75a4a4d58102b8dbcc9244b07e06ba0dfdfd3409bdde", size = 20436054, upload-time = "2026-05-12T19:12:16.397Z" },
+    { url = "https://files.pythonhosted.org/packages/84/14/b507e27d5b634ce61966f9916f28bd9cc9e7c09cf06f66e92044f602e311/pennylane_lightning_kokkos-0.45.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1e9dafb08ef0da061b292368bbae6becb14ba402120d69976e466ff2cffbab66", size = 21106352, upload-time = "2026-05-12T19:12:20.687Z" },
+    { url = "https://files.pythonhosted.org/packages/74/ae/c052566b7e8bfd86f8ce635777e38a377b7ba9ccc8aa278345b3d20771ca/pennylane_lightning_kokkos-0.45.0-cp314-cp314-macosx_13_0_arm64.whl", hash = "sha256:3d76f148b5ccebb7de0d4e0ec7155d54ebb0aa52ff0e150acd2844421edc129e", size = 1012794, upload-time = "2026-05-12T19:12:22.876Z" },
+    { url = "https://files.pythonhosted.org/packages/1c/35/7bf05967845ccf5efa422e0d10f752971f5b553767472d33e7a6baba1ade/pennylane_lightning_kokkos-0.45.0-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:cac25dbb2c0b9bbe5bd13794c4d1177fb18f653dee0278dd3279748030cef363", size = 20433052, upload-time = "2026-05-12T19:12:26.042Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/26/58b061d26b18da140511bdd16f8c25338085c2137415e490734226921cc4/pennylane_lightning_kokkos-0.45.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0144d8ec96fb731723733c14b824bb8cc6397cf3034aefeaed0ddf4f608f2221", size = 21104822, upload-time = "2026-05-12T19:12:30.134Z" },
 ]
 
 [[package]]

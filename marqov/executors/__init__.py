@@ -13,6 +13,7 @@ Available executors:
 - IonQExecutor: IonQ Direct API (native REST, no Braket intermediary)
 - RigettiExecutor: Rigetti QCS QPUs and the local QVM (via pyquil)
 - QiliSDKExecutor: Qilimanjaro qilisdk local simulators (QiliSim/QutipBackend)
+- LightningExecutor: Xanadu PennyLane Lightning CPU simulators (lightning.qubit/kokkos)
 
 Example:
     >>> from marqov.executors import LocalExecutor
@@ -31,6 +32,7 @@ from marqov.executors.cunqa import CUNQAExecutor, CUNQAExecutorConfig
 from marqov.executors.factory import ExecutorFactory
 from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
+from marqov.executors.lightning import LightningExecutor, LightningExecutorConfig
 from marqov.executors.local import LocalExecutor
 from marqov.executors.qilisdk import QiliSDKExecutor, QiliSDKExecutorConfig
 from marqov.executors.quantinuum import QuantinuumExecutor, QuantinuumExecutorConfig
@@ -54,6 +56,8 @@ __all__ = [
     "IBMExecutorConfig",
     "IonQExecutor",
     "IonQExecutorConfig",
+    "LightningExecutor",
+    "LightningExecutorConfig",
     "LocalExecutor",
     "QiliSDKExecutor",
     "QiliSDKExecutorConfig",
