@@ -192,9 +192,38 @@ class TestRecord:
         assert ra["input_sha256"] == rb["input_sha256"] != rc["input_sha256"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("angle", ["float32", "float64", "int64"])
+    async def test_numpy_scalar_angles_are_accepted_and_hashed(self, angle) -> None:
+        import numpy as np
+
+        value = getattr(np, angle)(1)
+        result = await _executor().execute(Circuit().rx(value, 0), shots=10, seed=1)
+        record = result.metadata["reproducibility"]
+        assert len(record["circuit_sha256"]) == 64
+
+    @pytest.mark.asyncio
     async def test_single_precision_is_recorded(self) -> None:
         result = await _executor(precision="single").execute(bell_state(), shots=10, seed=1)
         assert result.metadata["reproducibility"]["precision"] == "complex64"
+
+    @pytest.mark.asyncio
+    async def test_qualification_runs_per_precision(self, monkeypatch) -> None:
+        monkeypatch.setattr(LightningExecutor, "_qualified", {})
+        probed: list[str] = []
+        original = LightningExecutor._sample
+
+        def spy(self, qml, operations, wires, shots, seed):
+            if seed == 0 and wires == [0, 1]:
+                probed.append(self.config.precision)
+            return original(self, qml, operations, wires, shots, seed)
+
+        monkeypatch.setattr(LightningExecutor, "_sample", spy)
+        await _executor().execute(bell_state(), shots=10, seed=1)
+        result = await _executor(precision="single").execute(bell_state(), shots=10, seed=1)
+
+        assert "single" in probed and "double" in probed
+        qualification = result.metadata["reproducibility"]["qualification"]
+        assert qualification["precision"] == "complex64"
 
     @pytest.mark.asyncio
     async def test_compute_provider_is_recorded_as_given(self) -> None:

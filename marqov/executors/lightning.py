@@ -168,8 +168,15 @@ def _check_seed(seed: Any) -> int:
     return seed
 
 
+def _json_scalar(value: Any) -> Any:
+    # numpy scalars (float32, int64, ...) are not JSON-serialisable; hash their Python value.
+    if hasattr(value, "item"):
+        return value.item()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def _sha256_json(value: Any) -> str:
-    text = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    text = json.dumps(value, sort_keys=True, separators=(",", ":"), default=_json_scalar)
     return hashlib.sha256(text.encode()).hexdigest()
 
 
@@ -303,8 +310,8 @@ class LightningExecutor(BaseExecutor):
         >>> result = await executor.execute(circuit, shots=1000, seed=7)
     """
 
-    # Per-process qualification results, keyed by device name.
-    _qualified: dict[str, dict[str, Any]] = {}
+    # Per-process qualification results, keyed by (device name, precision).
+    _qualified: dict[tuple[str, str], dict[str, Any]] = {}
     _qualify_lock = threading.Lock()
 
     def __init__(self, config: LightningExecutorConfig | None = None) -> None:
@@ -429,16 +436,17 @@ class LightningExecutor(BaseExecutor):
         return dev, tape, samples, elapsed_ms
 
     def _ensure_qualified(self, qml: Any) -> dict[str, Any]:
-        """Run once per process: bit order and a known distribution on this device.
+        """Run once per process and precision: bit order and a known distribution on this device.
 
         Installed is not qualified: the device must reproduce the SDK's count
         keys for an asymmetric basis state, and a Bell state's distribution
         within 5 sigma, before any user circuit runs on it.
         """
         name = self.config.device
+        key = (name, self.config.precision)
         with self._qualify_lock:
-            if name in self._qualified:
-                return self._qualified[name]
+            if key in self._qualified:
+                return self._qualified[key]
             checks: dict[str, bool] = {}
             _, _, samples, _ = self._sample(
                 qml, [qml.PauliX(0), qml.CZ(wires=[0, 1])], [0, 1], 64, seed=0
@@ -456,9 +464,10 @@ class LightningExecutor(BaseExecutor):
             result = {
                 "passed": all(checks.values()),
                 "checks": checks,
-                "scope": "once per process, before the first user circuit",
+                "precision": "complex128" if self.config.precision == "double" else "complex64",
+                "scope": "once per process and precision, before the first user circuit",
             }
-            self._qualified[name] = result
+            self._qualified[key] = result
             return result
 
     def _run_sync(

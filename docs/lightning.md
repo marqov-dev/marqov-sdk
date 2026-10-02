@@ -28,7 +28,7 @@ A copy-and-run demo, including seed replay, is `examples/lightning_cpu_local.py`
   if it succeeds, the run is refused with `NotImplementedError` because this
   executor has not been validated there. No other device or simulator is
   substituted. `probe_lightning_device(name)` runs the same check on its own.
-- Each CPU device must pass a qualification probe once per process before the
+- Each CPU device must pass a qualification probe once per process and precision before the
   first user circuit: an asymmetric basis state must produce the SDK's count
   key (`"10"` for X on qubit 0 of 2), and a Bell state must stay within 5 sigma
   of 50/50. The outcome is in the record under `qualification`.

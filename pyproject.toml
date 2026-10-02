@@ -91,11 +91,12 @@ pennylane = [
 ]
 lightning-kokkos = [
     # Optional second CPU engine for LightningExecutor (device="lightning.kokkos").
-    # Wheels exist for Linux x86_64/aarch64 and macOS arm64 only; there is no
-    # Windows wheel, so the marker keeps Windows installs from building the sdist.
+    # Wheels exist for Linux x86_64/aarch64 and macOS arm64 only. The marker limits
+    # the install to those platforms so others never fall back to building the sdist
+    # (which needs CMake and Kokkos).
     "pennylane>=0.45.0",
     "pennylane-lightning>=0.45.0",
-    "pennylane-lightning-kokkos>=0.45.0 ; sys_platform != 'win32'",
+    "pennylane-lightning-kokkos>=0.45.0 ; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64'))",
 ]
 pytket = [
     "pytket>=2.0.0",

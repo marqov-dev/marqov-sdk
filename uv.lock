@@ -1503,7 +1503,7 @@ ionq = [
 lightning-kokkos = [
     { name = "pennylane" },
     { name = "pennylane-lightning" },
-    { name = "pennylane-lightning-kokkos", marker = "sys_platform != 'win32'" },
+    { name = "pennylane-lightning-kokkos", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
 openqasm = [
     { name = "qiskit" },
@@ -1558,7 +1558,7 @@ requires-dist = [
     { name = "pennylane-lightning", marker = "extra == 'all'", specifier = ">=0.45.0" },
     { name = "pennylane-lightning", marker = "extra == 'lightning-kokkos'", specifier = ">=0.45.0" },
     { name = "pennylane-lightning", marker = "extra == 'pennylane'", specifier = ">=0.45.0" },
-    { name = "pennylane-lightning-kokkos", marker = "sys_platform != 'win32' and extra == 'lightning-kokkos'", specifier = ">=0.45.0" },
+    { name = "pennylane-lightning-kokkos", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'lightning-kokkos') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'lightning-kokkos') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'lightning-kokkos')", specifier = ">=0.45.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pyquil", marker = "extra == 'all'", specifier = ">=4.0.0" },
     { name = "pyquil", marker = "extra == 'pyquil'", specifier = ">=4.0.0" },
