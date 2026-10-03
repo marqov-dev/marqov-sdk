@@ -25,6 +25,7 @@ from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
 from marqov.executors.cudaq import _SLUG_TO_TARGET, CudaqExecutor, CudaqExecutorConfig
 from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig, normalize_ibm_connection
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
+from marqov.executors.lightning import LightningExecutor, LightningExecutorConfig
 from marqov.executors.local import LocalExecutor
 from marqov.executors.qilisdk import QiliSDKExecutor, QiliSDKExecutorConfig
 from marqov.executors.quantinuum import QuantinuumExecutor, QuantinuumExecutorConfig
@@ -59,6 +60,11 @@ class ExecutorFactory:
           numpy floor is incompatible with marqov's own numpy ceiling outside
           a narrow macOS overlap window, which would make it unresolvable as
           a formal extra in marqov's dependency lock.
+        - PennyLane Lightning: Xanadu's Lightning CPU simulators
+          (``lightning.qubit``; ``lightning.kokkos`` with the
+          ``marqov[lightning-kokkos]`` extra), run locally. The provider string
+          is only the routing key: results record vendor, framework, engine,
+          access path and compute provider as separate fields.
 
     Example:
         >>> from marqov.executors.factory import ExecutorFactory
@@ -112,6 +118,11 @@ class ExecutorFactory:
         # Qilimanjaro qilisdk (local simulator only — QiliSim or QutipBackend)
         if provider == "Qilimanjaro":
             return cls._create_qilisdk_executor(backend_slug, backend_config)
+
+        # Xanadu PennyLane Lightning (local CPU simulators). Dispatched on the
+        # provider only, never on slug, so no existing slug changes route.
+        if provider == "PennyLane Lightning":
+            return cls._create_lightning_executor(backend_slug, backend_config)
 
         # NVIDIA CUDA-Q (GPU/CPU statevector, direct IQM)
         if provider == "CUDA-Q" or backend_slug in _SLUG_TO_TARGET:
@@ -446,6 +457,43 @@ class ExecutorFactory:
         simulator = backend_config.get("simulator", "qilisim")
         return QiliSDKExecutor(QiliSDKExecutorConfig(simulator=simulator))
 
+    # Backend slug -> PennyLane device name, for configs that give no ``device``.
+    _LIGHTNING_SLUG_TO_DEVICE: dict[str, str] = {
+        "lightning-qubit": "lightning.qubit",
+        "lightning-kokkos": "lightning.kokkos",
+        "lightning-gpu": "lightning.gpu",
+        "lightning-tensor": "lightning.tensor",
+    }
+
+    @classmethod
+    def _create_lightning_executor(
+        cls,
+        backend_slug: str,
+        backend_config: dict[str, Any],
+    ) -> LightningExecutor:
+        """Create a PennyLane Lightning executor from configuration.
+
+        The device comes from ``device`` in the config, else from the slug
+        (``lightning-qubit`` / ``lightning-kokkos``; ``lightning-gpu`` and
+        ``lightning-tensor`` resolve but are refused at run time unless
+        validated). Optional keys: ``seed``, ``precision``, ``compute_provider``.
+
+        Raises:
+            ValueError: If neither ``device`` nor a known slug names the device.
+        """
+        device = backend_config.get("device") or cls._LIGHTNING_SLUG_TO_DEVICE.get(backend_slug)
+        if not device:
+            raise ValueError(
+                f"PennyLane Lightning config for {backend_slug} needs a 'device' "
+                f"(e.g. 'lightning.qubit') or a slug in "
+                f"{sorted(cls._LIGHTNING_SLUG_TO_DEVICE)}."
+            )
+        config_kwargs: dict[str, Any] = {"device": device}
+        for key in ("seed", "precision", "compute_provider"):
+            if key in backend_config:
+                config_kwargs[key] = backend_config[key]
+        return LightningExecutor(LightningExecutorConfig(**config_kwargs))
+
     @classmethod
     def _create_simulation_executor(
         cls,
@@ -486,6 +534,7 @@ class ExecutorFactory:
             "Local",
             "Quantinuum",
             "Qilimanjaro",
+            "PennyLane Lightning",
         ]
 
     @classmethod

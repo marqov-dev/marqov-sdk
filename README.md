@@ -62,6 +62,9 @@ pip install "marqov[ibm]"
 # QuTiP solvers and Marqov's result-recording helper
 pip install "marqov[qutip]"
 
+# PennyLane interop and the Lightning CPU executor (lightning.qubit)
+pip install "marqov[pennylane]"
+
 # Combine selected frameworks
 pip install "marqov[qutip,qiskit]"
 
@@ -159,6 +162,7 @@ result = await executor.execute(circuit, shots=1000)
 | Quantum Brilliance | Available — requires `qristal` installed separately (not on PyPI, no `marqov[...]` extra); build from source or use the Docker image: https://qristal.readthedocs.io/ |
 | CUDA-Q | Available — not in `[all]` (GPU-heavy); install separately with `pip install "marqov[cudaq]"` |
 | Qilimanjaro (qilisdk local simulators — digital `execute()` and analog `execute_analog()`) | Available — not on PyPI as a `marqov[...]` extra (like Quantum Brilliance): `qilisdk`'s numpy floor is incompatible with marqov's own numpy ceiling outside a narrow macOS overlap window. Install separately: `pip install qilisdk`. |
+| PennyLane Lightning (Xanadu `lightning.qubit`, `lightning.kokkos`; local CPU) | Available — `pip install "marqov[pennylane]"` for `lightning.qubit` (also in `[all]`); add `marqov[lightning-kokkos]` for `lightning.kokkos` (Linux x86_64/aarch64, macOS arm64). `lightning.gpu`/`lightning.tensor` are not run. See [Lightning guide](docs/lightning.md). |
 | CESGA CUNQA (distributed-QC emulator, Slurm-based) | Available — not on PyPI at all (no wheel; build from source, see `CESGA-Quantum-Spain/cunqa`) and not a `marqov[...]` extra: CUNQA's exact `qiskit==1.2.4` pin would downgrade the whole project's lockfile if included in `[project.optional-dependencies]`, same class of problem `qilisdk` had. Install `qiskit==1.2.4` separately in the environment where CUNQA is built. |
 
 ---
@@ -178,6 +182,7 @@ circuit.to_qiskit()   # qiskit.QuantumCircuit
 circuit.to_braket()   # braket.circuits.Circuit (requires marqov[braket])
 circuit.to_cirq()     # cirq.Circuit
 circuit.to_pyquil()   # pyquil.Program  (requires pip install marqov[pyquil])
+circuit.to_pennylane()  # pennylane QuantumScript, gates only (requires marqov[pennylane])
 ```
 
 Import from other formats:

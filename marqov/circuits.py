@@ -12,7 +12,7 @@ Example:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import quantumflow as qf
 
@@ -20,6 +20,7 @@ from marqov._optional import require_braket
 
 if TYPE_CHECKING:
     from braket.circuits import Circuit as BraketCircuit
+    from pennylane.tape import QuantumScript  # type: ignore[import-untyped]
     from pyquil import Program as PyQuilProgram
 
 
@@ -302,6 +303,86 @@ class Circuit:
         if version == 2:
             return qasm2.dumps(qiskit_circuit)
         return qasm3.dumps(qiskit_circuit)
+
+    # QuantumFlow gate name -> PennyLane operation class name. Only the
+    # canonical gate set; anything else is refused by to_pennylane().
+    _QF_TO_PENNYLANE: dict[str, str] = {
+        "H": "Hadamard",
+        "X": "PauliX",
+        "Y": "PauliY",
+        "Z": "PauliZ",
+        "S": "S",
+        "T": "T",
+        "Rx": "RX",
+        "Ry": "RY",
+        "Rz": "RZ",
+        "CNot": "CNOT",
+        "CZ": "CZ",
+        "Swap": "SWAP",
+    }
+
+    def to_pennylane(self) -> QuantumScript:
+        """Convert to a PennyLane ``QuantumScript`` of gate operations.
+
+        A direct gate-by-gate export (no OpenQASM round trip), adapted from
+        marqov-dev/marqov-sdk#38. This is the only place PennyLane export reads
+        QuantumFlow internals. The canonical gates map one-to-one onto
+        PennyLane operations with identical matrices (including phase), on
+        the same integer wires.
+
+        The script carries no measurements and no shots: a ``Circuit`` is
+        gate-only, and the executor decides what to measure (see
+        ``LightningExecutor``).
+
+        Returns:
+            ``pennylane.tape.QuantumScript`` with only ``operations`` set.
+
+        Raises:
+            ImportError: If PennyLane is not installed.
+            NotImplementedError: If the circuit contains a gate outside the
+                canonical set.
+            ValueError: If a rotation angle is unbound (symbolic) or not a
+                real number.
+        """
+        try:
+            import pennylane as qml  # type: ignore[import-untyped]
+        except ImportError:
+            raise ImportError(
+                "PennyLane is required for Circuit.to_pennylane(). "
+                "Install with: pip install marqov[pennylane]"
+            )
+
+        operations = []
+        for index, op in enumerate(self._qf._elements):
+            name = op.name
+            if name not in self._QF_TO_PENNYLANE:
+                raise NotImplementedError(
+                    f"Circuit.to_pennylane(): unsupported gate '{name}' at position "
+                    f"{index}. Supported: {', '.join(self._QF_TO_PENNYLANE)}."
+                )
+            gate = getattr(qml, self._QF_TO_PENNYLANE[name])
+            wires = [int(q) for q in op.qubits]
+            params = [self._bound_angle(p, name, index) for p in op.params]
+            operations.append(gate(*params, wires=wires))
+
+        return qml.tape.QuantumScript(operations)
+
+    @staticmethod
+    def _bound_angle(value: Any, gate: str, index: int) -> float:
+        """Return a gate angle as a float, refusing unbound or non-real values."""
+        try:
+            numeric = complex(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Circuit.to_pennylane(): gate '{gate}' at position {index} has an "
+                f"unbound parameter {value!r}. Bind every angle to a number first."
+            ) from exc
+        if numeric.imag != 0:
+            raise ValueError(
+                f"Circuit.to_pennylane(): gate '{gate}' at position {index} has a "
+                f"non-real angle {value!r}."
+            )
+        return float(numeric.real)
 
     # Simulation
 
