@@ -22,6 +22,8 @@ class SimulationConfig:
     seed: int | None = None
     noise_model: NoiseModel | None = None
     extract_state_vector: bool = False
+    # Optional vendor catalogue path for a relocated native runtime.
+    remote_backend_database_path: str | None = None
 
     @classmethod
     def from_backend(

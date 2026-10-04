@@ -311,7 +311,10 @@ class TestSimulationExecutor:
     @pytest.mark.asyncio
     async def test_execute_sets_session_params(self) -> None:
         """Execute configures session with correct backend and qubit count."""
-        config = SimulationConfig(backend_id="qpp", backend_type="statevector", seed=42)
+        config = SimulationConfig(
+            backend_id="qpp", backend_type="statevector", seed=42,
+            remote_backend_database_path="/opt/qristal/install-core/remote_backends.yaml",
+        )
 
         mock_session = MagicMock()
         mock_session.results = [[{(False,): 1000}]]
@@ -327,6 +330,7 @@ class TestSimulationExecutor:
         assert mock_session.acc == "qpp"
         assert mock_session.sn == 1000
         assert mock_session.seed == 42
+        assert mock_session.remote_backend_database_path == config.remote_backend_database_path
         mock_session.run.assert_called_once()
 
     @pytest.mark.asyncio

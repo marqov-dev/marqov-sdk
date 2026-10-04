@@ -49,3 +49,12 @@ executed image digests are recorded separately. Dependency resolution was not
 locked before this qualification build; exact installed versions are retained in
 `qristal-python312-packages.json`. Do not claim the recipe alone reproduces the
 recorded image byte-for-byte.
+
+## Relocated compiler runtime integration
+
+A packaged native runtime can keep its libraries and catalogue under immutable
+/opt/qristal, outside tenant /work scratch. SimulationConfig accepts an explicit
+remote_backend_database_path for that catalogue; omitted configuration preserves
+the vendor default. This setting does not choose a provider or change the engine.
+The runtime must separately initialize XACC's supported explicit root path before
+Qristal import. The platform packaging qualification is separate from this SDK PR.

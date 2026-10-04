@@ -94,6 +94,8 @@ def _run_simulation(
     # Current Qristal initializes on construction; older releases expose init().
     if hasattr(session, "init"):
         session.init()
+    if config.remote_backend_database_path is not None:
+        session.remote_backend_database_path = config.remote_backend_database_path
     session.acc = config.backend_id
     session.qn = config.num_qubits
     session.sn = shots
