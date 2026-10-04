@@ -9,6 +9,8 @@ release.
 
 ### Fixed
 
+- IBM execution retains each submitted job ID on result errors and timeouts, checks shot accounting and records executor provenance and reproducibility hashes. Tokens are excluded from configuration repr. SamplerV2 is qualified locally with Aer; live cloud and hosted qualification remain separate.
+
 - Quantum Brilliance simulation supports current Qristal sessions without `init()` and their flat result map, preserving legacy session support. Counts are checked against shots, and results record the actual engine and reproducibility hashes. Native QPP checks pass; full SDK and hosted qualification remain separate.
 
 ### Added
