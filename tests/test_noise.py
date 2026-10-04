@@ -279,7 +279,7 @@ class TestExecutorNoiseIntegration:
         # Use a dict to capture attribute assignments
         assigned = {}
         mock_session = MagicMock()
-        mock_session.results = [[{(False,): 1000}]]
+        mock_session.results = [[{(False,): 100}]]
 
         original_setattr = type(mock_session).__setattr__
 
@@ -312,7 +312,7 @@ class TestExecutorNoiseIntegration:
 
         assigned = {}
         mock_session = MagicMock()
-        mock_session.results = [[{(False,): 1000}]]
+        mock_session.results = [[{(False,): 100}]]
 
         original_setattr = type(mock_session).__setattr__
 
@@ -340,7 +340,7 @@ class TestExecutorNoiseIntegration:
 
         assigned = {}
         mock_session = MagicMock()
-        mock_session.results = [[{(False,): 1000}]]
+        mock_session.results = [[{(False,): 100}]]
 
         original_setattr = type(mock_session).__setattr__
 
@@ -375,7 +375,7 @@ class TestExecutorStateVector:
 
         assigned = {}
         mock_session = MagicMock()
-        mock_session.results = [[{(False,): 1000}]]
+        mock_session.results = [[{(False,): 100}]]
         mock_session.get_state_vec_raw = [complex(1, 0), complex(0, 0)]
 
         original_setattr = type(mock_session).__setattr__
@@ -442,7 +442,7 @@ class TestExecutorStateVector:
         config = SimulationConfig(backend_id="qpp", backend_type="statevector")
 
         mock_session = MagicMock()
-        mock_session.results = [[{(False,): 1000}]]
+        mock_session.results = [[{(False,): 100}]]
 
         mock_qristal = MagicMock()
         mock_qristal.session.return_value = mock_session

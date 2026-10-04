@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
+import json
+from collections.abc import Mapping
 import time
 from typing import Any
 
@@ -42,6 +45,10 @@ class SimulationExecutor(BaseExecutor):
         shots: int = 1000,
         **kwargs: Any,
     ) -> ExecutionResult:
+        if kwargs:
+            raise TypeError("Simulation execution options belong in SimulationConfig")
+        if type(shots) is not int or shots <= 0:
+            raise ValueError("shots must be a positive integer")
         circuit = self._validate_circuit(circuit)
         qasm_str = circuit.to_openqasm()
         qasm_str = ensure_measurements(qasm_str)
@@ -84,7 +91,9 @@ def _run_simulation(
     """Execute simulation in a thread (blocking C++ call)."""
     qristal_core = _import_qristal_core()
     session = qristal_core.session()
-    session.init()
+    # Current Qristal initializes on construction; older releases expose init().
+    if hasattr(session, "init"):
+        session.init()
     session.acc = config.backend_id
     session.qn = config.num_qubits
     session.sn = shots
@@ -150,16 +159,38 @@ def _run_simulation(
                 f"State vector extraction not supported for backend '{config.backend_id}'. "
                 f"Supported: qpp."
             )
+        if not hasattr(session, "get_state_vec") or not hasattr(session, "get_state_vec_raw"):
+            raise NotImplementedError("This Qristal build does not expose state-vector extraction")
         session.get_state_vec = True
 
     start = time.monotonic()
     session.run()
     elapsed_ms = (time.monotonic() - start) * 1000
 
-    counts = convert_counts(session.results[0][0])
+    # Current C++ API returns a single MapVectorBoolInt; older APIs nest the map.
+    results = session.results
+    direct_map = isinstance(results, Mapping) or type(results).__name__ == "MapVectorBoolInt"
+    counts = convert_counts(results if direct_map else results[0][0])
+    if any(len(bits) != config.num_qubits or set(bits) - {"0", "1"}
+           or type(count) is not int or count < 0 for bits, count in counts.items()) or sum(counts.values()) != shots:
+        raise RuntimeError("Qristal returned invalid counts or shot accounting")
 
     metadata = {
-        "simulator": config.backend_id,
+        "vendor": "Quantum Brilliance",
+        "framework": "Qristal",
+        "engine": "aer" if config.noise_model is not None else config.backend_id,
+        "access_path": "local",
+        "compute_provider": "local",
+        "simulator": "aer" if config.noise_model is not None else config.backend_id,
+        "reproducibility": {
+            "record_version": 1,
+            "qristal_version": getattr(qristal_core, "__version__", None),
+            "seed": config.seed,
+            "shots": shots,
+            "program_sha256": hashlib.sha256(qasm_str.encode()).hexdigest(),
+            "counts_sha256": hashlib.sha256(json.dumps(counts, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+            "bit_order": "qubit_0_first",
+        },
         "num_qubits": config.num_qubits,
         "max_bond_dimension": config.max_bond_dimension,
         "svd_cutoff": config.svd_cutoff,
