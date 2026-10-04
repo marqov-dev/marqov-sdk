@@ -7,6 +7,10 @@ release.
 
 ## [Unreleased]
 
+### Added
+
+- Alice & Bob executor with real local cat-qubit models, native Qiskit initialization/delay preservation, canonical counts and reproducibility records. Explicit direct remote mode requires provider credentials; live remote and hosted execution remain unqualified.
+
 ### Changed
 
 - Qilimanjaro digital and analog results now record vendor, framework, actual
