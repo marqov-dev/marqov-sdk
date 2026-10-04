@@ -486,3 +486,127 @@ async def test_current_session_flat_map_without_init():
     assert result.metadata['vendor'] == 'Quantum Brilliance'
     assert result.metadata['engine'] == 'qpp'
     assert len(result.metadata['reproducibility']['counts_sha256']) == 64
+
+
+class TestQBRemote:
+    def config(self, **kwargs):
+        from marqov.executors.qb_remote import QBRemoteConfig
+        return QBRemoteConfig(endpoint="https://qb.example/", target="qdk-fixture", account="fixture", token="fixture-only", **kwargs)
+
+    @pytest.mark.asyncio
+    async def test_native_payload_and_retained_readback(self, monkeypatch):
+        from marqov.circuits import Circuit
+        from marqov.executors.qb_remote import QBRemoteExecutor
+        e = QBRemoteExecutor(self.config())
+        calls = []
+        def request(method, path, deadline, body=None):
+            calls.append((method, path, body))
+            if method == "POST":
+                assert body["circuit"] == ["Rx(q[0],3.1415926535897931)", "CZ(q[0],q[1])"]
+                assert body["measure"] == [[0, 0], [1, 1]]
+                return {"id": 7}
+            return {"data": [[1, 0], [1, 0]]}
+        monkeypatch.setattr(e, "_request", request)
+        result = await e.execute(Circuit().rx(3.141592653589793, 0).cz(0, 1), shots=2)
+        assert result.counts == {"10": 2}
+        assert result.metadata["access_path"] == "direct"
+        assert (await e.readback(e.last_job)).counts == result.counts
+        assert [x[0] for x in calls] == ["POST", "GET", "GET"]
+        other = QBRemoteExecutor(self.config())
+        from dataclasses import replace
+        for field in ("endpoint", "account", "target", "model"):
+            with pytest.raises(ValueError, match="mismatch"):
+                await other.readback(replace(e.last_job, **{field: "different"}))
+        assert not await e.cancel("7")
+        with pytest.raises(NotImplementedError):
+            await e.get_status()
+
+    @pytest.mark.asyncio
+    async def test_uncertain_post_never_replays(self, monkeypatch):
+        from marqov.circuits import Circuit
+        from marqov.executors.qb_remote import QBRemoteExecutor, QBRemoteExecutionError
+        e = QBRemoteExecutor(self.config())
+        calls = []
+        def fail(*args):
+            calls.append(args)
+            raise TimeoutError("secret must not escape")
+        monkeypatch.setattr(e, "_request", fail)
+        with pytest.raises(QBRemoteExecutionError) as error:
+            await e.execute(Circuit().rx(1, 0), shots=1)
+        assert len(calls) == 1 and error.value.acceptance_unknown and e.last_job is None
+        assert "secret" not in str(error.value)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("data", [[], [[True]], [[2]], [[0, 1]], "bad"])
+    async def test_invalid_results_keep_known_identity(self, monkeypatch, data):
+        from marqov.circuits import Circuit
+        from marqov.executors.qb_remote import QBRemoteExecutor, QBRemoteExecutionError
+        e = QBRemoteExecutor(self.config())
+        monkeypatch.setattr(e, "_request", lambda method, *args: {"id": 7} if method == "POST" else {"data": data})
+        with pytest.raises(QBRemoteExecutionError) as error:
+            await e.execute(Circuit().rx(1, 0), shots=1)
+        assert error.value.job_id == 7 and not error.value.acceptance_unknown
+        assert e.last_job.job_id == 7
+
+    @pytest.mark.asyncio
+    async def test_unsupported_workload_no_contact(self, monkeypatch):
+        from marqov.circuits import Circuit
+        from marqov.executors.qb_remote import QBRemoteExecutor
+        e = QBRemoteExecutor(self.config())
+        monkeypatch.setattr(e, "_request", lambda *args: pytest.fail("contact"))
+        with pytest.raises(ValueError, match="native"):
+            await e.execute(Circuit().h(0))
+
+    def test_explicit_factory_preserves_local(self):
+        from marqov.executors.qb_remote import QBRemoteExecutor
+        config = {"provider": "Quantum Brilliance", "access_path": "remote", "endpoint": "https://qb.example", "target": "fixture", "account": "fixture", "token": "fixture"}
+        assert isinstance(ExecutorFactory.create_executor("qb-fixture", config), QBRemoteExecutor)
+        assert isinstance(ExecutorFactory.create_executor("qb-sim-statevector", {"provider": "Quantum Brilliance"}), SimulationExecutor)
+        with pytest.raises(ValueError):
+            ExecutorFactory.create_executor("qb-fixture", {**config, "access_path": "unknown"})
+
+    def test_http_no_retry_redirect_and_verified_tls(self, monkeypatch):
+        from marqov.executors.qb_remote import QBRemoteExecutor
+        import time
+        calls = []
+        class Response:
+            status_code = 401
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+        class Session:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def mount(self, scheme, adapter): assert adapter.max_retries.total == 0
+            def request(self, *args, **kwargs):
+                calls.append(kwargs)
+                assert self.trust_env is False
+                return Response()
+        monkeypatch.setattr("marqov.executors.qb_remote.requests.Session", Session)
+        with pytest.raises(RuntimeError):
+            QBRemoteExecutor(self.config())._request("POST", "api/v1/circuits", time.monotonic() + 10, {})
+        assert len(calls) == 1 and calls[0]["verify"] is True and calls[0]["allow_redirects"] is False
+
+    @pytest.mark.parametrize("document", ['{"id":1,"id":2}', '{"id":NaN}', '{"id":1e309}', '{"id":1,"nested":{"x":1,"x":2}}'])
+    def test_ambiguous_json_refused(self, document):
+        from marqov.executors.qb_remote import _json_object
+        with pytest.raises(ValueError):
+            _json_object(document)
+
+    def test_blocking_headers_cannot_exceed_caller_deadline(self, monkeypatch):
+        import threading
+        import time
+        from marqov.executors.qb_remote import QBRemoteExecutor
+        e = QBRemoteExecutor(self.config())
+        release = threading.Event()
+        monkeypatch.setattr(e, "_request_unbounded", lambda *args: release.wait(1))
+        start = time.monotonic()
+        try:
+            with pytest.raises(RuntimeError, match="deadline"):
+                e._request("POST", "api/v1/circuits", start + 0.02, {})
+            assert time.monotonic() - start < 0.5
+        finally:
+            release.set()
+
+    def test_local_hardware_catalogue_path_cannot_bypass_remote(self):
+        with pytest.raises(ValueError, match="remote"):
+            SimulationExecutor(SimulationConfig(backend_id="example_hardware_device", backend_type="statevector", remote_backend_database_path="fixture.yaml"))

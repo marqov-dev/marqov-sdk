@@ -28,6 +28,7 @@ from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig, normalize_ibm_c
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
 from marqov.executors.lightning import LightningExecutor, LightningExecutorConfig
 from marqov.executors.local import LocalExecutor
+from marqov.executors.qb_remote import QBRemoteConfig, QBRemoteExecutor
 from marqov.executors.qilisdk import QiliSDKExecutor, QiliSDKExecutorConfig
 from marqov.executors.quantinuum import QuantinuumExecutor, QuantinuumExecutorConfig
 from marqov.executors.rigetti import RigettiExecutor, RigettiExecutorConfig
@@ -176,6 +177,17 @@ class ExecutorFactory:
 
         # C++ simulation backends (qpp, tnqvm, cudaq, aer)
         if provider == "Quantum Brilliance":
+            if backend_config.get("access_path") == "remote":
+                keys = ("endpoint", "target", "account", "token")
+                if any(not backend_config.get(k) for k in keys):
+                    raise ValueError("Explicit QB endpoint/target/account/token required")
+                options = {k: backend_config[k] for k in keys}
+                for k in ("model", "timeout_seconds", "request_timeout_seconds", "poll_interval_seconds"):
+                    if k in backend_config:
+                        options[k] = backend_config[k]
+                return QBRemoteExecutor(QBRemoteConfig(**options))
+            if backend_config.get("access_path") not in (None, "local"):
+                raise ValueError("Unknown Quantum Brilliance access_path")
             return cls._create_simulation_executor(backend_slug, backend_config)
 
         raise ValueError(

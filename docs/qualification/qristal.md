@@ -68,3 +68,39 @@ qristal-relocated-sdk.json binds that evidence. This is an unpublished source
 package qualification, not hosted execution or release publication. The saved
 Dockerfile consumes a local staged sdk-source context and the internal native
 full candidate; it is not a standalone deployed-image reproduction claim.
+
+## Explicit direct QB circuit API
+
+`QBRemoteExecutor(QBRemoteConfig(endpoint=..., target=..., account=..., token=...))`
+uses the pinned Qristal `a5c3e5fa544c07d538974d3a289b19652d483848` QDK circuit
+wire schema. Factory selection requires `provider="Quantum Brilliance"` and
+`access_path="remote"`; omitted/local access retains the existing QPP route.
+This adapter never calls the native hardware session, whose HTTP wrapper retries
+uncertain POSTs and disables certificate verification.
+
+The supported workload is deliberately narrow: QB-QDK2-CZ native Rx/Ry/CZ,
+finite numeric angles, zero initial state, ascending measurement slots, exact
+sampling (1–100000 shots, 1–28 qubits, at most10000 gates). Unknown gates/models,
+noise, seeds and extra options fail before contact. These are adapter bounds,
+not assertions of a particular device's capacity. Endpoint/target/model/account
+must be connected-qualified by the caller. The circuit response API does not
+independently echo account, target or submitted payload; retained bindings and
+payload hashes are local request provenance, not a provider attestation.
+
+One authenticated POST uses verified HTTPS, no redirects/retries/ambient proxy
+or credentials. The caller supplies an already valid reservation token;
+this adapter does not reserve hardware or send reservation writes. Any uncertain
+POST raises acceptance_unknown and must not be resubmitted automatically.
+Known IDs remain in immutable `last_job` for GET-only `readback(job)` across
+restarts. Null data/HTTP425 means pending; exact binary per-shot rows are required
+for success. Errors/timeouts retain the known ID. No cancellation/status endpoint
+or provider idempotency guarantee is claimed: cancel returnsFalse and device
+status raisesNotImplementedError. Poll/request/byte limits are finite; DNS and
+OS blocking may leave a daemon one-send request in flight after the caller
+deadline; the watchdog bounds caller wait without claiming request cancellation.
+An uncertain write must still be reconciled and never replayed. Local simulation
+now refuses hardware/unknown catalogue IDs before session creation, so arbitrary
+backend strings cannot bypass the explicit remote transport.
+
+This is a direct SDK adapter with local fixture evidence only. No QB hardware
+job, credential custody, managed funding or connected qualification is claimed.

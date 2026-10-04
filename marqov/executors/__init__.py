@@ -35,6 +35,12 @@ from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
 from marqov.executors.lightning import LightningExecutor, LightningExecutorConfig
 from marqov.executors.local import LocalExecutor
+from marqov.executors.qb_remote import (
+    QBRemoteConfig,
+    QBRemoteExecutionError,
+    QBRemoteExecutor,
+    QBRemoteJob,
+)
 from marqov.executors.qilisdk import QiliSDKExecutor, QiliSDKExecutorConfig
 from marqov.executors.quantinuum import QuantinuumExecutor, QuantinuumExecutorConfig
 from marqov.executors.rigetti import RigettiExecutor, RigettiExecutorConfig
@@ -63,6 +69,10 @@ __all__ = [
     "LightningExecutor",
     "LightningExecutorConfig",
     "LocalExecutor",
+    "QBRemoteConfig",
+    "QBRemoteExecutor",
+    "QBRemoteJob",
+    "QBRemoteExecutionError",
     "QiliSDKExecutor",
     "QiliSDKExecutorConfig",
     "QuantinuumExecutor",
