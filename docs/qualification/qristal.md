@@ -58,3 +58,13 @@ remote_backend_database_path for that catalogue; omitted configuration preserves
 the vendor default. This setting does not choose a provider or change the engine.
 The runtime must separately initialize XACC's supported explicit root path before
 Qristal import. The platform packaging qualification is separate from this SDK PR.
+
+The full current SDK source at 2d5ca74 was subsequently installed in a separate
+qualification image on the partner compiler's Python 3.12.14 environment. All
+existing dependencies remained installed and `uv pip check` passed. The explicit
+catalogue-path setting returned 10:32, 01:32 and Bell00:16/11:16 through the
+actual SimulationExecutor, with engine=qpp and shot/provenance records.
+qristal-relocated-sdk.json binds that evidence. This is an unpublished source
+package qualification, not hosted execution or release publication. The saved
+Dockerfile consumes a local staged sdk-source context and the internal native
+full candidate; it is not a standalone deployed-image reproduction claim.
