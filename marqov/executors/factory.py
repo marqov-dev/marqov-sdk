@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from marqov.executors.alice_bob import AliceBobExecutor, AliceBobExecutorConfig
 from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorConfig
 from marqov.executors.base import BaseExecutor
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
@@ -112,6 +113,17 @@ class ExecutorFactory:
         # Handle local simulator
         if backend_slug == "local" or provider == "Local":
             return LocalExecutor()
+
+        if provider == "Alice & Bob":
+            return AliceBobExecutor(AliceBobExecutorConfig(
+                backend_name=backend_config.get("backend_name", "EMU:40Q:LOGICAL_NOISELESS"),
+                mode=backend_config.get("mode", "local"),
+                api_key=backend_config.get("api_key"),
+                backend_options=backend_config.get("backend_options", {}),
+                compute_provider=backend_config.get("compute_provider"),
+                optimization_level=backend_config.get("optimization_level", 0),
+                timeout_seconds=backend_config.get("timeout_seconds"),
+            ))
 
         # Qilimanjaro qilisdk (local simulator only — QiliSim or QutipBackend)
         if provider == "Qilimanjaro":
