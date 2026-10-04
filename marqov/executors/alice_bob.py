@@ -71,7 +71,8 @@ class AliceBobExecutor(BaseExecutor):
             from qiskit_alice_bob_provider import AliceBobLocalProvider, AliceBobRemoteProvider
         except ImportError as exc:
             raise ImportError(
-                "Install the isolated Alice & Bob environment: pip install 'marqov[alice-bob]'"
+                "Install in an isolated environment: pip install "
+                "qiskit-alice-bob-provider==1.2.0 'qiskit>=1.3,<2' qiskit-aer==0.17.2"
             ) from exc
         if self.config.mode == "local":
             self._provider = AliceBobLocalProvider()

@@ -1,6 +1,16 @@
 # Alice & Bob executor
 
-Install in a dedicated environment with `pip install 'marqov[alice-bob]'`.
+Install Marqov in a dedicated environment, then install the qualified vendor
+packages explicitly:
+
+```bash
+pip install marqov
+pip install qiskit-alice-bob-provider==1.2.0 'qiskit>=1.3,<2' qiskit-aer==0.17.2
+```
+
+As with other incompatible vendor dependencies, these are kept outside the
+SDK's union of optional extras. This preserves the current IBM/Qiskit2
+installation and follows the dependency guidance in CONTRIBUTING.md.
 The qualified vendor version uses Qiskit 1.x; keep this environment separate
 from IBM Runtime installations that require Qiskit 2.x.
 
