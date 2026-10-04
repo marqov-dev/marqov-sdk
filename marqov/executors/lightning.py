@@ -1,4 +1,4 @@
-"""PennyLane Lightning executor (CPU engines), with a per-run reproducibility record.
+"""PennyLane Lightning executor (seeded engines), with a per-run reproducibility record.
 
 Runs Marqov circuits locally on Xanadu's PennyLane Lightning simulators:
 
@@ -6,12 +6,11 @@ Runs Marqov circuits locally on Xanadu's PennyLane Lightning simulators:
 - ``lightning.kokkos`` (``pip install "marqov[lightning-kokkos]"``; wheels for
   Linux x86_64/aarch64 and macOS arm64).
 
-``lightning.gpu`` and ``lightning.tensor`` are not run by this version. Asking
-for them constructs the device to find out whether this environment has it: if
-construction fails, the error says so (``LightningDeviceUnavailableError``,
-carrying PennyLane's own message); if it succeeds, the run is refused as not
-validated (``NotImplementedError``). Availability is never read from a list of
-names, and another device or simulator is never substituted.
+``lightning.gpu`` uses its actual device when installed and passes real
+bit-order, distribution and seed-replay probes before user circuits. Missing
+GPU libraries/hardware fail explicitly; no CPU device is substituted.
+``lightning.tensor`` remains refused: pinned 0.45 lacks the constructor seed
+contract required by this executor's reproducibility record.
 
 Scope: bound gate circuits (the canonical gate set), finite shots,
 computational-basis samples of every qubit the circuit uses. Count keys follow
@@ -62,8 +61,9 @@ from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 if TYPE_CHECKING:
     from marqov.circuits import Circuit
 
-# Devices this executor runs. Everything else is probed and then refused.
+# Supported seeded devices; tensor lacks this constructor/RNG contract.
 _CPU_DEVICES = frozenset({"lightning.qubit", "lightning.kokkos"})
+_SEEDED_DEVICES = _CPU_DEVICES | {"lightning.gpu"}
 
 # Device -> (installed distribution, compiled module inside pennylane_lightning).
 _PLUGINS: dict[str, tuple[str, str]] = {
@@ -134,8 +134,8 @@ class LightningExecutorConfig:
 
     Attributes:
         device: PennyLane device name. ``"lightning.qubit"`` or
-            ``"lightning.kokkos"`` run; ``"lightning.gpu"`` and
-            ``"lightning.tensor"`` are probed and refused (see module docs).
+            ``"lightning.kokkos"`` and ``"lightning.gpu"`` run;
+            ``"lightning.tensor"`` requires a separate unseeded contract.
         seed: Default sampling seed for calls that pass none. None means each
             such call gets a generated seed, recorded in the result.
         precision: ``"double"`` (complex128, default) or ``"single"`` (complex64).
@@ -281,6 +281,11 @@ def _backend_info(device: str) -> dict[str, Any]:
             }
         except Exception:
             pass
+    if device == "lightning.gpu":
+        try:
+            info["lightning_gpu"] = dict(ops.backend_info())
+        except Exception:
+            pass
     for name in ("compile_info", "runtime_info"):
         try:
             info[name] = {str(k): v for k, v in dict(getattr(ops, name)()).items()}
@@ -298,7 +303,7 @@ def _counts_from_samples(samples: Any) -> dict[str, int]:
 
 
 class LightningExecutor(BaseExecutor):
-    """Execute circuits on PennyLane Lightning CPU simulators.
+    """Execute circuits on the requested seeded PennyLane Lightning device.
 
     Every result carries ``metadata["reproducibility"]``, a JSON-serialisable
     record of what ran: circuit/input/output hashes, wire order, measurement,
@@ -368,7 +373,7 @@ class LightningExecutor(BaseExecutor):
             ValueError: For non-positive shots, out-of-range seeds, an empty
                 circuit or an unbound angle.
             NotImplementedError: For gates outside the canonical set, or a
-                GPU/tensor engine that is installed but not validated here.
+                tensor engine whose seed contract is unsupported.
             LightningDeviceUnavailableError: If the device cannot be
                 constructed here, or failed its qualification probe.
         """
@@ -403,6 +408,10 @@ class LightningExecutor(BaseExecutor):
         import numpy as np
 
         name = self.config.device
+        if name == "lightning.tensor":
+            raise NotImplementedError(
+                "lightning.tensor lacks the seeded constructor contract; not running it"
+            )
         dtype = np.complex128 if self.config.precision == "double" else np.complex64
         try:
             dev = qml.device(name, wires=wires, seed=seed, c_dtype=dtype)
@@ -410,10 +419,10 @@ class LightningExecutor(BaseExecutor):
             raise LightningDeviceUnavailableError(
                 f"{name} is unavailable in this environment: {type(exc).__name__}: {exc}"
             ) from exc
-        if name not in _CPU_DEVICES:
+        if name not in _SEEDED_DEVICES:
             raise NotImplementedError(
-                f"{name} is installed here, but LightningExecutor has only been "
-                f"validated on {', '.join(sorted(_CPU_DEVICES))}. Not running it."
+                f"{name} is outside the supported seeded devices "
+                f"{', '.join(sorted(_SEEDED_DEVICES))}. Not running it."
             )
         if getattr(dev, "name", None) != name:
             raise RuntimeError(
@@ -461,6 +470,11 @@ class LightningExecutor(BaseExecutor):
             checks["bell_distribution"] = set(counts) <= {"00", "11"} and all(
                 abs(counts.get(k, 0) - shots / 2) <= tolerance for k in ("00", "11")
             )
+            if name == "lightning.gpu":
+                _, _, replay, _ = self._sample(
+                    qml, [qml.Hadamard(0), qml.CNOT(wires=[0, 1])], [0, 1], shots, seed=0
+                )
+                checks["fresh_device_seed_replay"] = (samples == replay).all().item()
             result = {
                 "passed": all(checks.values()),
                 "checks": checks,
@@ -563,6 +577,6 @@ class LightningExecutor(BaseExecutor):
     async def get_status(self) -> DeviceStatus:
         """Online if the configured device can be constructed here, else offline."""
         probe = await asyncio.to_thread(probe_lightning_device, self.config.device)
-        if probe.available and self.config.device in _CPU_DEVICES:
+        if probe.available and self.config.device in _SEEDED_DEVICES:
             return DeviceStatus.always_online()
         return DeviceStatus(status="offline", queue_depth=None, queue_time_seconds=None)

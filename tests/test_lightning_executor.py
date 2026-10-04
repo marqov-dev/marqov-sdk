@@ -286,9 +286,13 @@ class TestDeviceAvailability:
             pytest.skip(f"{device} is installed here")
         assert probe.reason  # the real error from constructing the device
 
-        with pytest.raises(LightningDeviceUnavailableError, match=device) as exc_info:
-            await _executor(device=device).execute(bell_state(), shots=10)
-        assert probe.reason in str(exc_info.value)
+        if device == "lightning.tensor":
+            with pytest.raises(NotImplementedError, match="seeded constructor"):
+                await _executor(device=device).execute(bell_state(), shots=10)
+        else:
+            with pytest.raises(LightningDeviceUnavailableError, match=device) as exc_info:
+                await _executor(device=device).execute(bell_state(), shots=10)
+            assert probe.reason in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_availability_is_an_environment_check_not_a_catalogue(
@@ -306,8 +310,8 @@ class TestDeviceAvailability:
             await _executor().execute(bell_state(), shots=10)
 
     @pytest.mark.asyncio
-    async def test_installed_gpu_engine_is_not_run_unvalidated(self, monkeypatch) -> None:
-        """An installed GPU engine is refused as unvalidated, never substituted."""
+    async def test_gpu_cpu_substitution_is_refused(self, monkeypatch) -> None:
+        """A CPU device cannot satisfy a requested GPU execution."""
         import pennylane as qml
 
         real_device = qml.device
@@ -318,7 +322,7 @@ class TestDeviceAvailability:
             return real_device(name, *args, **kwargs)
 
         monkeypatch.setattr(qml, "device", fake_device)
-        with pytest.raises(NotImplementedError, match="lightning.gpu"):
+        with pytest.raises(RuntimeError, match="lightning.qubit"):
             await _executor(device="lightning.gpu").execute(bell_state(), shots=10)
 
     @pytest.mark.asyncio
@@ -404,3 +408,42 @@ class TestFactory:
 
     def test_provider_is_registered(self) -> None:
         assert ExecutorFactory.is_provider_supported("PennyLane Lightning")
+
+
+class TestGPUQualificationGate:
+    @pytest.mark.parametrize("replay_matches", [True, False])
+    def test_gpu_requires_bit_order_distribution_and_seed_replay(self, monkeypatch, replay_matches):
+        import numpy as np
+        import pennylane as qml
+        executor = _executor(device="lightning.gpu")
+        monkeypatch.setattr(LightningExecutor, "_qualified", {})
+        calls = []
+        def sample(qml, operations, wires, shots, seed):
+            calls.append((shots, seed))
+            if shots == 64:
+                samples = np.tile([1, 0], (64, 1))
+            else:
+                samples = np.concatenate([np.zeros((2000, 2)), np.ones((2000, 2))])
+                if len(calls) == 3 and not replay_matches:
+                    samples = samples[::-1]
+            return None, None, samples, 0
+        monkeypatch.setattr(executor, "_sample", sample)
+        result = executor._ensure_qualified(qml)
+        assert result["passed"] is replay_matches
+        assert result["checks"]["fresh_device_seed_replay"] is replay_matches
+        assert calls == [(64, 0), (4000, 0), (4000, 0)]
+
+    def test_gpu_constructor_keeps_device_seed_and_precision(self):
+        from types import SimpleNamespace
+
+        import numpy as np
+        calls = []
+        def device(name, **kwargs):
+            calls.append((name, kwargs))
+            return SimpleNamespace(name=name)
+        executor = _executor(device="lightning.gpu", precision="single")
+        executor._make_device(SimpleNamespace(device=device), [0, 3], 17)
+        assert calls == [("lightning.gpu", {"wires": [0, 3], "seed": 17, "c_dtype": np.complex64})]
+        with pytest.raises(NotImplementedError, match="seeded constructor"):
+            _executor(device="lightning.tensor")._make_device(SimpleNamespace(device=device), [0], 0)
+        assert len(calls) == 1

@@ -511,8 +511,8 @@ class ExecutorFactory:
 
         The device comes from ``device`` in the config, else from the slug
         (``lightning-qubit`` / ``lightning-kokkos``; ``lightning-gpu`` and
-        ``lightning-tensor`` resolve but are refused at run time unless
-        validated). Optional keys: ``seed``, ``precision``, ``compute_provider``.
+        ``lightning-tensor`` resolve; GPU requires its real qualification
+        gate and tensor remains refused for its incompatible seed contract). Optional keys: ``seed``, ``precision``, ``compute_provider``.
 
         Raises:
             ValueError: If neither ``device`` nor a known slug names the device.
