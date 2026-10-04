@@ -55,4 +55,5 @@ class SimulationConfig:
             seed=backend_config.get("seed"),
             noise_model=noise_model,
             extract_state_vector=extract_state_vector,
+            remote_backend_database_path=backend_config.get("remote_backend_database_path"),
         )

@@ -167,14 +167,19 @@ class TestSimulationConfig:
         assert config.svd_cutoff == 1e-6
 
     def test_from_backend_with_seed(self) -> None:
-        """Passes through seed for reproducibility."""
+        """Preserves explicit seed and relocated native catalogue configuration."""
         backend = {
             "slug": "qb-sim-statevector",
             "provider_target_id": "qpp",
             "seed": 42,
+            "remote_backend_database_path": "/opt/qristal/install-core/remote_backends.yaml",
         }
         config = SimulationConfig.from_backend(backend)
         assert config.seed == 42
+        assert config.remote_backend_database_path == backend["remote_backend_database_path"]
+        executor = ExecutorFactory.create_executor(
+            "qb-sim-statevector", {"provider": "Quantum Brilliance", **backend})
+        assert executor.config.remote_backend_database_path == backend["remote_backend_database_path"]
 
     def test_from_backend_unknown_slug_defaults(self) -> None:
         """Unknown slug defaults to statevector type."""
