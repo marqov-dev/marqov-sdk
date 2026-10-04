@@ -167,14 +167,19 @@ class TestSimulationConfig:
         assert config.svd_cutoff == 1e-6
 
     def test_from_backend_with_seed(self) -> None:
-        """Passes through seed for reproducibility."""
+        """Preserves explicit seed and relocated native catalogue configuration."""
         backend = {
             "slug": "qb-sim-statevector",
             "provider_target_id": "qpp",
             "seed": 42,
+            "remote_backend_database_path": "/opt/qristal/install-core/remote_backends.yaml",
         }
         config = SimulationConfig.from_backend(backend)
         assert config.seed == 42
+        assert config.remote_backend_database_path == backend["remote_backend_database_path"]
+        executor = ExecutorFactory.create_executor(
+            "qb-sim-statevector", {"provider": "Quantum Brilliance", **backend})
+        assert executor.config.remote_backend_database_path == backend["remote_backend_database_path"]
 
     def test_from_backend_unknown_slug_defaults(self) -> None:
         """Unknown slug defaults to statevector type."""
@@ -311,7 +316,10 @@ class TestSimulationExecutor:
     @pytest.mark.asyncio
     async def test_execute_sets_session_params(self) -> None:
         """Execute configures session with correct backend and qubit count."""
-        config = SimulationConfig(backend_id="qpp", backend_type="statevector", seed=42)
+        config = SimulationConfig(
+            backend_id="qpp", backend_type="statevector", seed=42,
+            remote_backend_database_path="/opt/qristal/install-core/remote_backends.yaml",
+        )
 
         mock_session = MagicMock()
         mock_session.results = [[{(False,): 1000}]]
@@ -327,6 +335,7 @@ class TestSimulationExecutor:
         assert mock_session.acc == "qpp"
         assert mock_session.sn == 1000
         assert mock_session.seed == 42
+        assert mock_session.remote_backend_database_path == config.remote_backend_database_path
         mock_session.run.assert_called_once()
 
     @pytest.mark.asyncio
@@ -353,7 +362,7 @@ class TestSimulationExecutor:
         )
 
         mock_session = MagicMock()
-        mock_session.results = [[{(False,): 1000}]]
+        mock_session.results = [[{(False,): 100}]]
         mock_qristal = MagicMock()
         mock_qristal.session.return_value = mock_session
 
@@ -375,7 +384,7 @@ class TestSimulationExecutor:
         )
 
         mock_session = MagicMock()
-        mock_session.results = [[{(False,): 1000}]]
+        mock_session.results = [[{(False,): 100}]]
         mock_qristal = MagicMock()
         mock_qristal.session.return_value = mock_session
 
@@ -413,7 +422,7 @@ class TestSimulationExecutor:
         config = SimulationConfig(backend_id="qpp", backend_type="statevector")
 
         mock_session = MagicMock()
-        mock_session.results = [[{(False,): 1000}]]
+        mock_session.results = [[{(False,): 100}]]
         mock_qristal = MagicMock()
         mock_qristal.session.return_value = mock_session
 
@@ -457,3 +466,23 @@ class TestFactoryIntegration:
     def test_simulation_in_supported_providers(self) -> None:
         """Quantum Brilliance listed as a supported provider."""
         assert "Quantum Brilliance" in ExecutorFactory.get_supported_providers()
+
+@pytest.mark.asyncio
+async def test_current_session_flat_map_without_init():
+    """Current Qristal constructs an initialized session and returns a flat map."""
+    from types import SimpleNamespace
+
+    class Session:
+        results = {(True, False): 32}
+        def run(self):
+            pass
+
+    core = SimpleNamespace(session=Session)
+    with patch.dict('sys.modules', {'qristal': MagicMock(), 'qristal.core': core}):
+        result = await SimulationExecutor(SimulationConfig(
+            backend_id='qpp', backend_type='statevector', seed=7,
+        )).execute(Circuit().x(0).cz(0, 1), shots=32)
+    assert result.counts == {'10': 32}
+    assert result.metadata['vendor'] == 'Quantum Brilliance'
+    assert result.metadata['engine'] == 'qpp'
+    assert len(result.metadata['reproducibility']['counts_sha256']) == 64

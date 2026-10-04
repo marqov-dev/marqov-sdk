@@ -1,0 +1,90 @@
+{
+  "qualification": "full current installed SDK with native QPP on compiler Python 3.12",
+  "sdk_version": "0.8.1",
+  "results": [
+    {
+      "counts": {
+        "10": 32
+      },
+      "metadata": {
+        "vendor": "Quantum Brilliance",
+        "framework": "Qristal",
+        "engine": "qpp",
+        "access_path": "local",
+        "compute_provider": "local",
+        "simulator": "qpp",
+        "reproducibility": {
+          "record_version": 1,
+          "qristal_version": null,
+          "seed": 7,
+          "shots": 32,
+          "program_sha256": "875254df441eac73e5ceadad01c5534e079c112b908e89f30c76272614c244c3",
+          "counts_sha256": "8dc9d9cbffc38ce6ac2b9114c6f1141b1418e7cb3d7307d5afc1b98944620b37",
+          "bit_order": "qubit_0_first"
+        },
+        "num_qubits": 2,
+        "max_bond_dimension": null,
+        "svd_cutoff": null
+      }
+    },
+    {
+      "counts": {
+        "01": 32
+      },
+      "metadata": {
+        "vendor": "Quantum Brilliance",
+        "framework": "Qristal",
+        "engine": "qpp",
+        "access_path": "local",
+        "compute_provider": "local",
+        "simulator": "qpp",
+        "reproducibility": {
+          "record_version": 1,
+          "qristal_version": null,
+          "seed": 7,
+          "shots": 32,
+          "program_sha256": "1a54786069fee273a3647fcce6ddc72fded65a2287f3032eea5a6c11078b72b6",
+          "counts_sha256": "730ff274c8fc790bfa1847f0afedc96bc06fb75ecf12850c0567b968d36c041f",
+          "bit_order": "qubit_0_first"
+        },
+        "num_qubits": 2,
+        "max_bond_dimension": null,
+        "svd_cutoff": null
+      }
+    },
+    {
+      "counts": {
+        "00": 16,
+        "11": 16
+      },
+      "metadata": {
+        "vendor": "Quantum Brilliance",
+        "framework": "Qristal",
+        "engine": "qpp",
+        "access_path": "local",
+        "compute_provider": "local",
+        "simulator": "qpp",
+        "reproducibility": {
+          "record_version": 1,
+          "qristal_version": null,
+          "seed": 7,
+          "shots": 32,
+          "program_sha256": "8e4e45acd76f0cc4b96a15df6b7ba61ca4e7b90382db65fe2000b279c85a19a3",
+          "counts_sha256": "c1a2b79a0f5e0bfe35df3782141a0133bde520e9b20ab28eb105b90301286749",
+          "bit_order": "qubit_0_first"
+        },
+        "num_qubits": 2,
+        "max_bond_dimension": null,
+        "svd_cutoff": null
+      }
+    }
+  ],
+  "passed": 3,
+  "hosted": false,
+  "sdk_source_commit": "2d5ca747247b39563aade70c0062d0ab1da63bf4",
+  "image_identity": "sha256:4d1ef798dcb81a854ebf73829a8f223a793dac696bc05550baf7a4e0c92722c9",
+  "dependency_check": "uv pip check passed; existing dependency versions retained",
+  "runtime_catalogue": "/opt/qristal/install-core/remote_backends.yaml",
+  "deployed": false,
+  "qualification_image_only": true
+}

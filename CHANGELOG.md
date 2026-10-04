@@ -7,6 +7,10 @@ release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Quantum Brilliance simulation supports current Qristal sessions without `init()` and their flat result map, preserving legacy session support. Counts are checked against shots, and results record the actual engine and reproducibility hashes. Native QPP checks pass; full SDK and hosted qualification remain separate.
+
 ### Added
 
 - Alice & Bob executor with real local cat-qubit models, native Qiskit initialization/delay preservation, canonical counts and reproducibility records. Explicit direct remote mode requires provider credentials; live remote and hosted execution remain unqualified.
