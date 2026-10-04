@@ -26,7 +26,10 @@ class TestQiliSDKExecutorAnalog:
         assert isinstance(result, ExecutionResult)
         assert result.backend == "qilisdk-qilisim"
         assert result.shots == 100
-        assert result.metadata == {"simulator": "qilisim", "mode": "analog"}
+        assert result.metadata["simulator"] == "qilisim"
+        assert result.metadata["mode"] == "analog"
+        assert result.metadata["vendor"] == "Qilimanjaro"
+        assert result.metadata["reproducibility"]["shots"] == 100
 
     @pytest.mark.asyncio
     async def test_execute_analog_constant_schedule_is_deterministic(self) -> None:

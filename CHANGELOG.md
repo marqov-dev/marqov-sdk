@@ -5,6 +5,22 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
+## [Unreleased]
+
+### Fixed
+
+- Quantum Brilliance simulation supports current Qristal sessions without `init()` and their flat result map, preserving legacy session support. Counts are checked against shots, and results record the actual engine and reproducibility hashes. Native QPP checks pass; full SDK and hosted qualification remain separate.
+
+### Added
+
+- Alice & Bob executor with real local cat-qubit models, native Qiskit initialization/delay preservation, canonical counts and reproducibility records. Explicit direct remote mode requires provider credentials; live remote and hosted execution remain unqualified.
+
+### Changed
+
+- Qilimanjaro digital and analog results now record vendor, framework, actual
+  engine, access path, compute provider and software/seed/count provenance.
+  Correct installation guidance for QiliSDK 0.3.0 and its QuTiP dependencies.
+
 ## [0.8.1] — 2026-09-26
 
 ### Fixed

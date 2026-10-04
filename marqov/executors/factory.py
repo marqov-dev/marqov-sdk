@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from marqov.executors.alice_bob import AliceBobExecutor, AliceBobExecutorConfig
 from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorConfig
 from marqov.executors.base import BaseExecutor
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
@@ -54,12 +55,10 @@ class ExecutorFactory:
           the official Docker image; see https://qristal.readthedocs.io/.
         - Local: QuantumFlow simulator (no cloud required)
         - IonQ Direct: Native IonQ REST API (no AWS/Braket intermediary)
-        - Qilimanjaro: qilisdk local simulators (QiliSim or QutipBackend, no
-          cloud required). Requires ``qilisdk`` — installed separately
-          (``pip install qilisdk``), not via a ``marqov[...]`` extra: its
-          numpy floor is incompatible with marqov's own numpy ceiling outside
-          a narrow macOS overlap window, which would make it unresolvable as
-          a formal extra in marqov's dependency lock.
+        - Qilimanjaro: qilisdk local simulators (QiliSim or QutipBackend).
+          Install qualified ``qilisdk==0.3.0`` separately; older 0.1.8–0.2.x
+          releases conflict with Marqov's numpy ceiling on Linux. QutipBackend
+          additionally needs qutip and qutip-qip.
         - PennyLane Lightning: Xanadu's Lightning CPU simulators
           (``lightning.qubit``; ``lightning.kokkos`` with the
           ``marqov[lightning-kokkos]`` extra), run locally. The provider string
@@ -114,6 +113,17 @@ class ExecutorFactory:
         # Handle local simulator
         if backend_slug == "local" or provider == "Local":
             return LocalExecutor()
+
+        if provider == "Alice & Bob":
+            return AliceBobExecutor(AliceBobExecutorConfig(
+                backend_name=backend_config.get("backend_name", "EMU:40Q:LOGICAL_NOISELESS"),
+                mode=backend_config.get("mode", "local"),
+                api_key=backend_config.get("api_key"),
+                backend_options=backend_config.get("backend_options", {}),
+                compute_provider=backend_config.get("compute_provider"),
+                optimization_level=backend_config.get("optimization_level", 0),
+                timeout_seconds=backend_config.get("timeout_seconds"),
+            ))
 
         # Qilimanjaro qilisdk (local simulator only — QiliSim or QutipBackend)
         if provider == "Qilimanjaro":
@@ -445,7 +455,7 @@ class ExecutorFactory:
 
         No field is strictly required: the simulator falls back to "qilisim"
         (qilisdk's own C++ simulator, ships in the base package) unless
-        "qutip" is requested, which needs the `qilisdk[qutip]` extra.
+        "qutip" is requested, which needs qutip and qutip-qip installed.
 
         Args:
             backend_slug: Backend slug (e.g. "qilisdk-qilisim", "qilisdk-qutip").
@@ -455,7 +465,9 @@ class ExecutorFactory:
             Configured QiliSDKExecutor instance.
         """
         simulator = backend_config.get("simulator", "qilisim")
-        return QiliSDKExecutor(QiliSDKExecutorConfig(simulator=simulator))
+        return QiliSDKExecutor(QiliSDKExecutorConfig(
+            simulator=simulator, compute_provider=backend_config.get("compute_provider", "local")
+        ))
 
     # Backend slug -> PennyLane device name, for configs that give no ``device``.
     _LIGHTNING_SLUG_TO_DEVICE: dict[str, str] = {
