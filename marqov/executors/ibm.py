@@ -19,6 +19,11 @@ Example:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+from importlib.metadata import version
+import io
+import json
+import math
 import re
 import time
 import warnings
@@ -41,9 +46,7 @@ RETIRED_IBM_CHANNEL = "ibm_quantum"
 _LEGACY_INSTANCE_RE = re.compile(r"^[^/:]+/[^/:]+/[^/:]+$")
 
 
-def normalize_ibm_connection(
-    channel: str | None, instance: str | None
-) -> tuple[str, str | None]:
+def normalize_ibm_connection(channel: str | None, instance: str | None) -> tuple[str, str | None]:
     """Normalise the IBM ``channel`` and ``instance`` values at every call site.
 
     This is the single place that decides what those two values mean, shared
@@ -119,7 +122,7 @@ class IBMExecutorConfig:
     backend_name: str
     channel: str = DEFAULT_IBM_CHANNEL
     instance: str | None = None
-    token: str | None = None
+    token: str | None = field(default=None, repr=False)
     optimization_level: int = 1
     resilience_level: int = 1
     poll_interval_seconds: float = 2.0
@@ -127,6 +130,22 @@ class IBMExecutorConfig:
 
     def __post_init__(self) -> None:
         self.channel, self.instance = normalize_ibm_connection(self.channel, self.instance)
+        if not isinstance(self.backend_name, str) or not self.backend_name:
+            raise ValueError("backend_name is required")
+        if self.timeout_seconds is not None and (
+            type(self.timeout_seconds) not in (int, float)
+            or not math.isfinite(self.timeout_seconds)
+            or self.timeout_seconds <= 0
+        ):
+            raise ValueError("timeout_seconds must be finite and positive")
+
+
+class IBMExecutionError(RuntimeError):
+    """Submitted job identity is retained; result failure never triggers resubmission."""
+
+    def __init__(self, job_id: str) -> None:
+        self.job_id = job_id
+        super().__init__(f"IBM job {job_id}: result unresolved; inspect it before retrying")
 
 
 class IBMExecutor(BaseExecutor):
@@ -211,7 +230,7 @@ class IBMExecutor(BaseExecutor):
         )
         return pm.run(qiskit_circuit)
 
-    def _run_sampler_sync(self, transpiled_circuit, backend, shots: int) -> Any:
+    def _submit_sampler_sync(self, transpiled_circuit, backend, shots: int) -> Any:
         """Run the SamplerV2 primitive (synchronous).
 
         Args:
@@ -220,14 +239,14 @@ class IBMExecutor(BaseExecutor):
             shots: Number of measurement shots.
 
         Returns:
-            SamplerV2 result object.
+            Submitted SamplerV2 job.
         """
         from qiskit_ibm_runtime import SamplerV2
 
         sampler = SamplerV2(mode=backend)
         job = sampler.run([transpiled_circuit], shots=shots)
         self._current_job_id = job.job_id()
-        return job.result()
+        return job
 
     @staticmethod
     def _extract_counts(result) -> dict[str, int]:
@@ -262,12 +281,14 @@ class IBMExecutor(BaseExecutor):
             ExecutionResult with measurement counts and metadata.
 
         Raises:
-            TimeoutError: If `timeout_seconds` is set and elapses before the
-                job completes.
-            Exception: Whatever `qiskit_ibm_runtime` raises on a failed job
-                or unavailable backend propagates unchanged — not wrapped or
-                normalized to a `marqov`-specific exception type.
+            IBMExecutionError: Result retrieval failed after submission; includes
+                the job ID. A timeout does not cancel the provider job.
+            Exception: Pre-submission provider/availability failures propagate.
         """
+        if kwargs:
+            raise TypeError("Unsupported IBM execution options")
+        if type(shots) is not int or shots <= 0:
+            raise ValueError("shots must be a positive integer")
         circuit = self._validate_circuit(circuit)
 
         loop = asyncio.get_running_loop()
@@ -287,25 +308,35 @@ class IBMExecutor(BaseExecutor):
             partial(self._transpile_sync, qiskit_circuit, backend),
         )
 
-        # Execute via SamplerV2
-        if self.config.timeout_seconds is not None:
-            result = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None,
-                    partial(self._run_sampler_sync, transpiled, backend, shots),
-                ),
-                timeout=self.config.timeout_seconds,
+        # Capture this invocation's submitted job before waiting. A timeout does
+        # not imply cancellation, and concurrent calls cannot overwrite its ID.
+        job = await loop.run_in_executor(
+            None,
+            partial(self._submit_sampler_sync, transpiled, backend, shots),
+        )
+        job_id = job.job_id()
+        try:
+            result_future = loop.run_in_executor(None, job.result)
+            result = (
+                await asyncio.wait_for(result_future, self.config.timeout_seconds)
+                if self.config.timeout_seconds is not None
+                else await result_future
             )
-        else:
-            result = await loop.run_in_executor(
-                None,
-                partial(self._run_sampler_sync, transpiled, backend, shots),
-            )
+            counts = self._extract_counts(result)
+            if sum(counts.values()) != shots:
+                raise ValueError("IBM result shot accounting differs from the submission")
+        except Exception as exc:
+            raise IBMExecutionError(job_id) from exc
 
         wall_time = time.perf_counter() - start_time
 
-        counts = self._extract_counts(result)
+        from qiskit import qpy
 
+        encoded = io.BytesIO()
+        qpy.dump(transpiled, encoded)
+        local = type(backend).__module__.startswith(
+            ("qiskit_aer.", "qiskit_ibm_runtime.fake_provider.")
+        )
         return ExecutionResult(
             counts=counts,
             backend=self.config.backend_name,
@@ -313,7 +344,22 @@ class IBMExecutor(BaseExecutor):
             shots=shots,
             raw_result=result,
             metadata={
-                "job_id": self._current_job_id,
+                "job_id": job_id,
+                "vendor": "IBM",
+                "framework": "Qiskit Runtime",
+                "engine": "SamplerV2",
+                "access_path": "local" if local else "direct",
+                "compute_provider": "local" if local else "IBM Quantum",
+                "reproducibility": {
+                    "record_version": 1,
+                    "packages": {p: version(p) for p in ("qiskit", "qiskit-ibm-runtime", "numpy")},
+                    "shots": shots,
+                    "transpiled_qpy_sha256": hashlib.sha256(encoded.getvalue()).hexdigest(),
+                    "counts_sha256": hashlib.sha256(
+                        json.dumps(counts, sort_keys=True, separators=(",", ":")).encode()
+                    ).hexdigest(),
+                    "bit_order": "qubit_0_first",
+                },
                 "backend_name": self.config.backend_name,
                 "channel": self.config.channel,
                 "instance": self.config.instance,
