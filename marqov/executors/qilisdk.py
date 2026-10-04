@@ -4,17 +4,21 @@ Runs circuits on qilisdk's own open-source simulator stack — QiliSim (their
 C++ simulator, ships in the base `qilisdk` package) or QutipBackend (pure-
 Python reference sim). No SpeQtrum account or network call required.
 
-`qilisdk` is installed separately (``pip install qilisdk``), not via a
-`marqov[...]` extra: its numpy floor (>=2.3 on macOS, >=2.4.1 elsewhere)
-is incompatible with marqov's own numpy<2.4 core pin outside a narrow
-macOS overlap window, which makes it unresolvable as a formal extra in
-marqov's own dependency lock.
+Install ``qilisdk==0.3.0`` separately. This qualified release resolves with
+Marqov's numpy<2.4 ceiling on Linux and macOS. Earlier 0.1.8–0.2.x releases
+require numpy>=2.4.1 on Linux and are incompatible. For QutipBackend install
+``qutip>=5.2.2`` and ``qutip-qip>=0.4.0`` explicitly; QiliSDK 0.3.0 has no
+``qutip`` extra.
 
 See https://github.com/qilimanjaro-tech/qilisdk.
 """
 
 from __future__ import annotations
 
+import hashlib
+from importlib.metadata import version
+import json
+import platform
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
@@ -28,7 +32,7 @@ if TYPE_CHECKING:
 
 # Extra pip-install hint appended to the ImportError for backends with their
 # own optional dependency beyond the base `qilisdk` package.
-_SIMULATOR_EXTRA = {"qutip": ' (qutip extra: pip install "qilisdk[qutip]")'}
+_SIMULATOR_EXTRA = {"qutip": ' (also install: pip install "qutip>=5.2.2" "qutip-qip>=0.4.0")'}
 
 
 @dataclass
@@ -39,10 +43,11 @@ class QiliSDKExecutorConfig:
         simulator: Which qilisdk backend to run on — "qilisim" (their C++
             simulator, ships in the base `qilisdk` package, `pip install
             qilisdk`) or "qutip" (pure-Python reference sim, `pip install
-            "qilisdk[qutip]"`).
+            "qutip>=5.2.2" "qutip-qip>=0.4.0"`).
     """
 
     simulator: Literal["qilisim", "qutip"] = "qilisim"
+    compute_provider: str = "local"
 
 
 class QiliSDKExecutor(BaseExecutor):
@@ -163,6 +168,7 @@ class QiliSDKExecutor(BaseExecutor):
             raw_result=result,
             metadata={
                 "simulator": self.config.simulator,
+                **self._provenance(backend, counts, shots, seed),
                 **({"seed": seed, "num_threads": 1} if seed is not None else {}),
             },
         )
@@ -236,10 +242,37 @@ class QiliSDKExecutor(BaseExecutor):
             raw_result=result,
             metadata={
                 "simulator": self.config.simulator,
+                **self._provenance(backend, counts, shots, seed),
                 "mode": "analog",
                 **({"seed": seed, "num_threads": 1} if seed is not None else {}),
             },
         )
+
+    def _provenance(
+        self, backend: Any, counts: dict[str, int], shots: int, seed: int | None
+    ) -> dict[str, Any]:
+        """Record the actual local engine; this is not hosted execution evidence."""
+        engine = f"{type(backend).__module__}.{type(backend).__qualname__}"
+        return {
+            "vendor": "Qilimanjaro",
+            "framework": "QiliSDK",
+            "engine": engine,
+            "access_path": "local",
+            "compute_provider": self.config.compute_provider,
+            "reproducibility": {
+                "record_version": 1,
+                "packages": {name: version(name) for name in ("qilisdk", "numpy", "marqov")},
+                "python": platform.python_version(),
+                "engine": engine,
+                "shots": shots,
+                "seed": seed,
+                "rng_policy": "fresh seeded single-threaded QiliSim" if seed is not None else "vendor default",
+                "counts_sha256": hashlib.sha256(
+                    json.dumps(counts, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest(),
+                "scope": "local simulation; no hardware execution or hosted attestation",
+            },
+        }
 
     def _backend_for_seed(self, seed: int | None) -> Any:
         if seed is None:
