@@ -31,6 +31,7 @@ from marqov.executors.local import LocalExecutor
 from marqov.executors.qilisdk import QiliSDKExecutor, QiliSDKExecutorConfig
 from marqov.executors.quantinuum import QuantinuumExecutor, QuantinuumExecutorConfig
 from marqov.executors.rigetti import RigettiExecutor, RigettiExecutorConfig
+from marqov.executors.speqtrum import SpeQtrumExecutor, SpeQtrumExecutorConfig
 from marqov.simulation.config import SimulationConfig
 from marqov.simulation.executor import SimulationExecutor
 
@@ -127,6 +128,17 @@ class ExecutorFactory:
 
         # Qilimanjaro qilisdk (local simulator only — QiliSim or QutipBackend)
         if provider == "Qilimanjaro":
+            if backend_config.get("access_path") == "speqtrum":
+                keys = ("device_code", "username", "api_key")
+                if any(not backend_config.get(k) for k in keys):
+                    raise ValueError("Explicit SpeQtrum device/account/key required")
+                options = {k: backend_config[k] for k in keys}
+                for k in ("api_url", "audience", "timeout_seconds", "request_timeout_seconds", "poll_interval_seconds"):
+                    if k in backend_config:
+                        options[k] = backend_config[k]
+                return SpeQtrumExecutor(SpeQtrumExecutorConfig(**options))
+            if backend_config.get("access_path") not in (None, "local"):
+                raise ValueError("Unknown Qilimanjaro access_path")
             return cls._create_qilisdk_executor(backend_slug, backend_config)
 
         # Xanadu PennyLane Lightning (local CPU simulators). Dispatched on the

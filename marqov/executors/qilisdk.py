@@ -289,7 +289,8 @@ class QiliSDKExecutor(BaseExecutor):
         # Per-call seeding must not reuse an advanced RNG or alter the unseeded backend.
         return QiliSim(execution_config=ExecutionConfig(seed=seed, num_threads=1))
 
-    def _to_qilisdk_circuit(self, circuit: Circuit) -> Any:
+    @staticmethod
+    def _to_qilisdk_circuit(circuit: Circuit) -> Any:
         """Translate a Marqov Circuit into a qilisdk digital Circuit.
 
         Walks the same internal gate list `Circuit.to_dict()`/`from_dict()`

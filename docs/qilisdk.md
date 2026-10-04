@@ -48,3 +48,34 @@ checks also exercise unseeded QiliSim and QuTiP execution.
 Qilimanjaro documents the constructor configuration in its
 [QiliSim backend guide](https://qilimanjaro-tech.github.io/qilisdk/en/0.2.0/modules/backends/backends_qilisim.html).
 Marqov implements the per-call reset and option validation described here.
+
+## Explicit direct SpeQtrum execution
+
+The separate `SpeQtrumExecutor` requires pinned `qilisdk==0.3.0`, an explicit
+`device_code`, `username`, and API key. Factory configuration uses
+`provider="Qilimanjaro", access_path="speqtrum"`; omitting `access_path` retains
+local simulator routing. Unknown paths and incomplete remote configuration fail.
+No credentials are read from the environment or shared keyring.
+
+The client authenticates before sending, disables redirects/retries, and never
+replays `/execute` after a 401 or uncertain response. Digital gate circuits and
+QiliSDK analog schedules use sampling readout. Results retain canonical QiliSDK
+bit order and require exact shot accounting. Results are decoded only through an inert sampling-only schema.
+
+`executor.last_job` is an immutable `SpeQtrumJob` record for `readback(record)`
+without another submission. Retain it when a known job has an unresolved result.
+An acceptance-unknown exception without a job ID must not trigger a new submit.
+The pinned API exposes no cancellation or idempotency guarantee: `cancel()`
+returns False. Terminal timeout/error/cancellation never produces success.
+
+Discovery supplies a device code, but its model has no numeric ID. Job readback
+supplies `device_id`; the adapter checks its continuity within polling and records
+it as provenance. This does not independently prove a code-to-numeric-ID mapping.
+That mapping remains a connected qualification requirement. Poll/request and
+response limits are finite; DNS and operating-system blocking are not a hard
+wall-clock deadline guarantee.
+
+This is an unqualified direct SDK adapter. No provider job, managed hosted
+credential custody, funding authorization or remote hardware qualification is
+claimed. Connected qualification needs an explicit account/key/device and bounded
+cost authorization. The existing local CPU qualification remains separate.
