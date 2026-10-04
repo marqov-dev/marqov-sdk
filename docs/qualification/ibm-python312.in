@@ -1,0 +1,13 @@
+marqov==0.7.0
+botocore==1.43.89
+cloudpickle==3.1.2
+jsonschema==4.26.0
+referencing==0.37.0
+pennylane==0.45.1
+pennylane-lightning==0.45.0
+qilisdk==0.3.0
+qutip==5.3.1
+qutip-qip==0.4.2
+qiskit==2.4.1
+qiskit-aer==0.17.2
+qiskit-ibm-runtime==0.50.0
