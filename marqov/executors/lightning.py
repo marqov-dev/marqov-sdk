@@ -1,4 +1,4 @@
-"""PennyLane Lightning executor (seeded engines), with a per-run reproducibility record.
+"""PennyLane Lightning executor (seeded and explicit unseeded tensor engines), with a per-run reproducibility record.
 
 Runs Marqov circuits locally on Xanadu's PennyLane Lightning simulators:
 
@@ -9,15 +9,16 @@ Runs Marqov circuits locally on Xanadu's PennyLane Lightning simulators:
 ``lightning.gpu`` uses its actual device when installed and passes real
 bit-order, distribution and seed-replay probes before user circuits. Missing
 GPU libraries/hardware fail explicitly; no CPU device is substituted.
-``lightning.tensor`` remains refused: pinned 0.45 lacks the constructor seed
-contract required by this executor's reproducibility record.
+``lightning.tensor`` uses an explicit unseeded record (version 2): pinned 0.45
+lacks a sampling seed interface. Exact tn is the default; MPS settings are
+recorded as approximate. All methods require actual device qualification.
 
 Scope: bound gate circuits (the canonical gate set), finite shots,
 computational-basis samples of every qubit the circuit uses. Count keys follow
 the SDK convention: qubit indices in ascending order, lowest index leftmost
 (the same keys ``LocalExecutor`` returns, including for sparse indices).
 
-Seeds and replay: each run builds a fresh device and passes the seed at
+Seeds and replay (CPU/GPU only): each run builds a fresh device and passes the seed at
 construction, so no RNG state carries over between calls. A run with no seed
 gets a generated one, which is recorded. Within one device, PennyLane and
 Lightning versions and platform, the same seed replays the same samples.
@@ -135,7 +136,7 @@ class LightningExecutorConfig:
     Attributes:
         device: PennyLane device name. ``"lightning.qubit"`` or
             ``"lightning.kokkos"`` and ``"lightning.gpu"`` run;
-            ``"lightning.tensor"`` requires a separate unseeded contract.
+            ``"lightning.tensor"`` uses an explicit unseeded version2 contract.
         seed: Default sampling seed for calls that pass none. None means each
             such call gets a generated seed, recorded in the result.
         precision: ``"double"`` (complex128, default) or ``"single"`` (complex64).
@@ -147,6 +148,60 @@ class LightningExecutorConfig:
     seed: int | None = None
     precision: Literal["double", "single"] = "double"
     compute_provider: str = "local"
+    tensor_method: Literal["tn", "mps"] | None = None
+    tensor_worksize_pref: Literal["recommended", "min", "max"] | None = None
+    tensor_max_bond_dim: int | None = None
+    tensor_cutoff: float | None = None
+    tensor_cutoff_mode: Literal["abs", "rel"] | None = None
+
+
+def _tensor_options(config: LightningExecutorConfig) -> dict[str, Any]:
+    values = (
+        config.tensor_method,
+        config.tensor_worksize_pref,
+        config.tensor_max_bond_dim,
+        config.tensor_cutoff,
+        config.tensor_cutoff_mode,
+    )
+    if config.device != "lightning.tensor":
+        if any(value is not None for value in values):
+            raise ValueError("Tensor options require lightning.tensor")
+        return {}
+    if config.seed is not None:
+        raise ValueError("lightning.tensor has no seed interface")
+    method = config.tensor_method if config.tensor_method is not None else "tn"
+    workspace = (
+        config.tensor_worksize_pref if config.tensor_worksize_pref is not None else "recommended"
+    )
+    if method not in ("tn", "mps") or workspace not in ("recommended", "min", "max"):
+        raise ValueError("Invalid tensor method/workspace")
+    options: dict[str, Any] = {
+        "method": method,
+        "backend": "cutensornet",
+        "worksize_pref": workspace,
+    }
+    if method == "tn":
+        if any(
+            value is not None
+            for value in (
+                config.tensor_max_bond_dim,
+                config.tensor_cutoff,
+                config.tensor_cutoff_mode,
+            )
+        ):
+            raise ValueError("MPS approximation options cannot be used with exact tn")
+    else:
+        bond = config.tensor_max_bond_dim if config.tensor_max_bond_dim is not None else 128
+        cutoff = config.tensor_cutoff if config.tensor_cutoff is not None else 0
+        mode = config.tensor_cutoff_mode if config.tensor_cutoff_mode is not None else "abs"
+        if type(bond) is not int or bond <= 0:
+            raise ValueError("Tensor bond dimension must be a positive integer")
+        if type(cutoff) not in (int, float) or not math.isfinite(cutoff) or cutoff < 0:
+            raise ValueError("Tensor cutoff must be finite and nonnegative")
+        if mode not in ("abs", "rel"):
+            raise ValueError("Invalid tensor cutoff mode")
+        options.update(max_bond_dim=bond, cutoff=cutoff, cutoff_mode=mode)
+    return options
 
 
 def _import_pennylane() -> Any:
@@ -281,9 +336,9 @@ def _backend_info(device: str) -> dict[str, Any]:
             }
         except Exception:
             pass
-    if device == "lightning.gpu":
+    if device in ("lightning.gpu", "lightning.tensor"):
         try:
-            info["lightning_gpu"] = dict(ops.backend_info())
+            info[device.replace(".", "_")] = dict(ops.backend_info())
         except Exception:
             pass
     for name in ("compile_info", "runtime_info"):
@@ -316,7 +371,7 @@ class LightningExecutor(BaseExecutor):
     """
 
     # Per-process qualification results, keyed by (device name, precision).
-    _qualified: dict[tuple[str, str], dict[str, Any]] = {}
+    _qualified: dict[tuple[Any, ...], dict[str, Any]] = {}
     _qualify_lock = threading.Lock()
 
     def __init__(self, config: LightningExecutorConfig | None = None) -> None:
@@ -340,6 +395,7 @@ class LightningExecutor(BaseExecutor):
             raise ValueError(
                 f"Unknown precision '{self.config.precision}'. Supported: 'double', 'single'."
             )
+        _tensor_options(self.config)
         if self.config.seed is not None:
             _check_seed(self.config.seed)
 
@@ -359,7 +415,8 @@ class LightningExecutor(BaseExecutor):
             shots: Number of samples; a positive integer.
             seed: Sampling seed for this call, an integer in ``[0, 2**63-1]``.
                 Falls back to ``config.seed``, then to a generated seed. The
-                seed used is always recorded. Replay holds for the same device,
+                Tensor rejects non-None seeds and records no replay guarantee.
+                The CPU/GPU seed used is recorded. Replay holds for the same device,
                 versions and platform only.
             **kwargs: Unsupported; any option raises TypeError.
 
@@ -373,7 +430,7 @@ class LightningExecutor(BaseExecutor):
             ValueError: For non-positive shots, out-of-range seeds, an empty
                 circuit or an unbound angle.
             NotImplementedError: For gates outside the canonical set, or a
-                tensor engine whose seed contract is unsupported.
+                unsupported device/gate. Tensor rejects non-None seeds.
             LightningDeviceUnavailableError: If the device cannot be
                 constructed here, or failed its qualification probe.
         """
@@ -385,7 +442,12 @@ class LightningExecutor(BaseExecutor):
         if shots <= 0:
             raise ValueError(f"shots must be a positive integer, got {shots}")
 
-        if seed is not None:
+        _tensor_options(self.config)
+        if self.config.device == "lightning.tensor":
+            if seed is not None:
+                raise ValueError("lightning.tensor has no seed interface")
+            run_seed, seed_source = None, "vendor"
+        elif seed is not None:
             run_seed, seed_source = _check_seed(seed), "caller"
         elif self.config.seed is not None:
             run_seed, seed_source = self.config.seed, "config"
@@ -403,26 +465,27 @@ class LightningExecutor(BaseExecutor):
             self._run_sync, qml, script, shots, run_seed, seed_source, circuit_sha256
         )
 
-    def _make_device(self, qml: Any, wires: list[int], seed: int) -> Any:
+    def _make_device(self, qml: Any, wires: list[int], seed: int | None) -> Any:
         """Construct the requested device or explain precisely why not."""
         import numpy as np
 
         name = self.config.device
-        if name == "lightning.tensor":
-            raise NotImplementedError(
-                "lightning.tensor lacks the seeded constructor contract; not running it"
-            )
         dtype = np.complex128 if self.config.precision == "double" else np.complex64
         try:
-            dev = qml.device(name, wires=wires, seed=seed, c_dtype=dtype)
+            if name == "lightning.tensor":
+                if seed is not None:
+                    raise ValueError("lightning.tensor has no seed interface")
+                dev = qml.device(name, wires=wires, c_dtype=dtype, **_tensor_options(self.config))
+            else:
+                dev = qml.device(name, wires=wires, seed=seed, c_dtype=dtype)
         except Exception as exc:
             raise LightningDeviceUnavailableError(
                 f"{name} is unavailable in this environment: {type(exc).__name__}: {exc}"
             ) from exc
-        if name not in _SEEDED_DEVICES:
+        if name not in _SEEDED_DEVICES | {"lightning.tensor"}:
             raise NotImplementedError(
-                f"{name} is outside the supported seeded devices "
-                f"{', '.join(sorted(_SEEDED_DEVICES))}. Not running it."
+                f"{name} is outside the supported Lightning devices "
+                f"{', '.join(sorted(_SEEDED_DEVICES | {'lightning.tensor'}))}. Not running it."
             )
         if getattr(dev, "name", None) != name:
             raise RuntimeError(
@@ -432,7 +495,7 @@ class LightningExecutor(BaseExecutor):
         return dev
 
     def _sample(
-        self, qml: Any, operations: list[Any], wires: list[int], shots: int, seed: int
+        self, qml: Any, operations: list[Any], wires: list[int], shots: int, seed: int | None
     ) -> tuple[Any, Any, Any, float]:
         import numpy as np
 
@@ -452,18 +515,22 @@ class LightningExecutor(BaseExecutor):
         within 5 sigma, before any user circuit runs on it.
         """
         name = self.config.device
+        options = _tensor_options(self.config)
         key = (name, self.config.precision)
+        if name == "lightning.tensor":
+            key += tuple(sorted(options.items()))
+        probe_seed = None if name == "lightning.tensor" else 0
         with self._qualify_lock:
             if key in self._qualified:
                 return self._qualified[key]
             checks: dict[str, bool] = {}
             _, _, samples, _ = self._sample(
-                qml, [qml.PauliX(0), qml.CZ(wires=[0, 1])], [0, 1], 64, seed=0
+                qml, [qml.PauliX(0), qml.CZ(wires=[0, 1])], [0, 1], 64, seed=probe_seed
             )
             checks["bit_order_q0_leftmost"] = _counts_from_samples(samples) == {"10": 64}
             shots = 4000
             _, _, samples, _ = self._sample(
-                qml, [qml.Hadamard(0), qml.CNOT(wires=[0, 1])], [0, 1], shots, seed=0
+                qml, [qml.Hadamard(0), qml.CNOT(wires=[0, 1])], [0, 1], shots, seed=probe_seed
             )
             counts = _counts_from_samples(samples)
             tolerance = 5 * math.sqrt(shots * 0.25)
@@ -489,7 +556,7 @@ class LightningExecutor(BaseExecutor):
         qml: Any,
         script: Any,
         shots: int,
-        seed: int,
+        seed: int | None,
         seed_source: str,
         circuit_sha256: str,
     ) -> ExecutionResult:
@@ -557,6 +624,19 @@ class LightningExecutor(BaseExecutor):
             "counts_sha256": _sha256_json(counts),
         }
 
+        if name == "lightning.tensor":
+            record.update(
+                record_version=2,
+                seed=None,
+                seed_kind="unsupported",
+                seed_source="vendor",
+                rng_policy="vendor-controlled sampling; no seed interface or replay guarantee",
+                tensor_configuration={
+                    **_tensor_options(self.config),
+                    "approximation": "mps" if self.config.tensor_method == "mps" else "exact tn",
+                },
+            )
+
         return ExecutionResult(
             counts=counts,
             backend=name,
@@ -576,6 +656,18 @@ class LightningExecutor(BaseExecutor):
 
     async def get_status(self) -> DeviceStatus:
         """Online if the configured device can be constructed here, else offline."""
+        if self.config.device == "lightning.tensor":
+
+            def available() -> bool:
+                try:
+                    self._make_device(_import_pennylane(), [0], None)
+                    return True
+                except Exception:
+                    return False
+
+            if await asyncio.to_thread(available):
+                return DeviceStatus.always_online()
+            return DeviceStatus(status="offline", queue_depth=None, queue_time_seconds=None)
         probe = await asyncio.to_thread(probe_lightning_device, self.config.device)
         if probe.available and self.config.device in _SEEDED_DEVICES:
             return DeviceStatus.always_online()

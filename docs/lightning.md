@@ -27,8 +27,8 @@ A copy-and-run demo, including seed replay, is `examples/lightning_cpu_local.py`
   compatible later API), cuStateVec and compatible NVIDIA hardware. Source support
   is not GPU qualification; no GPU runtime or hosted route is supplied here.
   The requested device must construct successfully and retain its exact name;
-  no CPU fallback is used. `lightning.tensor` remains explicitly refused because
-  pinned 0.45 has no constructor seed argument or sampling seed binding.
+  no CPU fallback is used. `lightning.tensor` uses an explicit unseeded contract
+  because pinned 0.45 has no constructor seed argument or sampling seed binding.
 - Each supported device must pass a qualification probe once per process and precision before the
   first user circuit: an asymmetric basis state must produce the SDK's count
   key (`"10"` for X on qubit 0 of 2), and a Bell state must stay within 5 sigma
@@ -98,6 +98,17 @@ the compiled plugin, `backend_info.lightning_gpu` records its reported backend
 facts; absent facts remain absent rather than inferred. Pinned API evidence is
 [PennyLane Lightning 0.45 source](https://github.com/PennyLaneAI/pennylane-lightning/tree/v0.45.0).
 Local contract fixtures do not claim NVIDIA execution or hardware qualification.
-Tensor support still requires an explicit unseeded RNG contract and method/bond/
-cutoff provenance, plus real compatible NVIDIA qualification; simply dropping
-its refusal would misrepresent the existing seed contract.
+Tensor source support uses record version2 with seed=null, vendor-controlled
+sampling and no replay guarantee. Non-None caller/config seeds are rejected.
+CPU/GPU record version1 and seed policy are unchanged. `tensor_method="tn"`
+(default) selects exact tensor network; `"mps"` is explicitly approximate and
+records resolved max_bond_dim (128 default), cutoff (0 default) and cutoff_mode
+(abs default; rel also supported), without claiming an error bound. MPS options
+are rejected for tn. Workspace preference is recommended(default), min or max;
+backend is fixed cutensornet. Options require the explicitly selected tensor
+device and are validated before construction; its constructor never gets seed.
+Every method/precision/backend/workspace/bond/cutoff setting has its own real
+bit-order/Bell qualification cache entry. Failed probes block user circuits.
+Tensor plugin/cuTensorNet/compatible NVIDIA environment and actual per-option
+execution remain qualification requirements; local fixture checks prove only
+source contracts. No GPU runtime, hosted route or device spend is supplied.

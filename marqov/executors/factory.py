@@ -512,7 +512,7 @@ class ExecutorFactory:
         The device comes from ``device`` in the config, else from the slug
         (``lightning-qubit`` / ``lightning-kokkos``; ``lightning-gpu`` and
         ``lightning-tensor`` resolve; GPU requires its real qualification
-        gate and tensor remains refused for its incompatible seed contract). Optional keys: ``seed``, ``precision``, ``compute_provider``.
+        gate and tensor uses an explicit unseeded version2 record). Optional keys: ``seed``, ``precision``, ``compute_provider``.
 
         Raises:
             ValueError: If neither ``device`` nor a known slug names the device.
@@ -525,7 +525,8 @@ class ExecutorFactory:
                 f"{sorted(cls._LIGHTNING_SLUG_TO_DEVICE)}."
             )
         config_kwargs: dict[str, Any] = {"device": device}
-        for key in ("seed", "precision", "compute_provider"):
+        for key in ("seed", "precision", "compute_provider", "tensor_method", "tensor_worksize_pref",
+                    "tensor_max_bond_dim", "tensor_cutoff", "tensor_cutoff_mode"):
             if key in backend_config:
                 config_kwargs[key] = backend_config[key]
         return LightningExecutor(LightningExecutorConfig(**config_kwargs))
