@@ -596,6 +596,77 @@ class TestFromPennylane:
         with pytest.raises(TypeError, match="integer wires"):
             Circuit.from_pennylane(tape)
 
+    @pytest.mark.parametrize("dtype", ["int32", "int64", "uint64"])
+    def test_numpy_integer_wires_preserve_complex_state(self, dtype) -> None:
+        import numpy as np
+        import pennylane as qml
+
+        wires = np.arange(2, dtype=dtype)
+        ops = [
+            qml.Hadamard(wires=wires[0]),
+            qml.RX(0.37, wires=wires[1]),
+            qml.CNOT(wires=[wires[1], wires[0]]),
+            qml.RY(-0.29, wires=wires[0]),
+        ]
+        tape = self._make_tape(ops)
+        imported = Circuit.from_pennylane(tape)
+        reference = qml.execute(
+            [qml.tape.QuantumScript(ops, [qml.state()])],
+            qml.device("default.qubit", wires=[0, 1]),
+        )[0]
+        np.testing.assert_allclose(
+            imported.simulate().tensor.flatten(), reference, atol=1e-12, rtol=1e-12
+        )
+        assert all(type(q) is int for gate in imported._qf for q in gate.qubits)
+
+    @pytest.mark.parametrize("wire", [True, False, 0.0])
+    def test_non_integer_wire_rejected(self, wire) -> None:
+        import pennylane as qml
+
+        with pytest.raises(TypeError, match="integer wires"):
+            Circuit.from_pennylane(self._make_tape([qml.Hadamard(wires=wire)]))
+
+    def test_nested_decomposition_error_propagates(self) -> None:
+        import pennylane as qml
+
+        class Inner(qml.operation.Operation):
+            num_wires = 1
+
+            def decomposition(self):
+                raise RuntimeError("boom inside inner decomposition")
+
+        class Outer(qml.operation.Operation):
+            num_wires = 1
+
+            def decomposition(self):
+                return [Inner(wires=self.wires)]
+
+        with pytest.raises(RuntimeError, match="boom inside inner decomposition"):
+            Circuit.from_pennylane(self._make_tape([Outer(wires=0)]))
+
+    def test_nested_unmappable_gate_reports_leaf(self, monkeypatch) -> None:
+        import sys
+        from types import SimpleNamespace
+        import pennylane as qml
+
+        messages = []
+        monkeypatch.setitem(sys.modules, "sentry_sdk", SimpleNamespace(
+            capture_message=lambda message, **kwargs: messages.append(message)
+        ))
+
+        class Inner(qml.operation.Operation):
+            num_wires = 1
+
+        class Outer(qml.operation.Operation):
+            num_wires = 1
+
+            def decomposition(self):
+                return [Inner(wires=self.wires)]
+
+        with pytest.raises(ValueError, match="Unsupported PennyLane gate 'Inner'"):
+            Circuit.from_pennylane(self._make_tape([Outer(wires=0)]))
+        assert messages == ["Circuit.from_pennylane(): unmappable gate 'Inner'"]
+
     def test_native_pennylane_tape(self) -> None:
         """A tape built entirely in PennyLane can be imported."""
         import numpy as np

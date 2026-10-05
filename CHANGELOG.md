@@ -9,6 +9,10 @@ release.
 
 ### Fixed
 
+- PennyLane circuit imports accept NumPy integer wire labels and normalize them
+  to Python integers, while rejecting boolean and non-integer labels. Nested
+  decomposition failures now retain the actual failing gate or exception. (#157)
+
 - Braket XY imports use their own angle instead of a previous instruction's
   arguments, and dictionary reconstruction now restores XY with its existing
   QuantumFlow parameter convention and qubit order. Requires the corrected
