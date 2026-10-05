@@ -9,6 +9,10 @@ release.
 
 ### Fixed
 
+- PyQuil imports reject gate modifiers before mapping or SWAP recognition,
+  preventing loss of DAGGER, CONTROLLED and FORKED semantics. Unmodified
+  canonical imports remain supported. (marqov-sdk#193)
+
 - Circuit dictionary reconstruction restores the standard gates emitted by
   the importers, including the 18 Braket gate types previously omitted.
   Unsupported gates and incorrect qubit/parameter counts now raise ValueError
