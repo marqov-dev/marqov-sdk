@@ -12,6 +12,7 @@ Example:
 
 from __future__ import annotations
 
+from numbers import Integral
 from typing import TYPE_CHECKING, Any
 
 import quantumflow as qf
@@ -842,8 +843,8 @@ class Circuit:
 
         Requires PennyLane to be installed (``pip install marqov[pennylane]``).
 
-        Only integer wires are accepted. For string wires, remap to integers
-        before calling this method.
+        Only integer wires (including NumPy integers, excluding booleans) are
+        accepted. For string wires, remap to integers before calling this method.
 
         Args:
             tape: A PennyLane ``QuantumTape`` or ``QuantumScript`` instance.
@@ -872,7 +873,7 @@ class Circuit:
 
         # Validate wire types — only integer wires are supported.
         for wire in tape.wires:
-            if not isinstance(wire, int):
+            if isinstance(wire, bool) or not isinstance(wire, Integral):
                 raise TypeError(
                     f"Circuit.from_pennylane() requires integer wires, but found "
                     f"{type(wire).__name__} wire '{wire}'. Remap your tape to use "
@@ -889,7 +890,7 @@ class Circuit:
                 if name in cls._PENNYLANE_SKIP:
                     continue
 
-                wires = op.wires.tolist()
+                wires = [int(wire) for wire in op.wires]
 
                 if name in cls._PENNYLANE_GATE_MAP:
                     method_name = cls._PENNYLANE_GATE_MAP[name]
@@ -905,10 +906,13 @@ class Circuit:
                 # Unknown gate — try decomposing.
                 try:
                     decomposed = op.decomposition()
+                except qml.operation.DecompositionUndefinedError:
+                    pass
+                else:
+                    # Errors in a child operation belong to that child, not
+                    # to the outer operation whose decomposition succeeded.
                     _process_operations(decomposed)
                     continue
-                except Exception:
-                    pass
 
                 # Decomposition failed — log to Sentry and raise.
                 try:
