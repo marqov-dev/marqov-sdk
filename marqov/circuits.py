@@ -400,14 +400,33 @@ class Circuit:
     def from_braket(cls, braket_circuit: BraketCircuit) -> Circuit:
         """Import from existing Braket circuit.
 
+        Instruction-level controls and non-default powers are unsupported.
+        Use explicit gates such as ``cnot`` or decompose modified instructions
+        before importing; their modifiers would be lost by the converter.
+
         Args:
             braket_circuit: Braket Circuit to import.
 
         Returns:
             New Circuit instance.
+
+        Raises:
+            NotImplementedError: If an instruction has controls or a power
+                other than one. The message identifies its gate and index.
         """
         circuit = cls()
         require_braket()
+        # Validate the entire input before the converter can strip modifiers.
+        for index, instruction in enumerate(braket_circuit.instructions):
+            if instruction.control or instruction.power != 1:
+                raise NotImplementedError(
+                    f"Circuit.from_braket(): unsupported modifiers for gate "
+                    f"'{instruction.operator.name}' at index {index}: "
+                    f"control={list(instruction.control)}, "
+                    f"control_state={instruction.control_state}, "
+                    f"power={instruction.power}. Use explicit supported gates "
+                    "or decompose modified instructions before importing."
+                )
         circuit._qf = qf.braket_to_circuit(braket_circuit)
         return circuit
 
