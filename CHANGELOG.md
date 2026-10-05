@@ -9,6 +9,10 @@ release.
 
 ### Fixed
 
+- OpenQASM imports detect version headers after leading comments and raise the
+  documented `ValueError` for parse failures, retaining the detected version and
+  original parser exception. (marqov-sdk#156)
+
 - PennyLane circuit imports accept NumPy integer wire labels and normalize them
   to Python integers, while rejecting boolean and non-integer labels. Nested
   decomposition failures now retain the actual failing gate or exception. (marqov-sdk#157)

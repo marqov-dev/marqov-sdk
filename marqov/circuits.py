@@ -12,6 +12,7 @@ Example:
 
 from __future__ import annotations
 
+import re
 from numbers import Integral
 from typing import TYPE_CHECKING, Any
 
@@ -1151,10 +1152,21 @@ class Circuit:
             )
 
         stripped = qasm_string.strip()
-        if stripped.startswith("OPENQASM 3"):
-            qiskit_circuit = qasm3.loads(stripped)
-        else:
-            qiskit_circuit = qasm2.loads(stripped)
+        # Inspect only the header after leading whitespace/comments. Keep the
+        # original program intact so strings and parser locations are preserved.
+        header = re.match(
+            r"\s*(?:(?://[^\n]*(?:\n|$)|/\*.*?\*/)\s*)*OPENQASM\s+(\d+)\b",
+            stripped,
+            flags=re.DOTALL,
+        )
+        version = 3 if header is not None and header.group(1) == "3" else 2
+        try:
+            qiskit_circuit = (qasm3 if version == 3 else qasm2).loads(stripped)
+        except ImportError:
+            # Missing optional parser dependencies are installation errors.
+            raise
+        except Exception as exc:
+            raise ValueError(f"Could not parse OpenQASM {version}: {exc}") from exc
 
         return cls.from_qiskit(qiskit_circuit)
 
