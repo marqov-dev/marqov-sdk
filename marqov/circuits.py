@@ -1026,9 +1026,11 @@ class Circuit:
         SWAP is accepted either as a native ``SWAP`` instruction or as the
         standard three-``CNOT`` decomposition. Classical declarations and
         terminal measurements (nothing after them touches the measured qubit)
-        are skipped. Quil-native gates outside the canonical set, and
-        mid-circuit measurements, raise ``NotImplementedError`` so callers can
-        decompose them explicitly before importing.
+        are skipped. Gate modifiers (including ``DAGGER``, ``CONTROLLED`` and
+        ``FORKED``), Quil-native gates outside the canonical set, and mid-circuit
+        measurements raise ``NotImplementedError`` so callers can decompose
+        them explicitly before importing. Modifiers are checked before the
+        three-CNOT SWAP shortcut to avoid silently losing their semantics.
 
         Requires PyQuil to be installed (``pip install marqov[pyquil]``).
 
@@ -1057,6 +1059,15 @@ class Circuit:
 
         circuit = cls()
         instructions = list(program.instructions)
+        # Preflight before any mapping or three-CNOT SWAP recognition.
+        for index, instruction in enumerate(instructions):
+            if isinstance(instruction, Gate) and instruction.modifiers:
+                raise NotImplementedError(
+                    f"Circuit.from_pyquil(): unsupported modifiers "
+                    f"{list(instruction.modifiers)} for gate '{instruction.name}' "
+                    f"at index {index}. Decompose modified instructions "
+                    "before importing."
+                )
         index = 0
 
         while index < len(instructions):
