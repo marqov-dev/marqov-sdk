@@ -9,15 +9,15 @@ release.
 
 ### Fixed
 
-- PyQuil imports reject gate modifiers before mapping or SWAP recognition,
-  preventing loss of DAGGER, CONTROLLED and FORKED semantics. Unmodified
-  canonical imports remain supported. (marqov-sdk#193)
-
 - Circuit dictionary reconstruction restores the standard gates emitted by
   the importers, including the 18 Braket gate types previously omitted.
   Unsupported gates and incorrect qubit/parameter counts now raise ValueError
   naming the gate and index instead of silently changing the circuit.
   Serialized output and parameter conventions are unchanged. (marqov-sdk#153)
+
+- PyQuil imports reject gate modifiers before mapping or SWAP recognition,
+  preventing loss of DAGGER, CONTROLLED and FORKED semantics. Unmodified
+  canonical imports remain supported. (marqov-sdk#193)
 
 - IBM execution retains each submitted job ID on result errors and timeouts, checks shot accounting and records executor provenance and reproducibility hashes. Tokens are excluded from configuration repr. SamplerV2 is qualified locally with Aer; live cloud and hosted qualification remain separate.
 
