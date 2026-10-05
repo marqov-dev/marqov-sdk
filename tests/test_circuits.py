@@ -938,6 +938,12 @@ class TestOpenQASM:
             atol=1e-12, rtol=1e-12,
         )
 
+    def test_many_leading_comments_preserve_version_detection(self) -> None:
+        source = 'OPENQASM 3.0; include "stdgates.inc"; qubit q; h q;'
+        prefix = "/*" + "*//*" * 1000 + "*/\n"
+        restored = Circuit.from_openqasm(prefix + source)
+        assert restored.num_qubits == 1
+
     @pytest.mark.parametrize("version", [2, 3])
     def test_parser_error_is_chained_value_error(self, version) -> None:
         from qiskit.qasm2 import QASM2ParseError

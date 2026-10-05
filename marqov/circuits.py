@@ -1154,11 +1154,21 @@ class Circuit:
         stripped = qasm_string.strip()
         # Inspect only the header after leading whitespace/comments. Keep the
         # original program intact so strings and parser locations are preserved.
-        header = re.match(
-            r"\s*(?:(?://[^\n]*(?:\n|$)|/\*.*?\*/)\s*)*OPENQASM\s+(\d+)\b",
-            stripped,
-            flags=re.DOTALL,
-        )
+        header_start = 0
+        while header_start < len(stripped):
+            if stripped[header_start].isspace():
+                header_start += 1
+            elif stripped.startswith("//", header_start):
+                end = stripped.find("\n", header_start + 2)
+                header_start = len(stripped) if end == -1 else end + 1
+            elif stripped.startswith("/*", header_start):
+                end = stripped.find("*/", header_start + 2)
+                if end == -1:
+                    break  # Let the parser report the unterminated comment.
+                header_start = end + 2
+            else:
+                break
+        header = re.match(r"OPENQASM\s+(\d+)\b", stripped[header_start:])
         version = 3 if header is not None and header.group(1) == "3" else 2
         try:
             qiskit_circuit = (qasm3 if version == 3 else qasm2).loads(stripped)
