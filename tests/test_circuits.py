@@ -95,6 +95,37 @@ class TestToPytket:
         assert isinstance(result, PytketCircuit)
         assert result.n_qubits == expected.n_qubits
 
+    @pytest.mark.parametrize("targets", [(0, 1), (1, 0)])
+    def test_braket_extended_gates_preserve_complex_circuit(self, targets) -> None:
+        import numpy as np
+        from braket.circuits import Circuit as BK
+
+        source = BK().h(0).rx(1, 0.37).v(1).cnot(*targets).iswap(*targets).ry(0, -0.29)
+        imported = Circuit.from_braket(source)
+        exported = imported.to_pytket()
+        np.testing.assert_allclose(
+            exported.get_unitary(), source.to_unitary(), atol=1e-12, rtol=1e-12,
+        )
+        np.testing.assert_allclose(
+            exported.get_statevector(), imported.simulate().tensor.flatten(),
+            atol=1e-12, rtol=1e-12,
+        )
+
+    def test_converter_failure_is_chained_not_implemented(self, monkeypatch) -> None:
+        import pytket.extensions.qiskit as extension
+
+        failure = ValueError("Unsupported gate 'custom_gate'")
+
+        def fail(_):
+            raise failure
+
+        monkeypatch.setattr(extension, "qiskit_to_tk", fail)
+        with pytest.raises(NotImplementedError, match="custom_gate") as info:
+            bell_state().to_pytket()
+        assert info.value.__cause__ is failure
+        assert str(failure) in str(info.value)
+
+
 class TestConvenienceConstructors:
     """Tests for convenience circuit constructors."""
 
