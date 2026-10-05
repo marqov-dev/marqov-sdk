@@ -9,6 +9,10 @@ release.
 
 ### Fixed
 
+- Braket circuit imports reject instruction-level controls and non-default
+  powers before conversion instead of silently losing them. Explicit gates
+  such as CNot and unmodified imports remain supported. (marqov-sdk#192)
+
 - Circuit dictionary reconstruction restores the standard gates emitted by
   the importers, including the 18 Braket gate types previously omitted.
   Unsupported gates and incorrect qubit/parameter counts now raise ValueError
