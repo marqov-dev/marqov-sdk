@@ -400,14 +400,33 @@ class Circuit:
     def from_braket(cls, braket_circuit: BraketCircuit) -> Circuit:
         """Import from existing Braket circuit.
 
+        Instruction-level controls and non-default powers are unsupported.
+        Use explicit gates such as ``cnot`` or decompose modified instructions
+        before importing; their modifiers would be lost by the converter.
+
         Args:
             braket_circuit: Braket Circuit to import.
 
         Returns:
             New Circuit instance.
+
+        Raises:
+            NotImplementedError: If an instruction has controls or a power
+                other than one. The message identifies its gate and index.
         """
         circuit = cls()
         require_braket()
+        # Validate the entire input before the converter can strip modifiers.
+        for index, instruction in enumerate(braket_circuit.instructions):
+            if instruction.control or instruction.power != 1:
+                raise NotImplementedError(
+                    f"Circuit.from_braket(): unsupported modifiers for gate "
+                    f"'{instruction.operator.name}' at index {index}: "
+                    f"control={list(instruction.control)}, "
+                    f"control_state={instruction.control_state}, "
+                    f"power={instruction.power}. Use explicit supported gates "
+                    "or decompose modified instructions before importing."
+                )
         circuit._qf = qf.braket_to_circuit(braket_circuit)
         return circuit
 
@@ -1007,9 +1026,11 @@ class Circuit:
         SWAP is accepted either as a native ``SWAP`` instruction or as the
         standard three-``CNOT`` decomposition. Classical declarations and
         terminal measurements (nothing after them touches the measured qubit)
-        are skipped. Quil-native gates outside the canonical set, and
-        mid-circuit measurements, raise ``NotImplementedError`` so callers can
-        decompose them explicitly before importing.
+        are skipped. Gate modifiers (including ``DAGGER``, ``CONTROLLED`` and
+        ``FORKED``), Quil-native gates outside the canonical set, and mid-circuit
+        measurements raise ``NotImplementedError`` so callers can decompose
+        them explicitly before importing. Modifiers are checked before the
+        three-CNOT SWAP shortcut to avoid silently losing their semantics.
 
         Requires PyQuil to be installed (``pip install marqov[pyquil]``).
 
@@ -1038,6 +1059,15 @@ class Circuit:
 
         circuit = cls()
         instructions = list(program.instructions)
+        # Preflight before any mapping or three-CNOT SWAP recognition.
+        for index, instruction in enumerate(instructions):
+            if isinstance(instruction, Gate) and instruction.modifiers:
+                raise NotImplementedError(
+                    f"Circuit.from_pyquil(): unsupported modifiers "
+                    f"{list(instruction.modifiers)} for gate '{instruction.name}' "
+                    f"at index {index}. Decompose modified instructions "
+                    "before importing."
+                )
         index = 0
 
         while index < len(instructions):
@@ -1150,37 +1180,89 @@ class Circuit:
             })
         return {"gates": gates}
 
+    # Explicit constructors for the gate records emitted by the importers.
+    # Do not resolve arbitrary attributes from serialized input. UnitaryGate,
+    # for example, loses its matrix in to_dict() and cannot be reconstructed.
+    _DICT_GATE_MAP: dict[str, type[qf.StdGate]] = {
+        "CCNot": qf.CCNot,
+        "CNot": qf.CNot,
+        "CPhase": qf.CPhase,
+        "CPhase00": qf.CPhase00,
+        "CPhase01": qf.CPhase01,
+        "CPhase10": qf.CPhase10,
+        "CSwap": qf.CSwap,
+        "CY": qf.CY,
+        "CZ": qf.CZ,
+        "H": qf.H,
+        "I": qf.I,
+        "ISwap": qf.ISwap,
+        "PSwap": qf.PSwap,
+        "PhaseShift": qf.PhaseShift,
+        "Rx": qf.Rx,
+        "Ry": qf.Ry,
+        "Rz": qf.Rz,
+        "S": qf.S,
+        "S_H": qf.S_H,
+        "Swap": qf.Swap,
+        "T": qf.T,
+        "T_H": qf.T_H,
+        "V": qf.V,
+        "V_H": qf.V_H,
+        "X": qf.X,
+        "XX": qf.XX,
+        "Y": qf.Y,
+        "YY": qf.YY,
+        "Z": qf.Z,
+        "ZZ": qf.ZZ,
+    }
+
+    def _append_serialized_gate(self, gate_data: dict, index: int) -> None:
+        """Restore a gate using QuantumFlow's own parameter conventions."""
+        name = gate_data["gate"]
+        constructor = self._DICT_GATE_MAP.get(name)
+        if constructor is None:
+            raise ValueError(
+                f"Circuit.from_dict(): unsupported gate '{name}' at index {index}"
+            )
+        qubits = gate_data["qubits"]
+        params = gate_data.get("params", [])
+        expected_qubits = constructor.cv_qubit_nb
+        expected_params = len(constructor.cv_args)
+        if len(qubits) != expected_qubits or len(params) != expected_params:
+            raise ValueError(
+                f"Circuit.from_dict(): gate '{name}' at index {index} expects "
+                f"{expected_qubits} qubits and {expected_params} parameters, got "
+                f"{len(qubits)} qubits and {len(params)} parameters"
+            )
+        # XX/YY/ZZ records already contain QuantumFlow's angle/pi value.
+        # Preserve parameters verbatim, including supported symbolic values.
+        self._qf += constructor(*params, *qubits)
+
     @classmethod
     def from_dict(cls, data: dict) -> Circuit:
-        """Reconstruct circuit from dictionary.
+        """Reconstruct a circuit from the gate records produced by to_dict().
+
+        Restores standard gates supported by the importers without changing
+        their parameter conventions or the dictionary schema. Unknown gates
+        raise rather than disappearing. In particular, UnitaryGate cannot be
+        restored because its matrix is absent from the serialized record.
+        Parameters are preserved in memory; symbolic values are not converted
+        to floats or guaranteed to be JSON-serializable.
 
         Args:
             data: Dictionary from to_dict().
 
         Returns:
             Reconstructed Circuit instance.
+
+        Raises:
+            ValueError: If a gate is unsupported or its qubit/parameter counts
+                do not match its constructor. The message identifies the gate
+                and its zero-based index.
         """
         circuit = cls()
-        gate_map = {
-            "H": lambda q, p: circuit.h(q[0]),
-            "X": lambda q, p: circuit.x(q[0]),
-            "Y": lambda q, p: circuit.y(q[0]),
-            "Z": lambda q, p: circuit.z(q[0]),
-            "S": lambda q, p: circuit.s(q[0]),
-            "T": lambda q, p: circuit.t(q[0]),
-            "Rx": lambda q, p: circuit.rx(p[0], q[0]),
-            "Ry": lambda q, p: circuit.ry(p[0], q[0]),
-            "Rz": lambda q, p: circuit.rz(p[0], q[0]),
-            "CNot": lambda q, p: circuit.cnot(q[0], q[1]),
-            "CZ": lambda q, p: circuit.cz(q[0], q[1]),
-            "Swap": lambda q, p: circuit.swap(q[0], q[1]),
-        }
-        for gate_data in data.get("gates", []):
-            gate_name = gate_data["gate"]
-            qubits = gate_data["qubits"]
-            params = gate_data.get("params", [])
-            if gate_name in gate_map:
-                gate_map[gate_name](qubits, params)
+        for index, gate_data in enumerate(data.get("gates", [])):
+            circuit._append_serialized_gate(gate_data, index)
         return circuit
 
     # Utility methods
