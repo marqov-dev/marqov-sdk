@@ -9,10 +9,9 @@ import quantumflow as qf
 from marqov.circuits import Circuit
 
 # Derive Braket coverage from its pinned converter map, not the reader map.
-# XY is mapped but not importable in marqov-quantumflow 1.0.0 (marqov-sdk#195).
 from quantumflow.xbraket import BRAKET_TO_QF
 
-BRAKET_GATES = sorted(name for name in BRAKET_TO_QF if name != "XY")
+BRAKET_GATES = sorted(BRAKET_TO_QF)
 
 
 def imported_braket_gate(name, angle):
@@ -40,14 +39,8 @@ def test_braket_gate_roundtrip(name, angle):
 
 
 def test_importer_gate_inventory():
-    assert len(BRAKET_GATES) == 30
+    assert len(BRAKET_GATES) == 31
     assert set(Circuit._DICT_GATE_MAP) == {BRAKET_TO_QF[name] for name in BRAKET_GATES}
-    # Once XY becomes importable, deliberately update the inventory and tests.
-    pytest.importorskip("braket")
-    from braket.circuits import Circuit as BK
-
-    with pytest.raises(UnboundLocalError):
-        Circuit.from_braket(BK().xy(0, 1, 0.37))
 
 
 def test_asymmetric_roundtrip_preserves_complex_amplitudes():
@@ -137,3 +130,35 @@ def test_to_dict_literal_fixtures():
         {"gate": "V", "qubits": [1], "params": []},
         {"gate": "ISwap", "qubits": [1, 0], "params": []},
     ]}
+
+
+@pytest.mark.parametrize("angle", [0.37, -1.1, 4.0])
+@pytest.mark.parametrize("targets", [(0, 1), (1, 0)])
+def test_xy_import_and_dictionary_match_braket(angle, targets):
+    pytest.importorskip("braket")
+    from braket.circuits import Circuit as BK
+
+    source = BK().h(0).rx(1, 0.83).xy(*targets, angle).rz(0, -0.29)
+    original = Circuit.from_braket(source)
+    data = json.loads(json.dumps(original.to_dict()))
+    assert data["gates"][2] == {
+        "gate": "XY", "qubits": list(targets), "params": [-angle / (2 * np.pi)],
+    }
+    restored = Circuit.from_dict(data)
+    assert restored.to_dict() == data
+    # Braket and QuantumFlow order active axes |q0 q1>, most significant first.
+    np.testing.assert_allclose(
+        original._qf.asgate().asoperator(), source.to_unitary(), atol=1e-12, rtol=1e-12
+    )
+    np.testing.assert_allclose(
+        restored._qf.asgate().asoperator(), source.to_unitary(), atol=1e-12, rtol=1e-12
+    )
+
+
+@pytest.mark.parametrize("modifiers", [{"control": 2}, {"power": 0.5}])
+def test_xy_still_refuses_instruction_modifiers(modifiers):
+    pytest.importorskip("braket")
+    from braket.circuits import Circuit as BK
+
+    with pytest.raises(NotImplementedError, match="gate 'XY' at index 0"):
+        Circuit.from_braket(BK().xy(1, 0, 0.37, **modifiers))

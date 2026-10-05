@@ -830,15 +830,6 @@ wheels = [
 ]
 
 [[package]]
-name = "decorator"
-version = "4.4.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/da/93/84fa12f2dc341f8cf5f022ee09e109961055749df2d0c75c5f98746cfe6c/decorator-4.4.2.tar.gz", hash = "sha256:e3a62f0520172440ca0dcc823749319382e377f37f140a0b99ef45fecb84bfe7", size = 33629, upload-time = "2020-02-29T05:24:43.312Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ed/1b/72a1821152d07cf1d8b6fce298aeb06a7eb90f4d6d41acec9861e7cc6df0/decorator-4.4.2-py2.py3-none-any.whl", hash = "sha256:41fa54c2a0cc4ba648be4fd43cff00aedf5b9465c9bf18d64325bc225f08f760", size = 9239, upload-time = "2020-02-29T05:24:45.993Z" },
-]
-
-[[package]]
 name = "deprecated"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1549,7 +1540,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.0.0" },
     { name = "cloudpickle", specifier = ">=2.2.1" },
     { name = "cudaq", marker = "sys_platform == 'linux' and extra == 'cudaq'", specifier = ">=0.14.2" },
-    { name = "marqov-quantumflow", specifier = "==1.0.0" },
+    { name = "marqov-quantumflow", specifier = "==1.0.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
     { name = "numpy", specifier = ">=1.26.0,<2.4" },
     { name = "pennylane", marker = "extra == 'all'", specifier = ">=0.45.0" },
@@ -1603,10 +1594,9 @@ provides-extras = ["all", "azure", "braket", "cirq", "cudaq", "dev", "ibm", "ion
 
 [[package]]
 name = "marqov-quantumflow"
-version = "1.0.0"
+version = "1.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "decorator" },
     { name = "matplotlib" },
     { name = "networkx" },
     { name = "numpy" },
@@ -1616,9 +1606,9 @@ dependencies = [
     { name = "sympy" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f3/c0/84b1cc02f1c949ba4df75a40ff8fabad5410e958b89a2c6aaeacacf60c1f/marqov_quantumflow-1.0.0.tar.gz", hash = "sha256:8b70d57f275042477aaf9b99ed0a2b8353b33572008b95a1ff75b9b7f102e851", size = 181279, upload-time = "2026-06-26T23:41:12.854Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/90/60/01991400b6aeb37011f25c0254d0b5c86eca99de0073c272571dc080016c/marqov_quantumflow-1.0.1.tar.gz", hash = "sha256:1214b4ec08852ae5e6cadecc4c5ec69ed96f90d3c8bc22a060a10064061d8343", size = 184434, upload-time = "2026-10-05T21:33:51.859Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/01/29/632fa9e1b93d47890c4424142ab8dba53284269be40cb195faedcb1d85d2/marqov_quantumflow-1.0.0-py3-none-any.whl", hash = "sha256:345f6bcd27657a12c6a27d6fa2758abc286e6895e1d04815dd643d06035c018b", size = 191603, upload-time = "2026-06-26T23:41:11.435Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/d6/878f264b9531a2fc7be1685accbd6e2748fe518cc7e00d2cfb3a3211b43d/marqov_quantumflow-1.0.1-py3-none-any.whl", hash = "sha256:31e05e70f5f316bf814fcfb318c5c64cf4432891314f1909be47a5dc3258a75d", size = 191506, upload-time = "2026-10-05T21:33:50.44Z" },
 ]
 
 [[package]]

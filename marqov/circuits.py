@@ -1210,6 +1210,7 @@ class Circuit:
         "V_H": qf.V_H,
         "X": qf.X,
         "XX": qf.XX,
+        "XY": qf.XY,
         "Y": qf.Y,
         "YY": qf.YY,
         "Z": qf.Z,

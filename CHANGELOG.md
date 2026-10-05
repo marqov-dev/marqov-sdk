@@ -9,6 +9,13 @@ release.
 
 ### Fixed
 
+- Braket XY imports use their own angle instead of a previous instruction's
+  arguments, and dictionary reconstruction now restores XY with its existing
+  QuantumFlow parameter convention and qubit order. Requires the corrected
+  marqov-quantumflow 1.0.1 dependency. Re-import earlier XY circuits from their
+  Braket source: existing records cannot reveal an angle already lost during
+  the old import. (marqov-sdk#195)
+
 - Braket circuit imports reject instruction-level controls and non-default
   powers before conversion instead of silently losing them. Explicit gates
   such as CNot and unmodified imports remain supported. (marqov-sdk#192)
