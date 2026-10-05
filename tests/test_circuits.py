@@ -918,9 +918,77 @@ class TestOpenQASM:
 
     def test_malformed_qasm_raises(self) -> None:
         """Malformed QASM string raises an error."""
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             Circuit.from_openqasm("this is not valid QASM")
 
+
+    @pytest.mark.parametrize("prefix", [
+        "// leading comment\n\n/* block\ncomment */\n",
+        "  /* OPENQASM 2.0; */ // ignore this header\n",
+        "/* first */ /* second */\n\n",
+    ])
+    def test_commented_qasm3_preserves_complex_state(self, prefix) -> None:
+        import numpy as np
+
+        original = Circuit().h(0).rx(0.37, 1).cnot(1, 0).ry(-0.29, 0)
+        restored = Circuit.from_openqasm(prefix + original.to_openqasm(version=3))
+        np.testing.assert_allclose(
+            restored.simulate().tensor.flatten(),
+            original.simulate().tensor.flatten(),
+            atol=1e-12, rtol=1e-12,
+        )
+
+    def test_many_leading_comments_preserve_version_detection(self) -> None:
+        source = 'OPENQASM 3.0; include "stdgates.inc"; qubit q; h q;'
+        prefix = "/*" + "*//*" * 1000 + "*/\n"
+        restored = Circuit.from_openqasm(prefix + source)
+        assert restored.num_qubits == 1
+
+    @pytest.mark.parametrize("version", [2, 3])
+    def test_parser_error_is_chained_value_error(self, version) -> None:
+        from qiskit.qasm2 import QASM2ParseError
+        from qiskit.qasm3 import QASM3ImporterError
+
+        with pytest.raises(ValueError, match=f"OpenQASM {version}") as info:
+            Circuit.from_openqasm(f"OPENQASM {version}.0;\ninvalid syntax;\n")
+        expected = QASM2ParseError if version == 2 else QASM3ImporterError
+        assert isinstance(info.value.__cause__, expected)
+        assert str(info.value.__cause__) in str(info.value)
+
+    def test_headerless_qasm_defaults_to_version2(self) -> None:
+        restored = Circuit.from_openqasm('include "qelib1.inc"; qreg q[1]; h q[0];')
+        assert restored.num_qubits == 1
+
+    def test_missing_qasm3_dependency_still_raises_import_error(self, monkeypatch) -> None:
+        from qiskit import qasm3
+
+        def missing_dependency(_):
+            raise ImportError("missing optional QASM 3 importer")
+
+        monkeypatch.setattr(qasm3, "loads", missing_dependency)
+        with pytest.raises(ImportError, match="missing optional QASM 3 importer"):
+            Circuit.from_openqasm("OPENQASM 3.0;")
+
+    def test_non_comment_preamble_keeps_qasm2_default(self, monkeypatch) -> None:
+        from qiskit import qasm2
+
+        calls = []
+
+        def parser(source):
+            calls.append(source)
+            raise qasm2.QASM2ParseError("preamble is not supported")
+
+        monkeypatch.setattr(qasm2, "loads", parser)
+        source = "pragma test;\nOPENQASM 3.0;"
+        with pytest.raises(ValueError, match="OpenQASM 2"):
+            Circuit.from_openqasm(source)
+        assert calls == [source]
+
+    def test_qasm3_conversion_error_is_not_wrapped(self) -> None:
+        qasm = 'OPENQASM 3.0; qubit q; reset q;'
+        with pytest.raises(ValueError, match="does not support 'reset'") as info:
+            Circuit.from_openqasm(qasm)
+        assert info.value.__cause__ is None
 
 class TestSerialization:
     """Tests for circuit serialization."""
