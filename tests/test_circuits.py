@@ -877,7 +877,10 @@ class TestSerialization:
         original = Circuit().h(0).cnot(0, 1).x(1)
         data = original.to_dict()
         restored = Circuit.from_dict(data)
-        assert restored.num_qubits == original.num_qubits
+        import numpy as np
+
+        assert restored.to_dict() == data
+        assert np.allclose(original.simulate().tensor, restored.simulate().tensor)
 
     def test_bell_state_roundtrip(self) -> None:
         """Bell state survives serialization roundtrip."""
@@ -889,7 +892,7 @@ class TestSerialization:
         import numpy as np
         orig_state = original.simulate().tensor.flatten()
         rest_state = restored.simulate().tensor.flatten()
-        assert np.allclose(np.abs(orig_state), np.abs(rest_state))
+        assert np.allclose(orig_state, rest_state)
 
 
 class TestToPennylane:
