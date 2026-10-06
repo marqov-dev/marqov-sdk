@@ -9,6 +9,10 @@ release.
 
 ### Fixed
 
+- Workflow graphs reject missing dependencies before planning and duplicate task
+  IDs before mutation. Generated task IDs use the full UUID to reduce collision
+  risk. (marqov-sdk#143)
+
 - Decorator and workflow graph tests now fail normally on regressions instead of
   hiding failures behind a blanket expected-failure marker. (marqov-sdk#146)
 
