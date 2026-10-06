@@ -9,6 +9,12 @@ release.
 
 ### Fixed
 
+- Explicit native Braket export preserves sparse source labels in the Rigetti
+  Rx/Rz/CZ/XY basis. Both submission paths share validation and support opt-in
+  label preservation with verbatim and disabled rewiring; the executor now
+  forwards explicitly supplied rewiring options. Ordinary logical conversion
+  stays unchanged and hardware mapping remains unqualified. (marqov-sdk#207)
+
 - Braket executor results retain count-origin evidence, requested and observed
   shot totals, and provider measured-wire order in additive provenance metadata.
   Probability-derived and unknown counts are explicitly ineligible for raw-shot

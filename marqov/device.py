@@ -7,6 +7,7 @@ from typing import Any
 
 from marqov.backends import is_azure, is_braket, is_ibm, is_simulator
 from marqov.circuits import Circuit
+from marqov._braket_native import prepare_braket, validate_options
 from marqov._optional import require_braket
 
 
@@ -357,7 +358,8 @@ class MarqovDevice:
         # Braket format: local simulators and AWS Braket devices
         return marqov_circuit.to_braket()
 
-    def run(self, circuit, shots: int = 1000, **kwargs) -> dict[str, int]:
+    def run(self, circuit, shots: int = 1000, *, preserve_qubit_labels: bool = False,
+            **kwargs) -> dict[str, int]:
         """Execute a circuit and return measurement counts.
 
         Accepts any supported circuit type — automatically normalizes to
@@ -367,6 +369,10 @@ class MarqovDevice:
             circuit: Any supported circuit (Braket, Qiskit, Cirq, PennyLane,
                      QASM string, or marqov.Circuit).
             shots: Number of measurement shots.
+            preserve_qubit_labels: Opt in to Rigetti native label preservation.
+                      Requires cloud Braket Rigetti QPU, verbatim=True and
+                      disable_qubit_rewiring=True. Rejects other backends.
+                      No physical placement or capability qualification is implied.
             **kwargs: Backend-specific options, honored only on the cloud
                       AWS Braket path (`is_braket(self._params)` below) — the
                       local/`marqov-sim` path (a Braket `LocalSimulator`) does
@@ -382,7 +388,18 @@ class MarqovDevice:
             Dictionary mapping bitstring outcomes to their counts.
         """
         marqov_circuit = self._normalize_circuit(circuit)
-        native_circuit = self._to_backend_format(marqov_circuit)
+        cloud_braket = (self._backend not in ("local", "marqov-sim")
+                        and not is_ibm(self._params) and not is_azure(self._params)
+                        and is_braket(self._params))
+        if cloud_braket or preserve_qubit_labels is not False:
+            validate_options(preserve_qubit_labels, kwargs,
+                             self._params.get("device_arn") if cloud_braket else None)
+        native_circuit = (
+            prepare_braket(marqov_circuit, preserve_qubit_labels=preserve_qubit_labels,
+                           options=kwargs, device_arn=self._params["device_arn"],
+                           converted=None if preserve_qubit_labels else self._to_backend_format(marqov_circuit))
+            if cloud_braket else self._to_backend_format(marqov_circuit)
+        )
         device = self._get_provider_device()
         self._validate_circuit(marqov_circuit)
 
@@ -435,36 +452,6 @@ class MarqovDevice:
                     raise ValueError(
                         "s3_destination_folder or s3_bucket+s3_prefix required for AWS device execution"
                     )
-            # Wrap in a verbatim box for devices that require it (e.g. Rigetti
-            # QPUs), mirroring BraketExecutor. Without it, the compiler folds
-            # Clifford-plus-inverse sequences to identity and survival ≈ 1.0 at
-            # every length. The circuit must already use only native gates —
-            # e.g. clifford_to_circuit_native() / SRBConfig.use_native_gates=True.
-            # The allowed set is Rigetti-specific; make this a device-aware
-            # lookup when IQM or other verbatim providers are added.
-            if kwargs.get("verbatim"):
-                from braket.circuits import Circuit as BraketCircuit
-
-                # Measure is deliberately NOT allowed — see BraketExecutor.execute:
-                # Braket refuses to box a measured subcircuit and adds measurement
-                # implicitly via `shots`.
-                _RIGETTI_VERBATIM_ALLOWED = {"rx", "rz", "cz", "xy"}
-                non_native = [
-                    instr.operator.name
-                    for instr in native_circuit.instructions
-                    if instr.operator.name.lower() not in _RIGETTI_VERBATIM_ALLOWED
-                ]
-                if non_native:
-                    raise ValueError(
-                        f"verbatim=True requires Rigetti native gates only "
-                        f"(1Q: Rx/Rz, 2Q: CZ/XY; no explicit Measure — Braket cannot box a "
-                        f"measured subcircuit and adds measurement implicitly via shots). "
-                        f"Found non-native gates: {sorted(set(non_native))}. "
-                        f"Use clifford_to_circuit_native() or set "
-                        f"SRBConfig.use_native_gates=True."
-                    )
-                native_circuit = BraketCircuit().add_verbatim_box(native_circuit)
-
             try:
                 disable_rewiring = kwargs.get("disable_qubit_rewiring", False)
 
