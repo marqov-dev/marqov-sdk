@@ -33,6 +33,7 @@ except ModuleNotFoundError as error:
         raise
     boto3 = AwsDevice = AwsSession = BraketCircuit = None
 
+from marqov.executors._braket_provenance import measurement_provenance
 from marqov.executors._counts import allocate_counts
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 
@@ -272,6 +273,7 @@ class BraketExecutor(BaseExecutor):
             pass
 
         counts = dict(result.measurement_counts)
+        probability_fallback = False
         if not counts:
             # Some QPU backends (e.g. IonQ Forte-1) return measurementProbabilities
             # instead of raw shot counts. Convert to synthetic counts using shots.
@@ -282,6 +284,7 @@ class BraketExecutor(BaseExecutor):
                 # round to 333 each = 999), and downstream code divides by the
                 # total assuming it equals `shots`.
                 counts = allocate_counts(dict(probs), shots)
+                probability_fallback = True
 
         return ExecutionResult(
             counts=counts,
@@ -290,6 +293,9 @@ class BraketExecutor(BaseExecutor):
             shots=shots,
             raw_result=result,
             metadata={
+                "measurement_provenance": measurement_provenance(
+                    result, counts, shots, probability_fallback=probability_fallback,
+                ),
                 "task_arn": task.id,
                 "device_name": device.name,
                 "s3_location": f"s3://{self.config.s3_bucket}/{self.config.s3_prefix}",
