@@ -9,6 +9,10 @@ release.
 
 ### Fixed
 
+- pytket export accepts gates supported by its Qiskit converter, including
+  imported Braket V and ISwap circuits. Converter failures retain the documented
+  `NotImplementedError` with the original message and cause. (marqov-sdk#155)
+
 - OpenQASM imports detect version headers after leading comments and raise the
   documented `ValueError` for parse failures, retaining the detected version and
   original parser exception. (marqov-sdk#156)

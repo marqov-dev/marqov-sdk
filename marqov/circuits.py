@@ -265,17 +265,10 @@ class Circuit:
 
         qiskit_circuit = self.to_qiskit()
 
-        for instruction in qiskit_circuit.data:
-            name = instruction.operation.name
-            if name in self._SKIP_INSTRUCTIONS:
-                continue
-            if name not in self._QISKIT_GATE_MAP:
-                raise NotImplementedError(
-                    f"Unsupported gate '{name}' after decomposition. "
-                    f"Supported gates: {', '.join(sorted(self._QISKIT_GATE_MAP))}"
-                )
-
-        return qiskit_to_tk(qiskit_circuit)
+        try:
+            return qiskit_to_tk(qiskit_circuit)
+        except Exception as exc:
+            raise NotImplementedError(f"Circuit.to_pytket(): conversion failed: {exc}") from exc
 
     def to_openqasm(self, version: int = 2) -> str:
         """Export circuit as an OpenQASM string.
