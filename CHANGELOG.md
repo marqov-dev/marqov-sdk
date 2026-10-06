@@ -9,6 +9,11 @@ release.
 
 ### Fixed
 
+- Braket executor results retain count-origin evidence, requested and observed
+  shot totals, and provider measured-wire order in additive provenance metadata.
+  Probability-derived and unknown counts are explicitly ineligible for raw-shot
+  analysis; physical mapping remains unqualified. (marqov-sdk#205)
+
 - pytket export accepts gates supported by its Qiskit converter, including
   imported Braket V and ISwap circuits. Converter failures retain the documented
   `NotImplementedError` with the original message and cause. (marqov-sdk#155)
