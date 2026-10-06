@@ -62,3 +62,24 @@ availability, pulse timing or overlap. Wire/export and option parity remain
 separate work in marqov-sdk#154, marqov-sdk#66 and marqov-sdk#77. Hosted transport
 must preserve and verify this evidence separately; this local executor addition
 is not hosted or hardware qualification.
+
+## Timing metadata and completed-result preservation
+
+After obtaining a result, the executor requests cached task metadata with
+`use_cached_value=True`. If the cache is empty, Braket may still perform a
+metadata read. Failures in this optional lookup are logged at debug level and
+cannot discard counts or `raw_result`.
+
+`execution_duration_ms` is a nonnegative integer only when the result contains
+`additional_metadata.simulatorMetadata.executionDuration`, which Braket defines
+in milliseconds. A real zero is preserved. Missing, invalid or inaccessible
+optional timing becomes `None`; the legacy `execution_time_ms` then falls back
+to local wall time. No duration is inferred from Rigetti's `programDuration` or
+runtime estimates. See the [Braket simulator result schema](https://amazon-braket-schemas-python.readthedocs.io/en/latest/_apidoc/braket.task_result.simulator_metadata_v1.html).
+
+`queue_time_ms` remains `None`: wall time includes conversion, provider polling
+and result download, so subtracting execution duration does not measure queue
+wait. `wall_time_ms` remains the local elapsed time through result retrieval.
+Neither these fields nor calibration timing qualifies executed pulse overlap.
+The Braket/Azure `poll_interval_seconds` fields remain unused; these executors
+wait through their vendor SDKs.

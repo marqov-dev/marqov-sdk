@@ -60,7 +60,8 @@ class AzureQuantumExecutorConfig:
         target: Target device name (e.g., "ionq.simulator", "quantinuum.qpu.h2-1").
         framework: Quantum framework to use ("qiskit" or "cirq").
         timeout_seconds: Maximum time to wait for job completion. None for no timeout.
-        poll_interval_seconds: Polling interval for job completion.
+        poll_interval_seconds: Currently unused; execution blocks on the vendor
+            SDK's wait for job completion.
     """
 
     subscription_id: str
