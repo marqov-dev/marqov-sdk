@@ -9,6 +9,9 @@ release.
 
 ### Fixed
 
+- Decorator and workflow graph tests now fail normally on regressions instead of
+  hiding failures behind a blanket expected-failure marker. (marqov-sdk#146)
+
 - Both development benchmark harnesses retain measured zero quantum times in
   summaries and distinguish them from missing timing data. Saved result
   timestamps include the UTC offset; result filenames keep their existing shape.

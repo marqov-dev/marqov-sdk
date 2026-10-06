@@ -1,22 +1,10 @@
 """Tests for @task/@workflow decorators."""
 
-import pytest
 from marqov import task, workflow
 from marqov.workflows import TransportGraph, TaskProxy
 
-# KNOWN PRE-EXISTING ISSUE. Approach A has landed: @task no longer cloudpickles at
-# DECORATION time (that import-time landmine is fixed — see
-# tests/test_task_serialization.py, which enforces it). What remains is the RESIDUAL
-# case this marker guards: these tests decorate *local* functions and then build a
-# workflow graph, so the by-value cloudpickle now happens at GRAPH-BUILD; under the
-# full suite (with the [all] heavy backends imported) that can still overflow into a
-# RecursionError (segfault on macOS/musl). Fully removing this needs the by-reference
-# work (require importable/module-level task functions; see the alignment spec).
-# strict=False: they pass in isolation, so an unexpected pass must not fail the run.
-pytestmark = pytest.mark.xfail(
-    reason="cloudpickle by-value recursion at graph-build for local @task fns under heavy imports",
-    strict=False,
-)
+# Decoration-time serialization is covered by tests/test_task_serialization.py.
+# Graph-build regressions here must fail normally rather than be masked.
 
 
 class TestTaskDecorator:
