@@ -9,6 +9,11 @@ release.
 
 ### Fixed
 
+- Both development benchmark harnesses retain measured zero quantum times in
+  summaries and distinguish them from missing timing data. Saved result
+  timestamps include the UTC offset; result filenames keep their existing shape.
+  (marqov-sdk#164)
+
 - pytket export accepts gates supported by its Qiskit converter, including
   imported Braket V and ISwap circuits. Converter failures retain the documented
   `NotImplementedError` with the original message and cause. (marqov-sdk#155)

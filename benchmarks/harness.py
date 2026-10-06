@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -65,7 +65,7 @@ def run_benchmark(
             wall_time_seconds=wall_time,
             quantum_time_seconds=quantum_time,
             result_data=result_data,
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             backend=backend,
             error=error,
         ))
@@ -79,7 +79,7 @@ def save_results(results: list[BenchmarkResult], output_dir: Path, suffix: str =
 
     if results:
         name = results[0].name
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"{name}_{timestamp}{suffix}.json"
     else:
         filename = "empty_results.json"
@@ -111,14 +111,14 @@ def print_summary(results: list[BenchmarkResult]) -> None:
 
     if successful:
         wall_times = [r.wall_time_seconds for r in successful]
-        print(f"\nWall time (seconds):")
+        print("\nWall time (seconds):")
         print(f"  Min: {min(wall_times):.3f}")
         print(f"  Max: {max(wall_times):.3f}")
         print(f"  Mean: {sum(wall_times) / len(wall_times):.3f}")
 
-        quantum_times = [r.quantum_time_seconds for r in successful if r.quantum_time_seconds]
+        quantum_times = [r.quantum_time_seconds for r in successful if r.quantum_time_seconds is not None]
         if quantum_times:
-            print(f"\nQuantum time (seconds):")
+            print("\nQuantum time (seconds):")
             print(f"  Min: {min(quantum_times):.3f}")
             print(f"  Max: {max(quantum_times):.3f}")
             print(f"  Mean: {sum(quantum_times) / len(quantum_times):.3f}")
