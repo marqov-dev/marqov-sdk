@@ -194,7 +194,7 @@ class TestBraketExecutor:
         mock_task = MagicMock()
         mock_task.id = "arn:aws:braket:us-east-1:123456789:quantum-task/abc123"
         mock_task.result.return_value = mock_result
-        mock_task.metadata.return_value = {"executionDuration": 150}
+        mock_task.metadata.return_value = {"status": "COMPLETED", "shots": 1000}
 
         mock_device = MagicMock()
         mock_device.name = "SV1"

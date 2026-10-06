@@ -9,6 +9,11 @@ release.
 
 ### Fixed
 
+- Braket auxiliary metadata failures no longer discard completed results. Timing
+  reads documented simulator result metadata, preserves real zero durations, and
+  reports unknown execution/queue duration as None. Braket and Azure polling
+  config documentation now states that the interval is currently unused. (marqov-sdk#135)
+
 - Explicit native Braket export preserves sparse source labels in the Rigetti
   Rx/Rz/CZ/XY basis. Both submission paths share validation and support opt-in
   label preservation with verbatim and disabled rewiring; the executor now
