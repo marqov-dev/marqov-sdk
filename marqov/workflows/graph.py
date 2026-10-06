@@ -137,7 +137,16 @@ class TransportGraph:
 
         Args:
             node: The task node to add.
+
+        Raises:
+            ValueError: If the node ID is already in the graph.
         """
+        if node.id in self.nodes:
+            existing = self.nodes[node.id]
+            raise ValueError(
+                f"Duplicate node id '{node.id}' for '{node.func_name}'; "
+                f"already used by '{existing.func_name}'"
+            )
         self.nodes[node.id] = node
         # Add edges from dependencies to this node
         for dep_id in node.dependencies:
@@ -170,8 +179,25 @@ class TransportGraph:
             can execute in parallel.
 
         Raises:
-            ValueError: If a cycle is detected in the graph.
+            ValueError: If a dependency is missing or a cycle is detected.
         """
+        for node_id, node in self.nodes.items():
+            for dep_id in node.dependencies:
+                if dep_id not in self.nodes:
+                    raise ValueError(
+                        f"Node '{node_id}' dependency '{dep_id}' is not in the graph"
+                    )
+        for from_id, to_id in self.edges:
+            if from_id not in self.nodes:
+                raise ValueError(
+                    f"Node '{to_id}' dependency '{from_id}' is not in the graph"
+                )
+            if to_id not in self.nodes:
+                raise ValueError(
+                    f"Depending node '{to_id}' is not in the graph "
+                    f"for dependency '{from_id}'"
+                )
+
         if not self.nodes:
             return []
 
@@ -269,9 +295,9 @@ def generate_node_id() -> str:
     """Generate a unique node ID.
 
     Returns:
-        Short UUID-based identifier.
+        Full UUID4 hex identifier (32 characters).
     """
-    return uuid.uuid4().hex[:8]
+    return uuid.uuid4().hex
 
 
 def extract_dependencies(args: tuple[Any, ...], kwargs: dict[str, Any]) -> list[str]:
