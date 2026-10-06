@@ -9,6 +9,11 @@ release.
 
 ### Fixed
 
+- Both development benchmark harnesses retain measured zero quantum times in
+  summaries and distinguish them from missing timing data. Saved result
+  timestamps include the UTC offset; result filenames keep their existing shape.
+  (marqov-sdk#164)
+
 - Braket auxiliary metadata failures no longer discard completed results. Timing
   reads documented simulator result metadata, preserves real zero durations, and
   reports unknown execution/queue duration as None. Braket and Azure polling
