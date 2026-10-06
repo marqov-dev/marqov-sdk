@@ -221,6 +221,19 @@ class Circuit:
         require_braket()
         return qf.circuit_to_braket(self._qf, translate=True)
 
+    def to_braket_native(self) -> BraketCircuit:
+        """Export the Rigetti Rx/Rz/CZ/XY basis preserving source qubit labels.
+
+        No gate translation, wire compaction or idle-wire padding occurs. Rejects
+        empty circuits, unsupported gates, invalid labels and nonfinite/symbolic
+        parameters with ValueError. This does not certify hardware placement or
+        device capability. XY parameters are converted from QuantumFlow turns
+        to Braket radians; Rx/Rz parameters already use radians.
+        """
+        from marqov._braket_native import native_braket
+
+        return native_braket(self._qf)
+
     def to_qiskit(self):
         """Convert to IBM Qiskit circuit.
 
