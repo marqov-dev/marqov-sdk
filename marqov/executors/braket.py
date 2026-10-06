@@ -19,9 +19,11 @@ Example:
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from functools import partial
+from numbers import Integral
 from typing import TYPE_CHECKING, Any
 
 try:
@@ -40,6 +42,22 @@ from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 
 if TYPE_CHECKING:
     from marqov.circuits import Circuit
+
+
+logger = logging.getLogger(__name__)
+
+
+def _simulator_execution_duration_ms(result: Any) -> int | None:
+    """Read the documented simulator duration, never infer QPU or queue timing."""
+    try:
+        additional = getattr(result, "additional_metadata", None)
+        simulator = getattr(additional, "simulatorMetadata", None)
+        duration = getattr(simulator, "executionDuration", None)
+        if isinstance(duration, Integral) and not isinstance(duration, bool) and duration >= 0:
+            return int(duration)
+    except Exception:
+        logger.debug("Optional Braket result timing metadata could not be read", exc_info=True)
+    return None
 
 
 def _extract_region_from_arn(arn: str) -> str:
@@ -71,7 +89,8 @@ class BraketExecutorConfig:
         s3_prefix: Prefix for S3 objects. Defaults to "marqov".
         aws_profile: AWS profile name. None uses default credentials.
         aws_region: AWS region. Inferred from device_arn if not provided.
-        poll_interval_seconds: Polling interval for task completion.
+        poll_interval_seconds: Currently unused; execution blocks on the vendor
+            SDK's wait for task completion.
         timeout_seconds: Maximum time to wait for task completion. None for no timeout.
     """
 
@@ -238,17 +257,17 @@ class BraketExecutor(BaseExecutor):
 
         wall_time = time.perf_counter() - start_time
 
-        # Extract timing from task metadata
-        execution_duration_ms = 0
-        queue_time_ms = None
-
+        # Auxiliary metadata cannot invalidate a successfully retrieved result.
+        # Braket polling normally populated this cache; request no extra refresh.
         try:
-            metadata = await loop.run_in_executor(None, task.metadata)
-            if metadata:
-                execution_duration_ms = metadata.get("executionDuration", 0)
-                queue_time_ms = (wall_time * 1000) - execution_duration_ms if execution_duration_ms else None
-        except AttributeError:
-            pass
+            await loop.run_in_executor(None, partial(task.metadata, use_cached_value=True))
+        except Exception:
+            logger.debug("Optional Braket task metadata lookup failed after result retrieval", exc_info=True)
+
+        execution_duration_ms = _simulator_execution_duration_ms(result)
+        # Local wall time includes conversion, polling and download, so its
+        # difference from execution duration cannot establish measured queue time.
+        queue_time_ms = None
 
         counts = dict(result.measurement_counts)
         probability_fallback = False
@@ -267,7 +286,7 @@ class BraketExecutor(BaseExecutor):
         return ExecutionResult(
             counts=counts,
             backend=self.config.device_arn,
-            execution_time_ms=execution_duration_ms if execution_duration_ms else wall_time * 1000,
+            execution_time_ms=execution_duration_ms if execution_duration_ms is not None else wall_time * 1000,
             shots=shots,
             raw_result=result,
             metadata={
