@@ -33,6 +33,8 @@ except ModuleNotFoundError as error:
         raise
     boto3 = AwsDevice = AwsSession = BraketCircuit = None
 
+from marqov._braket_native import prepare_braket, validate_options
+from marqov.executors._braket_provenance import measurement_provenance
 from marqov.executors._counts import allocate_counts
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 
@@ -176,6 +178,8 @@ class BraketExecutor(BaseExecutor):
         self,
         circuit: Circuit,
         shots: int = 1000,
+        *,
+        preserve_qubit_labels: bool = False,
         **kwargs: Any,
     ) -> ExecutionResult:
         """Execute a circuit on the Braket device.
@@ -183,7 +187,11 @@ class BraketExecutor(BaseExecutor):
         Args:
             circuit: The quantum circuit to execute.
             shots: Number of measurement shots.
-            **kwargs: Additional backend-specific options.
+            preserve_qubit_labels: Opt in to Rigetti native export without wire
+                compaction. Requires verbatim=True and disable_qubit_rewiring=True.
+            **kwargs: Braket options verbatim and disable_qubit_rewiring must be
+                bools. Explicit rewiring is forwarded; omission preserves the
+                provider default. Physical placement/capability is unqualified.
 
         Returns:
             ExecutionResult with measurement counts and metadata.
@@ -196,45 +204,15 @@ class BraketExecutor(BaseExecutor):
         loop = asyncio.get_running_loop()
         start_time = time.perf_counter()
 
-        # Get device (lazy initialization)
+        validate_options(preserve_qubit_labels, kwargs, self.config.device_arn)
+        braket_circuit = prepare_braket(
+            circuit, preserve_qubit_labels=preserve_qubit_labels, options=kwargs,
+            device_arn=self.config.device_arn, circuit_factory=BraketCircuit,
+        )
         device = await self._get_device()
-
-        # Convert circuit to Braket format
-        braket_circuit = circuit.to_braket()
-
-        # Wrap in verbatim box for devices that require it (e.g. Rigetti QPUs).
-        # The circuit must already use only native gates — use
-        # clifford_to_circuit_native() / SRBConfig.use_native_gates=True for SRB.
-        #
-        # Allowed gate set is Rigetti-specific (Ankaa-3, Cepheus):
-        #   1Q: Rx(θ), Rz(θ)
-        #   2Q: CZ, XY(θ)
-        #   Measurement: Measure (explicit; Braket also handles it implicitly via shots)
-        #
-        # NOTE: This set is hardcoded for Rigetti and will need to become a
-        # device-aware lookup when IQM or other verbatim providers are added.
-        # IQM native set is {Rz, SX, CZ} — different from Rigetti.
-        if kwargs.get("verbatim"):
-            # Measure is deliberately NOT allowed: Braket refuses to box a subcircuit
-            # containing a measurement (`add_verbatim_box` -> "cannot measure a
-            # subcircuit inside a verbatim box"). Allow-listing it would let the caller
-            # clear this check and then hit Braket's opaque error instead of ours.
-            # Braket applies measurement implicitly via `shots`.
-            _RIGETTI_VERBATIM_ALLOWED = {"rx", "rz", "cz", "xy"}
-            non_native = [
-                instr.operator.name
-                for instr in braket_circuit.instructions
-                if instr.operator.name.lower() not in _RIGETTI_VERBATIM_ALLOWED
-            ]
-            if non_native:
-                raise ValueError(
-                    f"verbatim=True requires Rigetti native gates only "
-                    f"(1Q: Rx/Rz, 2Q: CZ/XY; no explicit Measure — Braket cannot box a "
-                    f"measured subcircuit and adds measurement implicitly via shots). "
-                    f"Found non-native gates: {sorted(set(non_native))}. "
-                    f"Use clifford_to_circuit_native() or set SRBConfig.use_native_gates=True."
-                )
-            braket_circuit = BraketCircuit().add_verbatim_box(braket_circuit)
+        run_options = {}
+        if "disable_qubit_rewiring" in kwargs:
+            run_options["disable_qubit_rewiring"] = kwargs["disable_qubit_rewiring"]
 
         # Submit task to AWS Braket
         task = await loop.run_in_executor(
@@ -244,6 +222,7 @@ class BraketExecutor(BaseExecutor):
                 braket_circuit,
                 s3_destination_folder=(self.config.s3_bucket, self.config.s3_prefix),
                 shots=shots,
+                **run_options,
             ),
         )
         self._current_task_arn = task.id
@@ -272,6 +251,7 @@ class BraketExecutor(BaseExecutor):
             pass
 
         counts = dict(result.measurement_counts)
+        probability_fallback = False
         if not counts:
             # Some QPU backends (e.g. IonQ Forte-1) return measurementProbabilities
             # instead of raw shot counts. Convert to synthetic counts using shots.
@@ -282,6 +262,7 @@ class BraketExecutor(BaseExecutor):
                 # round to 333 each = 999), and downstream code divides by the
                 # total assuming it equals `shots`.
                 counts = allocate_counts(dict(probs), shots)
+                probability_fallback = True
 
         return ExecutionResult(
             counts=counts,
@@ -290,6 +271,9 @@ class BraketExecutor(BaseExecutor):
             shots=shots,
             raw_result=result,
             metadata={
+                "measurement_provenance": measurement_provenance(
+                    result, counts, shots, probability_fallback=probability_fallback,
+                ),
                 "task_arn": task.id,
                 "device_name": device.name,
                 "s3_location": f"s3://{self.config.s3_bucket}/{self.config.s3_prefix}",

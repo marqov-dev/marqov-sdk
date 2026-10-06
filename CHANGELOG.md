@@ -14,6 +14,17 @@ release.
   timestamps include the UTC offset; result filenames keep their existing shape.
   (marqov-sdk#164)
 
+- Explicit native Braket export preserves sparse source labels in the Rigetti
+  Rx/Rz/CZ/XY basis. Both submission paths share validation and support opt-in
+  label preservation with verbatim and disabled rewiring; the executor now
+  forwards explicitly supplied rewiring options. Ordinary logical conversion
+  stays unchanged and hardware mapping remains unqualified. (marqov-sdk#207)
+
+- Braket executor results retain count-origin evidence, requested and observed
+  shot totals, and provider measured-wire order in additive provenance metadata.
+  Probability-derived and unknown counts are explicitly ineligible for raw-shot
+  analysis; physical mapping remains unqualified. (marqov-sdk#205)
+
 - pytket export accepts gates supported by its Qiskit converter, including
   imported Braket V and ISwap circuits. Converter failures retain the documented
   `NotImplementedError` with the original message and cause. (marqov-sdk#155)
