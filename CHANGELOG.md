@@ -9,6 +9,10 @@ release.
 
 ### Fixed
 
+- IonQ submission workers retain per-call job ownership after caller cancellation
+  and request cancellation once if a job ID arrives later. Uncertain acceptance
+  and failed cleanup are reported without replaying the POST. (marqov-sdk#216)
+
 - Release publication requires verification of the same built artifacts against
   the installed wheel, including fork ownership and separate QiliSDK coverage.
   Tag releases must descend from main. (marqov-sdk#165)
