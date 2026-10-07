@@ -30,7 +30,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
+import threading
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -55,6 +57,7 @@ _PENDING_STATUSES = frozenset({"submitted", "ready", "running"})
 # Per-request HTTP timeout (seconds). Overall job completion is bounded separately
 # by IonQExecutorConfig.timeout_seconds around polling.
 _HTTP_TIMEOUT_SECONDS = 30
+_LOGGER = logging.getLogger(__name__)
 
 # Default overall budget for a single job (seconds). Longer than any IonQ queue
 # the SDK has been used against, and still finite: an unconfigured executor must
@@ -287,9 +290,16 @@ class IonQExecutor(BaseExecutor):
         Raises:
             RuntimeError: If the job fails, is canceled by IonQ, or reports a
                 status the executor does not recognize.
-            ValueError: If no API key is available.
+            ValueError: If no API key is available or the returned job ID is unusable.
             TimeoutError: If the job does not finish within ``timeout_seconds``.
                 The remote job is sent a best-effort cancel first.
+
+        Cancellation during submission stops waiting without replaying the POST.
+        The request worker retains per-call ownership and requests cancellation
+        if it obtains a usable job ID. Cancellation notes and logs report
+        uncertain acceptance or failed cleanup. HTTP socket waits have finite
+        timeouts, but DNS, a continuing response or worker shutdown can take
+        longer; this is not a hard process deadline or guaranteed provider cancel.
         """
         circuit = self._validate_circuit(circuit)
 
@@ -305,10 +315,9 @@ class IonQExecutor(BaseExecutor):
         if self.config.noise_model and self.config.target == "simulator":
             payload["noise"] = {"model": self.config.noise_model}
 
-        # Submit the job and record its id for cancellation/tracking.
-        submit_response = await self._request("POST", "/jobs", json=payload)
+        # The submission worker owns cleanup if its caller stops waiting.
+        submit_response = await self._submit_job(payload)
         job_id = submit_response["id"]
-        self._current_job_id = job_id
 
         # Poll until the job reaches a terminal state. If the wait is cut short,
         # the job is still queued or running on IonQ's side, and billable, so ask
@@ -407,6 +416,103 @@ class IonQExecutor(BaseExecutor):
         with contextlib.suppress(Exception, asyncio.CancelledError):
             await self.cancel(job_id)
 
+    async def _submit_job(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Keep per-call ownership across cancellation of a blocking POST.
+
+        Cancellation returns promptly. The worker finishes its existing request
+        and attempts one cancellation if it obtains a job ID. No POST is replayed.
+        HTTP timeouts bound socket waits, not total thread/process lifetime.
+        """
+        loop = asyncio.get_running_loop()
+        base_url = self.config.base_url
+        headers = self._auth_headers()
+        lock = threading.Lock()
+        interrupted = False
+        job_id: str | None = None
+        cancel_claimed = False
+
+        def cancel_submitted(owned_id: str) -> None:
+            try:
+                self._request_sync(
+                    "PUT", f"{base_url}/jobs/{owned_id}/status/cancel", headers
+                )
+            except Exception:  # noqa: BLE001 - cleanup failures must not mask cancellation
+                _LOGGER.warning(
+                    "IonQ cancellation request failed for interrupted submission %r; "
+                    "the job may still be running", owned_id,
+                )
+            else:
+                _LOGGER.info("IonQ cancellation requested for interrupted submission %r", owned_id)
+
+        def submit() -> dict[str, Any]:
+            nonlocal job_id, cancel_claimed
+            try:
+                response = self._request_sync("POST", f"{base_url}/jobs", headers, json=payload)
+                owned_id = response["id"]
+                if not isinstance(owned_id, str) or not owned_id:
+                    raise ValueError("IonQ submission response has no usable job ID")
+            except Exception:
+                with lock:
+                    was_interrupted = interrupted
+                if was_interrupted:
+                    _LOGGER.warning(
+                        "IonQ submission ended without a usable job ID after cancellation; "
+                        "acceptance is unknown and the POST must not be replayed"
+                    )
+                raise
+            with lock:
+                job_id = owned_id
+                # Compatibility tracking only; cleanup uses this call's ID.
+                self._current_job_id = owned_id
+                needs_cancel = interrupted and not cancel_claimed
+                if needs_cancel:
+                    cancel_claimed = True
+            if needs_cancel:
+                cancel_submitted(owned_id)
+            return response
+
+        future = loop.run_in_executor(None, submit)
+        try:
+            return await future
+        except asyncio.CancelledError as error:
+            with lock:
+                interrupted = True
+                owned_id = job_id
+                needs_cancel = owned_id is not None and not cancel_claimed
+                if needs_cancel:
+                    cancel_claimed = True
+            if needs_cancel:
+                # The worker may have returned before the cancellation reached
+                # this coroutine. A new worker owns cleanup in that race.
+                try:
+                    loop.run_in_executor(None, cancel_submitted, owned_id)
+                except RuntimeError:
+                    _LOGGER.warning(
+                        "IonQ cleanup could not be scheduled for interrupted submission %r; "
+                        "the job may still be running", owned_id,
+                    )
+            error.add_note(
+                "IonQ submission was interrupted. Acceptance may be unresolved; "
+                "cleanup requests cancellation if a job ID is obtained. "
+                "Do not automatically resubmit. Cleanup does not guarantee cancellation."
+            )
+            _LOGGER.warning(
+                "IonQ submission interrupted (job ID %r); cancellation is best effort "
+                "and the POST must not be replayed", owned_id,
+            )
+            raise
+
+    def _request_sync(
+        self, method: str, url: str, headers: dict[str, str], **kwargs: Any
+    ) -> dict[str, Any]:
+        """Perform one request without retries; used by request/cleanup workers."""
+        response = self._do_request(
+            method, url, headers=headers, timeout=_HTTP_TIMEOUT_SECONDS, **kwargs
+        )
+        response.raise_for_status()
+        data: dict[str, Any] = response.json()
+        return data
+
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         """Make an authenticated request to the IonQ API (off the event loop).
 
@@ -426,12 +532,7 @@ class IonQExecutor(BaseExecutor):
         headers = {**kwargs.pop("headers", {}), **self._auth_headers()}
 
         def _call() -> dict[str, Any]:
-            response = self._do_request(
-                method, url, headers=headers, timeout=_HTTP_TIMEOUT_SECONDS, **kwargs
-            )
-            response.raise_for_status()
-            data: dict[str, Any] = response.json()
-            return data
+            return self._request_sync(method, url, headers, **kwargs)
 
         return await loop.run_in_executor(None, _call)
 
