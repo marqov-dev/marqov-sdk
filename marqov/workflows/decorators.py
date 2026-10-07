@@ -486,21 +486,20 @@ def workflow(
                 # Execute function - tasks will register nodes
                 result = fn(*args, **kwargs)
 
-                # Track output node(s)
+                # Track output node(s), rejecting proxies from another invocation.
                 if isinstance(result, TaskProxy):
-                    graph.set_output_node(result.node_id)
+                    outputs = [result]
                 elif isinstance(result, (list, tuple)):
-                    output_ids = [
-                        item.node_id for item in result if isinstance(item, TaskProxy)
-                    ]
-                    if output_ids:
-                        graph.set_output_nodes(output_ids)
+                    outputs = [item for item in result if isinstance(item, TaskProxy)]
                 elif isinstance(result, dict):
-                    output_ids = [
-                        v.node_id for v in result.values() if isinstance(v, TaskProxy)
-                    ]
-                    if output_ids:
-                        graph.set_output_nodes(output_ids)
+                    outputs = [item for item in result.values() if isinstance(item, TaskProxy)]
+                else:
+                    outputs = []
+                for output in outputs:
+                    if output._graph is not graph or output.node_id not in graph.nodes:
+                        raise ValueError("Workflow output references a different graph")
+                if outputs:
+                    graph.set_output_nodes([output.node_id for output in outputs])
 
             finally:
                 # Restore previous graph (for nested workflows)

@@ -179,8 +179,11 @@ class TransportGraph:
             can execute in parallel.
 
         Raises:
-            ValueError: If a dependency is missing or a cycle is detected.
+            ValueError: If an output or dependency is missing, or a cycle is detected.
         """
+        for output_id in self.output_nodes:
+            if output_id not in self.nodes:
+                raise ValueError(f"Output node '{output_id}' is not in the graph")
         for node_id, node in self.nodes.items():
             for dep_id in node.dependencies:
                 if dep_id not in self.nodes:

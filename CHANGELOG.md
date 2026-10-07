@@ -17,6 +17,10 @@ release.
   IDs before mutation. Generated task IDs use the full UUID to reduce collision
   risk. (marqov-sdk#143)
 
+- Workflow returns reject task proxies from another graph, and execution planning
+  rejects missing output IDs before dispatch. Missing completed outputs fail
+  Temporal workflows with a non-retryable application error. (marqov-sdk#212)
+
 - Decorator and workflow graph tests now fail normally on regressions instead of
   hiding failures behind a blanket expected-failure marker. (marqov-sdk#146)
 

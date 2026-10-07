@@ -165,13 +165,19 @@ class JobWorkflow:
 
             task_timeline.extend(task_metas)
 
-        # Return output node results
-        if len(output_nodes) == 1:
-            output = completed_results[output_nodes[0]]
-        elif len(output_nodes) > 1:
-            output = {nid: completed_results[nid] for nid in output_nodes}
-        else:
-            output = completed_results
+        # A missing output must fail the workflow rather than retry its task.
+        try:
+            if len(output_nodes) == 1:
+                output = completed_results[output_nodes[0]]
+            elif len(output_nodes) > 1:
+                output = {nid: completed_results[nid] for nid in output_nodes}
+            else:
+                output = completed_results
+        except KeyError as exc:
+            raise ApplicationError(
+                f"Workflow output node {exc.args[0]!r} has no completed result",
+                non_retryable=True,
+            ) from exc
 
         enriched: dict[str, Any] = {
             "result": output,
