@@ -41,6 +41,10 @@ release.
   Probability-derived and unknown counts are explicitly ineligible for raw-shot
   analysis; physical mapping remains unqualified. (marqov-sdk#205)
 
+- Braket probability-only results conserve requested shots through MarqovDevice,
+  matching the executor's shared count allocation. Nonempty provider counts
+  remain unchanged. (marqov-sdk#66)
+
 - pytket export accepts gates supported by its Qiskit converter, including
   imported Braket V and ISwap circuits. Converter failures retain the documented
   `NotImplementedError` with the original message and cause. (marqov-sdk#155)

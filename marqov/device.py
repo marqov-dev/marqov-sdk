@@ -471,7 +471,9 @@ class MarqovDevice:
                     # instead of raw shot counts. Convert to synthetic counts using shots.
                     probs = getattr(result, 'measurement_probabilities', {}) or {}
                     if probs:
-                        counts = {bs: round(float(prob) * shots) for bs, prob in dict(probs).items()}
+                        from marqov.executors._counts import allocate_counts
+
+                        counts = allocate_counts(dict(probs), shots)
                 return counts
             except Exception as e:
                 error_msg = str(e)
