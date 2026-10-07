@@ -33,7 +33,10 @@ Note:
 from __future__ import annotations
 
 import asyncio
+import os
+import threading
 import time
+import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -41,6 +44,12 @@ from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 
 if TYPE_CHECKING:
     from marqov.circuits import Circuit
+
+
+# CUDA-Q target and seed are process-global. Serialize SDK executions through
+# sampling; parallel CUDA-Q execution requires separate processes. This lock
+# cannot coordinate CUDA-Q calls made directly outside this executor.
+_EXECUTION_LOCK = threading.Lock()
 
 
 # Targets that never need remote credentials / can run without a GPU present.
@@ -174,6 +183,10 @@ def build_kernel(builder: _KernelBuilder, circuit: Circuit) -> Any:
 class CudaqExecutor(BaseExecutor):
     """Execute circuits on NVIDIA CUDA-Q (CPU/GPU statevector or direct IQM).
 
+    Concurrent calls are serialized within this process to protect CUDA-Q's
+    global target and seed. Cancellation does not stop an in-flight worker
+    thread; its lock and temporary IQM token remain held until it finishes.
+
     Example:
         >>> executor = CudaqExecutor(CudaqExecutorConfig(target="nvidia"))
         >>> result = await executor.execute(circuit, shots=2000)
@@ -209,8 +222,8 @@ class CudaqExecutor(BaseExecutor):
 
         start_time = time.perf_counter()
         # CUDA-Q's set_target / sample are synchronous and CPU/GPU-bound; run off
-        # the event loop so concurrent executes don't block each other.
-        counts, resolved_target = await asyncio.to_thread(
+        # the event loop. The worker serializes CUDA-Q's global state.
+        counts, resolved_target, sample_result = await asyncio.to_thread(
             self._run_sync, cudaq, circuit, shots
         )
         execution_time_ms = (time.perf_counter() - start_time) * 1000
@@ -220,7 +233,7 @@ class CudaqExecutor(BaseExecutor):
             backend=f"cudaq:{resolved_target}",
             execution_time_ms=execution_time_ms,
             shots=shots,
-            raw_result=None,
+            raw_result=sample_result,
             metadata={
                 "framework": "cudaq",
                 "target": resolved_target,
@@ -230,19 +243,41 @@ class CudaqExecutor(BaseExecutor):
 
     def _run_sync(
         self, cudaq: Any, circuit: Circuit, shots: int
-    ) -> tuple[dict[str, int], str]:
-        """Synchronous CUDA-Q execution (set target, build kernel, sample)."""
-        resolved_target = self._select_target(cudaq)
+    ) -> tuple[dict[str, int], str, Any]:
+        """Serialize target selection, seed, kernel construction and sampling."""
+        with _EXECUTION_LOCK:
+            configured_token = self.config.iqm_token
+            override_token = self.config.target == "iqm" and configured_token is not None
+            previous_token = os.environ.get("IQM_TOKEN")
+            try:
+                if override_token:
+                    assert configured_token is not None
+                    if previous_token is not None and previous_token != configured_token:
+                        warnings.warn(
+                            "Configured IQM token overrides the existing IQM_TOKEN "
+                            "for this execution.",
+                            UserWarning,
+                            stacklevel=2,
+                        )
+                    os.environ["IQM_TOKEN"] = configured_token
 
-        if self.config.seed is not None:
-            cudaq.set_random_seed(self.config.seed)
+                resolved_target = self._select_target(cudaq)
+                if self.config.seed is not None:
+                    cudaq.set_random_seed(self.config.seed)
 
-        kernel = cudaq.make_kernel()
-        build_kernel(kernel, circuit)
-
-        sample_result = cudaq.sample(kernel, shots_count=shots)
-        counts = {str(bitstring): int(count) for bitstring, count in sample_result.items()}
-        return counts, resolved_target
+                kernel = cudaq.make_kernel()
+                build_kernel(kernel, circuit)
+                sample_result = cudaq.sample(kernel, shots_count=shots)
+                counts = {
+                    str(bitstring): int(count) for bitstring, count in sample_result.items()
+                }
+                return counts, resolved_target, sample_result
+            finally:
+                if override_token:
+                    if previous_token is None:
+                        os.environ.pop("IQM_TOKEN", None)
+                    else:
+                        os.environ["IQM_TOKEN"] = previous_token
 
     def _select_target(self, cudaq: Any) -> str:
         """Set the CUDA-Q target, applying the requested config and GPU fallback.
@@ -257,10 +292,6 @@ class CudaqExecutor(BaseExecutor):
             if not self.config.iqm_url:
                 raise ValueError("CudaqExecutorConfig.iqm_url is required for the 'iqm' target.")
             options = dict(self.config.target_options)
-            if self.config.iqm_token is not None:
-                import os
-
-                os.environ.setdefault("IQM_TOKEN", self.config.iqm_token)
             cudaq.set_target("iqm", url=self.config.iqm_url, **options)
             return "iqm"
 
@@ -274,7 +305,7 @@ class CudaqExecutor(BaseExecutor):
         return target
 
     async def get_status(self) -> DeviceStatus:
-        """Local CUDA-Q targets are always available; IQM status is not polled here."""
+        """Local targets are online; unpolled remote targets report maintenance."""
         if self.config.target in _LOCAL_TARGETS:
             return DeviceStatus.always_online()
-        return DeviceStatus(status="online", queue_depth=None, queue_time_seconds=None)
+        return DeviceStatus(status="maintenance", queue_depth=None, queue_time_seconds=None)

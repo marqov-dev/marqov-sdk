@@ -86,6 +86,11 @@ release.
   preventing loss of DAGGER, CONTROLLED and FORKED semantics. Unmodified
   canonical imports remain supported. (marqov-sdk#193)
 
+- CUDA-Q executions serialize process-global target and seed state, temporarily
+  apply configured IQM credentials with environment restoration, and retain the
+  vendor SampleResult. Unpolled remote status reports maintenance rather than
+  claiming online. (marqov-sdk#136)
+
 - IBM execution retains each submitted job ID on result errors and timeouts, checks shot accounting and records executor provenance and reproducibility hashes. Tokens are excluded from configuration repr. SamplerV2 is qualified locally with Aer; live cloud and hosted qualification remain separate.
 
 - Quantum Brilliance simulation supports current Qristal sessions without `init()` and their flat result map, preserving legacy session support. Counts are checked against shots, and results record the actual engine and reproducibility hashes. Native QPP checks pass; full SDK and hosted qualification remain separate.
