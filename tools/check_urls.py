@@ -31,7 +31,7 @@ import urllib.request
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
-_DEFAULT_SURFACES = ["marqov", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "docs"]
+_DEFAULT_SURFACES = ["CHANGELOG.md", "CODE_OF_CONDUCT.md", "CONTRIBUTING.md", "README.md", "RELEASING.md", "SECURITY.md", "pyproject.toml", "docs", "marqov"]
 _SUFFIXES = {".py", ".md", ".rst", ".txt", ".toml", ".cfg"}
 _URL_RE = re.compile(r"https?://[A-Za-z0-9._~:/?#@!$&*+,;=%()-]+")
 _TRAILING = ")].,>\"'`"

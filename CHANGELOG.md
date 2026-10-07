@@ -9,6 +9,10 @@ release.
 
 ### Fixed
 
+- Release publication requires verification of the same built artifacts against
+  the installed wheel, including fork ownership and separate QiliSDK coverage.
+  Tag releases must descend from main. (marqov-sdk#165)
+
 - Direct Qristal simulation configs again accept the documented
   `cudaq:custatevec_fp32` target, retaining its 28-qubit limit. Hardware and
   unknown IDs remain refused locally; GPU execution remains unqualified.

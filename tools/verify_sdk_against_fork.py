@@ -1,33 +1,47 @@
-"""Verify the SDK resolves against the fork: import quantumflow is the FORK,
-and the SDK imports cleanly. Run from a NEUTRAL cwd (not the repo root) so the
-installed package is checked, not the source tree."""
+"""Verify installed SDK/fork metadata and RECORD ownership from a neutral cwd."""
 import importlib.metadata as md
-import os
 import sysconfig
-import sys
+from pathlib import Path
 
-# 1. The quantumflow import is provided by the marqov-quantumflow DISTRIBUTION.
-qf_dist = md.distribution("marqov-quantumflow")
-assert qf_dist.version == "1.0.0", f"expected marqov-quantumflow 1.0.0, got {qf_dist.version}"
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
-# 2. Upstream 'quantumflow' distribution must NOT be installed (no collision).
-try:
-    up = md.version("quantumflow")
-    sys.exit(f"FAIL: upstream 'quantumflow' distribution is also installed ({up})")
-except md.PackageNotFoundError:
-    pass
 
-# 3. import quantumflow loads from site-packages (the installed fork), not source.
-import quantumflow as qf  # noqa: E402
-site = os.path.realpath(sysconfig.get_paths()["purelib"])
-assert os.path.realpath(qf.__file__).startswith(site), f"quantumflow not from site-packages: {qf.__file__}"
+def verify_installed() -> None:
+    sdk = md.distribution("marqov")
+    requirements = [Requirement(r) for r in sdk.requires or []]
+    pins = [r for r in requirements if canonicalize_name(r.name) == "marqov-quantumflow"]
+    assert len(pins) == 1, f"expected one fork requirement, got {pins}"
+    specs = list(pins[0].specifier)
+    assert len(specs) == 1 and specs[0].operator == "==" and "*" not in specs[0].version, \
+        f"expected exact fork pin, got {pins[0]}"
+    fork = md.distribution("marqov-quantumflow")
+    assert fork.version == specs[0].version, \
+        f"expected marqov-quantumflow {specs[0].version}, got {fork.version}"
+    try:
+        upstream = md.version("quantumflow")
+    except md.PackageNotFoundError:
+        pass
+    else:
+        raise AssertionError(f"upstream quantumflow is also installed ({upstream})")
 
-# 4. The SDK imports and its QuantumFlow-coupled core works.
-#    Real API (marqov/circuits.py): no-arg constructor, fluent chaining.
-import marqov  # noqa: E402
-from marqov.circuits import Circuit, bell_state  # noqa: E402
-Circuit().h(0).cnot(0, 1)        # exercises the qf.* contract (H, CNot, Circuit)
-bell_state()                     # the SDK's own helper
+    import quantumflow
 
-print(f"OK: SDK resolves against marqov-quantumflow {qf_dist.version}; "
-      f"import quantumflow -> {qf.__file__}")
+    import marqov
+
+    sites = {Path(sysconfig.get_path(key)).resolve() for key in ("purelib", "platlib")}
+    for module, dist in ((marqov, sdk), (quantumflow, fork)):
+        path = Path(module.__file__).resolve()
+        assert any(path.is_relative_to(site) for site in sites), \
+            f"{module.__name__} not from site-packages: {path}"
+        owned = {Path(dist.locate_file(file)).resolve() for file in dist.files or []}
+        assert path in owned, f"{path} is not owned by {dist.metadata['Name']} RECORD"
+        print(f"OK: {module.__name__} -> {path}")
+    from marqov.circuits import Circuit, bell_state
+    Circuit().h(0).cnot(0, 1)
+    bell_state()
+    print(f"OK: installed SDK uses marqov-quantumflow {fork.version}")
+
+
+if __name__ == "__main__":
+    verify_installed()
