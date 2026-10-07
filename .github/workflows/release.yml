@@ -40,12 +40,14 @@ jobs:
   verify:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         coverage: [all, qilisdk]
     env:
       PYTHONSAFEPATH: "1"
+      PYTHONUNBUFFERED: "1"
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }

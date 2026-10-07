@@ -27,6 +27,7 @@ def verify_installed() -> None:
 
     import quantumflow
 
+    print("Checking installed SDK and QuantumFlow imports...")
     import marqov
 
     sites = {Path(sysconfig.get_path(key)).resolve() for key in ("purelib", "platlib")}
