@@ -1,8 +1,22 @@
 name: release
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/release.yml
+      - tools/**
+      - tests/conftest.py
+      - tests/test_release_gate.py
+      - pyproject.toml
+      - RELEASING.md
   push:
     tags: ["v*"]
   workflow_dispatch:        # manual TestPyPI dry-run
+    inputs:
+      gate_self_test:
+        description: Fail verification deliberately; neither publisher should run
+        type: boolean
+        default: false
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,11 +32,89 @@ jobs:
           test -f "dist/marqov-${TAG}-py3-none-any.whl" \
             || { echo "FAIL: built wheel is not version ${TAG} (check pyproject version)"; ls dist/; exit 1; }
           echo "version OK: ${TAG}"
+      - name: Record artifact digests
+        run: (cd dist && sha256sum ./*.whl ./*.tar.gz > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with: { name: dist, path: dist/ }
 
-  publish-testpypi:
+  verify:
     needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        coverage: [all, qilisdk]
+    env:
+      PYTHONSAFEPATH: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Require tagged commit on main
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: dist/ }
+      - name: Verify artifact digests
+        run: |
+          (cd dist && sha256sum --check SHA256SUMS)
+          test "$(find dist -name '*.whl' | wc -l)" -eq 1
+      - name: Install the built wheel in a clean environment
+        env:
+          COVERAGE: ${{ matrix.coverage }}
+        run: |
+          pip install uv
+          uv venv "$RUNNER_TEMP/wheel-venv"
+          WHEEL="$(realpath dist/*.whl)"
+          if [ "$COVERAGE" = all ]; then
+            uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" "${WHEEL}[all,dev,lightning-kokkos]"
+          else
+            uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" "${WHEEL}[dev]" qilisdk==0.3.0 'qutip-qip>=0.4.0'
+          fi
+      - name: Check source dependency URLs
+        run: '"$RUNNER_TEMP/wheel-venv/bin/python" tools/check_no_url_deps.py'
+      - name: Check artifact metadata
+        run: uvx twine check dist/*.whl dist/*.tar.gz
+      - name: Verify installed distribution and fork ownership
+        run: |
+          (cd "$RUNNER_TEMP" && "$RUNNER_TEMP/wheel-venv/bin/python" "$GITHUB_WORKSPACE/tools/verify_marqov_wheel.py")
+          (cd "$RUNNER_TEMP" && "$RUNNER_TEMP/wheel-venv/bin/python" "$GITHUB_WORKSPACE/tools/verify_sdk_against_fork.py")
+      - name: Check publication dependencies
+        run: '"$RUNNER_TEMP/wheel-venv/bin/python" tools/check_release_gate.py'
+      - name: Test installed wheel
+        if: matrix.coverage == 'all'
+        env:
+          MARQOV_REQUIRE_INSTALLED: "1"
+        run: >-
+          "$RUNNER_TEMP/wheel-venv/bin/python" -m pytest tests/ -q
+          --import-mode=importlib --ignore=tests/test_benchmark_suite.py
+      - name: Test source-only benchmark harness separately
+        if: matrix.coverage == 'all'
+        # benchmarks/ is deliberately not in the wheel. This step exercises the
+        # development harness, not installed-package qualification.
+        run: >-
+          PYTHONPATH="$GITHUB_WORKSPACE" "$RUNNER_TEMP/wheel-venv/bin/python"
+          -m pytest tests/test_benchmark_suite.py -q
+      - name: Test QiliSDK and SpeQtrum without skips
+        if: matrix.coverage == 'qilisdk'
+        env:
+          MARQOV_REQUIRE_INSTALLED: "1"
+        run: |
+          "$RUNNER_TEMP/wheel-venv/bin/python" -m pytest tests/test_qilisdk_*.py -q --import-mode=importlib --junitxml="$RUNNER_TEMP/qilisdk.xml"
+          "$RUNNER_TEMP/wheel-venv/bin/python" tools/check_junit_coverage.py "$RUNNER_TEMP/qilisdk.xml"
+      - name: Deliberate gate failure rehearsal
+        if: github.event_name == 'workflow_dispatch' && inputs.gate_self_test
+        run: |
+          echo 'Deliberate verification failure: publishers must be skipped'
+          exit 1
+
+  publish-testpypi:
+    needs: [build, verify]
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: testpypi
@@ -30,6 +122,10 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { name: dist, path: dist/ }
+      - name: Verify publication artifacts
+        run: |
+          (cd dist && sha256sum --check SHA256SUMS)
+          rm dist/SHA256SUMS
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
         with:
           repository-url: https://test.pypi.org/legacy/
@@ -39,7 +135,7 @@ jobs:
           skip-existing: true
 
   publish-pypi:
-    needs: build
+    needs: [build, verify]
     # Both conditions: a dispatch against a tag ref sets github.ref to that tag,
     # so the ref check alone would let a "TestPyPI dry-run" publish to real PyPI.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
@@ -49,4 +145,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { name: dist, path: dist/ }
+      - name: Verify publication artifacts
+        run: |
+          (cd dist && sha256sum --check SHA256SUMS)
+          rm dist/SHA256SUMS
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2

@@ -9,7 +9,7 @@ Warehouse code and also never reuses a version. `publish-testpypi` sets
 rather than a failure, but the first upload of a version is still one-way.
 
 > **How the tag publishes:** pushing a `v*` tag triggers
-> `.github/workflows/release.yml`, which builds the package and publishes it to
+> `.github/workflows/release.yml`, which builds and verifies the same artifacts before publishing them to
 > PyPI via **OIDC trusted publishing** (`id-token: write` + the `pypi`
 > environment — there is no stored API token). The tag is only the trigger and
 > the version source (hatchling reads `marqov/__init__.py`). The manual "Run
@@ -32,7 +32,11 @@ rather than a failure, but the first upload of a version is still one-way.
 
 ## 2. Pre-flight
 - [ ] Hygiene gate: `uv run pytest tests/test_no_private_references.py`
-- [ ] Full suite green, right extras + fresh metadata:
+- [ ] **Enforced by release verification:** installed-wheel tests, metadata checks,
+      exact QuantumFlow fork ownership, no direct-URL dependencies and `twine check`.
+      Both publishers depend on every verification leg. PRs touching release tooling
+      also run build/verify without publication.
+- [ ] Local full suite green, right extras + fresh metadata:
       ```
       uv sync --extra qiskit --extra cirq --extra pennylane --extra pytket \
               --extra pyquil --extra braket --extra dev --reinstall-package marqov
@@ -69,15 +73,27 @@ Dependencies resolve from real PyPI; it does not upload anything.
       uvx twine check dist/*
       ```
 - [ ] Push a `release/X.Y.Z` branch (version bumped, changelog dated).
-- [ ] CI (full suite) green on the branch, **before** the dry-run. `ci.yml` only
-      triggers on pull requests and pushes to `main`, not on a bare branch push,
-      so open a PR from the release branch to `main` to get a run (do not merge
-      it yet; it exists to trigger CI on the exact release SHA). This comes first
-      because the dry-run claims `X.Y.Z` on TestPyPI for good: confirm the SHA is
-      good before spending the version on it.
+- [ ] Review CI before the dry-run. Release verification itself is enforced before
+      either upload: Python 3.12 tests the installed `[all,dev,lightning-kokkos]`
+      wheel with import guards in pytest and a child interpreter. Source-only
+      benchmark tests run separately. A second clean environment installs the
+      same `[dev]` wheel plus `qilisdk==0.3.0` and `qutip-qip>=0.4.0`; its local
+      QiliSDK/SpeQtrum adapter tests must run with zero skips. No provider job runs.
+      CUDA-Q remains covered by its separate CI job.
+- [ ] Python 3.13 is not qualified for all extras: Rigetti/pyQuil dependencies
+      currently fail installation or import there. Use Python 3.12 for `[all]`,
+      `[rigetti]` and `[pyquil]`; the release gate does not establish 3.13 support.
+- [ ] **Enforced on tag pushes:** the tagged SHA must be an ancestor of `main`.
+      This does not apply to dispatches from a release branch.
+- [ ] The build records SHA-256 digests; verification and both publishers check
+      the downloaded artifacts against them without rebuilding.
+- [ ] Gate rehearsal: `gate_self_test=true` deliberately fails verification,
+      and both publishers must be skipped. A normal dispatch uploads to TestPyPI;
+      it is not a no-publication test. Use a fresh development version when
+      rehearsing an upload, since `skip-existing` can otherwise mask it.
 - [ ] Dry-run: `gh workflow run release.yml --ref release/X.Y.Z` (TestPyPI only).
       Dispatch against the **branch**, never against a tag ref.
-- [ ] `gh run watch <id> --exit-status` — build ✅, publish-testpypi ✅, publish-pypi skipped.
+- [ ] `gh run watch <id> --exit-status` — build ✅, verify (both legs) ✅, publish-testpypi ✅, publish-pypi skipped.
 - [ ] Validate the PUBLISHED artifact, not just the pipeline. Fetch it from
       TestPyPI and install it in a throwaway venv, keeping the two indexes in
       **separate** resolution steps:
