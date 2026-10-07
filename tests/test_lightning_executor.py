@@ -306,8 +306,8 @@ class TestDeviceAvailability:
             await _executor().execute(bell_state(), shots=10)
 
     @pytest.mark.asyncio
-    async def test_installed_gpu_engine_is_not_run_unvalidated(self, monkeypatch) -> None:
-        """An installed GPU engine is refused as unvalidated, never substituted."""
+    async def test_gpu_cpu_substitution_is_refused(self, monkeypatch) -> None:
+        """A CPU device cannot satisfy a requested GPU execution."""
         import pennylane as qml
 
         real_device = qml.device
@@ -318,7 +318,7 @@ class TestDeviceAvailability:
             return real_device(name, *args, **kwargs)
 
         monkeypatch.setattr(qml, "device", fake_device)
-        with pytest.raises(NotImplementedError, match="lightning.gpu"):
+        with pytest.raises(RuntimeError, match="lightning.qubit"):
             await _executor(device="lightning.gpu").execute(bell_state(), shots=10)
 
     @pytest.mark.asyncio
@@ -404,3 +404,111 @@ class TestFactory:
 
     def test_provider_is_registered(self) -> None:
         assert ExecutorFactory.is_provider_supported("PennyLane Lightning")
+
+
+class TestGPUQualificationGate:
+    @pytest.mark.parametrize("replay_matches", [True, False])
+    def test_gpu_requires_bit_order_distribution_and_seed_replay(self, monkeypatch, replay_matches):
+        import numpy as np
+        import pennylane as qml
+        executor = _executor(device="lightning.gpu")
+        monkeypatch.setattr(LightningExecutor, "_qualified", {})
+        calls = []
+        def sample(qml, operations, wires, shots, seed):
+            calls.append((shots, seed))
+            if shots == 64:
+                samples = np.tile([1, 0], (64, 1))
+            else:
+                samples = np.concatenate([np.zeros((2000, 2)), np.ones((2000, 2))])
+                if len(calls) == 3 and not replay_matches:
+                    samples = samples[::-1]
+            return None, None, samples, 0
+        monkeypatch.setattr(executor, "_sample", sample)
+        result = executor._ensure_qualified(qml)
+        assert result["passed"] is replay_matches
+        assert result["checks"]["fresh_device_seed_replay"] is replay_matches
+        assert calls == [(64, 0), (4000, 0), (4000, 0)]
+
+    def test_gpu_constructor_keeps_device_seed_and_precision(self):
+        from types import SimpleNamespace
+
+        import numpy as np
+        calls = []
+        def device(name, **kwargs):
+            calls.append((name, kwargs))
+            return SimpleNamespace(name=name)
+        executor = _executor(device="lightning.gpu", precision="single")
+        executor._make_device(SimpleNamespace(device=device), [0, 3], 17)
+        assert calls == [("lightning.gpu", {"wires": [0, 3], "seed": 17, "c_dtype": np.complex64})]
+        _executor(device="lightning.tensor")._make_device(SimpleNamespace(device=device), [0], None)
+        assert calls[-1] == ("lightning.tensor", {"wires": [0], "c_dtype": np.complex128,
+                            "method": "tn", "backend": "cutensornet", "worksize_pref": "recommended"})
+        assert len(calls) == 2
+
+
+class TestUnseededTensorContract:
+    @pytest.mark.parametrize("kwargs", [
+        {"seed": 0}, {"tensor_method": "unknown"}, {"tensor_worksize_pref": "unknown"},
+        {"tensor_max_bond_dim": 8}, {"tensor_method": "mps", "tensor_max_bond_dim": True},
+        {"tensor_method": "mps", "tensor_cutoff": float("nan")},
+        {"tensor_method": "mps", "tensor_cutoff": -1},
+        {"tensor_method": "mps", "tensor_cutoff_mode": "unknown"},
+    ])
+    def test_invalid_options_fail_before_device(self, kwargs):
+        with pytest.raises(ValueError):
+            _executor(device="lightning.tensor", **kwargs)
+        with pytest.raises(ValueError, match="Tensor options"):
+            _executor(device="lightning.qubit", tensor_method="tn")
+
+    @pytest.mark.asyncio
+    async def test_tensor_record_and_no_seed_claim(self, monkeypatch):
+        from types import SimpleNamespace
+
+        import numpy as np
+        executor = _executor(device="lightning.tensor", tensor_method="mps", tensor_max_bond_dim=16,
+                             tensor_cutoff=0.01, tensor_cutoff_mode="rel")
+        calls = []
+        monkeypatch.setattr(executor, "_ensure_qualified", lambda qml: {"passed": True, "checks": {"fixture": True}})
+        def sample(qml, operations, wires, shots, seed):
+            calls.append(seed)
+            dev = SimpleNamespace(name="lightning.tensor", c_dtype=np.complex128)
+            tape = SimpleNamespace(shots=SimpleNamespace(total_shots=shots), operations=operations)
+            return dev, tape, np.tile([1, 0], (shots, 1)), 0
+        monkeypatch.setattr(executor, "_sample", sample)
+        result = await executor.execute(bell_state(), shots=4)
+        record = result.metadata["reproducibility"]
+        assert result.counts == {"10": 4} and result.metadata["seed"] is None
+        assert record["record_version"] == 2 and record["seed"] is None
+        assert record["seed_kind"] == "unsupported" and "no seed interface" in record["rng_policy"]
+        assert record["tensor_configuration"] == {"method": "mps", "backend": "cutensornet",
+            "worksize_pref": "recommended", "max_bond_dim": 16, "cutoff": 0.01, "cutoff_mode": "rel", "approximation": "mps"}
+        assert calls == [None]
+        with pytest.raises(ValueError, match="no seed"):
+            await executor.execute(bell_state(), seed=7)
+        assert calls == [None]
+
+    def test_cache_binds_resolved_options_without_seed_replay(self, monkeypatch):
+        import numpy as np
+        import pennylane as qml
+        monkeypatch.setattr(LightningExecutor, "_qualified", {})
+        calls = []
+        def sample(self, qml, operations, wires, shots, seed):
+            assert seed is None
+            calls.append(shots)
+            samples = np.tile([1, 0], (64, 1)) if shots == 64 else np.concatenate([np.zeros((2000, 2)), np.ones((2000, 2))])
+            return None, None, samples, 0
+        monkeypatch.setattr(LightningExecutor, "_sample", sample)
+        for options in ({}, {"tensor_method": "mps"}, {"tensor_method": "mps", "tensor_max_bond_dim": 32},
+                        {"tensor_method": "mps", "tensor_cutoff": 0.1}, {"tensor_method": "mps", "tensor_cutoff_mode": "rel"},
+                        {"tensor_worksize_pref": "min"}):
+            e = _executor(device="lightning.tensor", **options)
+            q = e._ensure_qualified(qml)
+            assert q["passed"] and "fresh_device_seed_replay" not in q["checks"]
+            e._ensure_qualified(qml)
+        assert len(calls) == 12
+        assert len(LightningExecutor._qualified) == 6
+
+    def test_factory_forwards_tensor_configuration(self):
+        e = ExecutorFactory.create_executor("lightning-tensor", {"provider": "PennyLane Lightning",
+             "tensor_method": "mps", "tensor_max_bond_dim": 32})
+        assert e.config.tensor_method == "mps" and e.config.tensor_max_bond_dim == 32

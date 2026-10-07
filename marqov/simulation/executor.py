@@ -6,12 +6,13 @@ import asyncio
 import dataclasses
 import hashlib
 import json
-from collections.abc import Mapping
 import time
+from collections.abc import Mapping
 from typing import Any
 
 from marqov.circuits import Circuit
 from marqov.executors.base import BaseExecutor, ExecutionResult
+from marqov.simulation.backends import GPU_SIMULATION_BACKENDS, SIMULATION_BACKENDS
 from marqov.simulation.circuit_converter import (
     convert_counts,
     count_qubits,
@@ -37,6 +38,7 @@ class SimulationExecutor(BaseExecutor):
     """
 
     def __init__(self, config: SimulationConfig):
+        _require_local_backend(config)
         self.config = config
 
     async def execute(
@@ -61,6 +63,12 @@ class SimulationExecutor(BaseExecutor):
         return await loop.run_in_executor(
             None, _run_simulation, qasm_str, shots, config
         )
+
+
+def _require_local_backend(config: SimulationConfig) -> None:
+    supported = {entry["provider_target_id"] for entry in (*SIMULATION_BACKENDS.values(), *GPU_SIMULATION_BACKENDS.values())}
+    if config.backend_id not in supported:
+        raise ValueError("QB hardware/unknown backend requires explicit access_path='remote'; local simulator IDs only")
 
 
 def _import_qristal_core() -> Any:
@@ -90,6 +98,7 @@ def _run_simulation(
 ) -> ExecutionResult:
     """Execute simulation in a thread (blocking C++ call)."""
     qristal_core = _import_qristal_core()
+    _require_local_backend(config)
     session = qristal_core.session()
     # Current Qristal initializes on construction; older releases expose init().
     if hasattr(session, "init"):

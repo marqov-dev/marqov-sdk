@@ -22,16 +22,19 @@ A copy-and-run demo, including seed replay, is `examples/lightning_cpu_local.py`
 
 ## Scope
 
-- Devices: `lightning.qubit` and `lightning.kokkos`. Asking for `lightning.gpu`
-  or `lightning.tensor` constructs the device to check this environment: if
-  that fails, `LightningDeviceUnavailableError` carries PennyLane's own error;
-  if it succeeds, the run is refused with `NotImplementedError` because this
-  executor has not been validated there. No other device or simulator is
-  substituted. `probe_lightning_device(name)` runs the same check on its own.
-- Each CPU device must pass a qualification probe once per process and precision before the
+- Devices: `lightning.qubit`, `lightning.kokkos`, and genuine `lightning.gpu`.
+  GPU execution requires the optional `pennylane-lightning-gpu` plugin (0.45 or
+  compatible later API), cuStateVec and compatible NVIDIA hardware. Source support
+  is not GPU qualification; no GPU runtime or hosted route is supplied here.
+  The requested device must construct successfully and retain its exact name;
+  no CPU fallback is used. `lightning.tensor` uses an explicit unseeded contract
+  because pinned 0.45 has no constructor seed argument or sampling seed binding.
+- Each supported device must pass a qualification probe once per process and precision before the
   first user circuit: an asymmetric basis state must produce the SDK's count
   key (`"10"` for X on qubit 0 of 2), and a Bell state must stay within 5 sigma
-  of 50/50. The outcome is in the record under `qualification`.
+  of 50/50. The outcome is in the record under `qualification`. GPU also
+  requires sample-for-sample seed replay on a fresh genuine GPU device. A failed
+  probe prevents user execution. Existing CPU probe behavior is preserved.
 - Circuits: the canonical gate set with bound (numeric) angles. Gates outside
   it, symbolic angles and empty circuits raise.
 - Measurement: finite shots, computational-basis samples of every qubit the
@@ -87,3 +90,25 @@ Validation: real Lightning runs on CPython 3.12, macOS arm64, PennyLane 0.45.1
 with `pennylane-lightning` and `pennylane-lightning-kokkos` 0.45.0 (see
 `tests/test_lightning_executor.py`). Linux Kokkos builds (which may use OpenMP
 rather than the Serial execution space of the macOS wheel) have not been run.
+
+
+GPU results keep the same seed-at-construction record, exact plugin/device name,
+precision, finite shots, wire ordering and sample/count hashes. When provided by
+the compiled plugin, `backend_info.lightning_gpu` records its reported backend
+facts; absent facts remain absent rather than inferred. Pinned API evidence is
+[PennyLane Lightning 0.45 source](https://github.com/PennyLaneAI/pennylane-lightning/tree/v0.45.0).
+Local contract fixtures do not claim NVIDIA execution or hardware qualification.
+Tensor source support uses record version2 with seed=null, vendor-controlled
+sampling and no replay guarantee. Non-None caller/config seeds are rejected.
+CPU/GPU record version1 and seed policy are unchanged. `tensor_method="tn"`
+(default) selects exact tensor network; `"mps"` is explicitly approximate and
+records resolved max_bond_dim (128 default), cutoff (0 default) and cutoff_mode
+(abs default; rel also supported), without claiming an error bound. MPS options
+are rejected for tn. Workspace preference is recommended(default), min or max;
+backend is fixed cutensornet. Options require the explicitly selected tensor
+device and are validated before construction; its constructor never gets seed.
+Every method/precision/backend/workspace/bond/cutoff setting has its own real
+bit-order/Bell qualification cache entry. Failed probes block user circuits.
+Tensor plugin/cuTensorNet/compatible NVIDIA environment and actual per-option
+execution remain qualification requirements; local fixture checks prove only
+source contracts. No GPU runtime, hosted route or device spend is supplied.
