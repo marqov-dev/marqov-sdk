@@ -66,7 +66,7 @@ async def main() -> None:
         await run_engine(slug, device, circuit)
     for device in ("lightning.gpu", "lightning.tensor"):
         probe = probe_lightning_device(device)
-        state = "installed (not run by this executor)" if probe.available else probe.reason
+        state = "installed (not run by this CPU example)" if probe.available else probe.reason
         print(f"\n## {device}: {state}")
 
 

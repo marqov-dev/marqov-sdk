@@ -127,7 +127,7 @@ class ExecutorFactory:
                 timeout_seconds=backend_config.get("timeout_seconds"),
             ))
 
-        # Qilimanjaro qilisdk (local simulator only — QiliSim or QutipBackend)
+        # Qilimanjaro qilisdk (local simulation or explicit SpeQtrum access)
         if provider == "Qilimanjaro":
             if backend_config.get("access_path") == "speqtrum":
                 keys = ("device_code", "username", "api_key")
