@@ -276,3 +276,143 @@ async def test_real_cudaq_bell_state() -> None:
     # Bell state -> only |00> and |11> outcomes.
     assert set(result.counts).issubset({"00", "11"})
     assert result.backend == "cudaq:qpp-cpu"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_executes_preserve_target_seed_and_raw_result(monkeypatch):
+    """Coordinate contention explicitly rather than relying on scheduler sleeps."""
+    import asyncio
+    import threading
+
+    first_sampling = threading.Event()
+    contender_attempted = threading.Event()
+
+    class ObservedLock:
+        def __init__(self):
+            self.lock = threading.Lock()
+
+        def __enter__(self):
+            if self.lock.locked():
+                contender_attempted.set()
+            self.lock.acquire()
+
+        def __exit__(self, *args):
+            self.lock.release()
+
+    class StatefulCudaq(FakeCudaq):
+        def __init__(self):
+            super().__init__(gpus=1)
+            self.results = []
+
+        def set_random_seed(self, seed):
+            super().set_random_seed(seed)
+            if seed == 22:
+                contender_attempted.set()
+
+        def sample(self, kernel, shots_count):
+            if not self.results:
+                first_sampling.set()
+                assert contender_attempted.wait(5), "Second execution never reached the worker"
+            result = _FakeSampleResult({"00": shots_count})
+            result.sampled_target = self.target
+            result.sampled_seed = self.seed
+            self.results.append(result)
+            return result
+
+    fake = StatefulCudaq()
+    monkeypatch.setattr(cudaq_module, "_EXECUTION_LOCK", ObservedLock(), raising=False)
+    monkeypatch.setattr(cudaq_module, "_import_cudaq", lambda: fake)
+    first = CudaqExecutor(CudaqExecutorConfig(target="qpp-cpu", seed=11))
+    second = CudaqExecutor(CudaqExecutorConfig(target="nvidia", seed=22))
+    first_task = asyncio.create_task(first.execute(bell_state(), shots=10))
+    assert await asyncio.to_thread(first_sampling.wait, 5)
+    results = await asyncio.gather(first_task, second.execute(bell_state(), shots=10))
+    for result, target, seed, raw in zip(results, ["qpp-cpu", "nvidia"], [11, 22], fake.results):
+        assert result.metadata["target"] == raw.sampled_target == target
+        assert result.backend == f"cudaq:{raw.sampled_target}"
+        assert raw.sampled_seed == seed
+        assert result.raw_result is raw
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("previous", [None, "environment-secret", "configured-secret"])
+@pytest.mark.parametrize("failure_stage", [None, "target", "kernel", "sample"])
+async def test_iqm_token_override_is_temporary(monkeypatch, previous, failure_stage):
+    import os
+    import warnings
+
+    if previous is None:
+        monkeypatch.delenv("IQM_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("IQM_TOKEN", previous)
+    observed = []
+
+    class TokenCudaq(FakeCudaq):
+        def set_target(self, target, **kwargs):
+            observed.append(os.environ.get("IQM_TOKEN"))
+            if failure_stage == "target":
+                raise RuntimeError("target failed")
+            super().set_target(target, **kwargs)
+
+        def make_kernel(self):
+            if failure_stage == "kernel":
+                raise RuntimeError("kernel failed")
+            return super().make_kernel()
+
+        def sample(self, kernel, shots_count):
+            observed.append(os.environ.get("IQM_TOKEN"))
+            if failure_stage == "sample":
+                raise RuntimeError("sample failed")
+            return super().sample(kernel, shots_count)
+
+    monkeypatch.setattr(cudaq_module, "_import_cudaq", lambda: TokenCudaq())
+    executor = CudaqExecutor(
+        CudaqExecutorConfig(
+            target="iqm", iqm_url="https://example/garnet", iqm_token="configured-secret"
+        )
+    )
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        if failure_stage:
+            with pytest.raises(RuntimeError, match=f"{failure_stage} failed"):
+                await executor.execute(bell_state(), shots=10)
+        else:
+            await executor.execute(bell_state(), shots=10)
+    assert observed and set(observed) == {"configured-secret"}
+    assert os.environ.get("IQM_TOKEN") == previous
+    assert len(captured) == int(previous == "environment-secret")
+    for warning in captured:
+        message = str(warning.message)
+        assert "overrides" in message
+        assert "configured-secret" not in message
+        assert "environment-secret" not in message
+
+
+@pytest.mark.asyncio
+async def test_iqm_without_configured_token_uses_environment(monkeypatch):
+    import os
+
+    monkeypatch.setenv("IQM_TOKEN", "environment-secret")
+    observed = []
+
+    class TokenCudaq(FakeCudaq):
+        def set_target(self, target, **kwargs):
+            observed.append(os.environ.get("IQM_TOKEN"))
+            super().set_target(target, **kwargs)
+
+    monkeypatch.setattr(cudaq_module, "_import_cudaq", lambda: TokenCudaq())
+    await CudaqExecutor(
+        CudaqExecutorConfig(target="iqm", iqm_url="https://example/garnet")
+    ).execute(bell_state(), shots=10)
+    assert observed == ["environment-secret"]
+    assert os.environ["IQM_TOKEN"] == "environment-secret"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["qpp-cpu", "nvidia", "nvidia-fp64", "nvidia-mgpu", "iqm"])
+async def test_status_does_not_claim_unpolled_remote_is_online(target):
+    status = await CudaqExecutor(CudaqExecutorConfig(target=target)).get_status()
+    assert status.status == ("maintenance" if target == "iqm" else "online")
+    if target == "iqm":
+        assert status.queue_depth is None
+        assert status.queue_time_seconds is None
