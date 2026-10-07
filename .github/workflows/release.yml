@@ -76,13 +76,16 @@ jobs:
           else
             uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" "${WHEEL}[dev]" qilisdk==0.3.0 'qutip-qip>=0.4.0'
           fi
-      - name: Verify package metadata and fork ownership
+      - name: Check source dependency URLs
+        run: '"$RUNNER_TEMP/wheel-venv/bin/python" tools/check_no_url_deps.py'
+      - name: Check artifact metadata
+        run: uvx twine check dist/*.whl dist/*.tar.gz
+      - name: Verify installed distribution and fork ownership
         run: |
-          "$RUNNER_TEMP/wheel-venv/bin/python" tools/check_no_url_deps.py
-          uvx twine check dist/*.whl dist/*.tar.gz
           (cd "$RUNNER_TEMP" && "$RUNNER_TEMP/wheel-venv/bin/python" "$GITHUB_WORKSPACE/tools/verify_marqov_wheel.py")
           (cd "$RUNNER_TEMP" && "$RUNNER_TEMP/wheel-venv/bin/python" "$GITHUB_WORKSPACE/tools/verify_sdk_against_fork.py")
-          "$RUNNER_TEMP/wheel-venv/bin/python" tools/check_release_gate.py
+      - name: Check publication dependencies
+        run: '"$RUNNER_TEMP/wheel-venv/bin/python" tools/check_release_gate.py'
       - name: Test installed wheel
         if: matrix.coverage == 'all'
         env:
