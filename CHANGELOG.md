@@ -99,6 +99,10 @@ release.
   target IDs. Live remote, GPU and hosted execution remain unqualified.
   (marqov-sdk#191)
 
+- QiliSDK local digital and analog simulator calls run off the event loop so
+  concurrent coroutines and timeouts can progress. Cancelling the caller does
+  not stop an already-running simulator thread. (marqov-sdk#137)
+
 - Qilimanjaro digital and analog results now record vendor, framework, actual
   engine, access path, compute provider and software/seed/count provenance.
   Correct installation guidance for QiliSDK 0.3.0 and its QuTiP dependencies.

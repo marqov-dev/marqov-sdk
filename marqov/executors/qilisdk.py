@@ -15,6 +15,7 @@ See https://github.com/qilimanjaro-tech/qilisdk.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from importlib.metadata import version
 import json
@@ -155,7 +156,7 @@ class QiliSDKExecutor(BaseExecutor):
         propagation = DigitalPropagation(circuit=qili_circuit)
         readout = Readout().with_sampling(nshots=shots)
 
-        result = backend.execute(propagation, readout)
+        result = await asyncio.to_thread(backend.execute, propagation, readout)
         counts = result.get_samples()
 
         execution_time_ms = (time.perf_counter() - start_time) * 1000
@@ -229,7 +230,7 @@ class QiliSDKExecutor(BaseExecutor):
         evolution = AnalogEvolution(schedule=schedule, initial_state=initial_state)
         readout = Readout().with_sampling(nshots=shots)
 
-        result = backend.execute(evolution, readout)
+        result = await asyncio.to_thread(backend.execute, evolution, readout)
         counts = result.get_samples()
 
         execution_time_ms = (time.perf_counter() - start_time) * 1000

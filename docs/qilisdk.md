@@ -49,6 +49,20 @@ Qilimanjaro documents the constructor configuration in its
 [QiliSim backend guide](https://qilimanjaro-tech.github.io/qilisdk/en/0.2.0/modules/backends/backends_qilisim.html).
 Marqov implements the per-call reset and option validation described here.
 
+## Async execution and cancellation
+
+Digital and analog local simulator calls run in a worker thread so other
+coroutines on the event loop can progress during simulation. Execution timing
+includes the awaited simulator call; seed handling and result provenance are
+unchanged.
+
+Cancelling the awaiting task stops waiting for its result, but does not stop
+an already-running simulator thread. That thread can continue consuming CPU,
+and event-loop shutdown may wait for it to finish. No local simulation or
+provider cancellation guarantee is provided by this change. This scheduling
+behavior does not establish that a shared vendor backend is safe for concurrent
+calls.
+
 ## Explicit direct SpeQtrum execution
 
 The separate `SpeQtrumExecutor` requires pinned `qilisdk==0.3.0`, an explicit
