@@ -294,6 +294,42 @@ class TestSimulationExecutor:
     """Tests for SimulationExecutor."""
 
     @pytest.mark.asyncio
+    async def test_single_precision_gpu_target_is_preserved(self) -> None:
+        config = SimulationConfig(
+            backend_id="cudaq:custatevec_fp32", backend_type="gpu-statevector"
+        )
+        session = MagicMock()
+        session.results = [[{(False,): 7}]]
+        qristal = MagicMock()
+        qristal.session.return_value = session
+        with patch("marqov.simulation.executor._import_qristal_core", return_value=qristal):
+            result = await SimulationExecutor(config).execute(Circuit().x(0), shots=7)
+        assert session.acc == "cudaq:custatevec_fp32"
+        assert result.counts == {"0": 7}
+        assert result.metadata["engine"] == "cudaq:custatevec_fp32"
+        session.run.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_single_precision_gpu_qubit_limit_precedes_session(self) -> None:
+        executor = SimulationExecutor(SimulationConfig(
+            backend_id="cudaq:custatevec_fp32", backend_type="gpu-statevector"
+        ))
+        circuit = Circuit()
+        for qubit in range(29):
+            circuit.h(qubit)
+        with patch("marqov.simulation.executor._import_qristal_core") as import_core:
+            with pytest.raises(ValueError, match="supports up to 28 qubits"):
+                await executor.execute(circuit, shots=7)
+        import_core.assert_not_called()
+
+    @pytest.mark.parametrize("target", ["example_hardware_device", "cudaq:unknown"])
+    def test_unknown_local_targets_rejected_before_session(self, target) -> None:
+        with patch("marqov.simulation.executor._import_qristal_core") as import_core:
+            with pytest.raises(ValueError, match="Unsupported local simulator or hardware ID"):
+                SimulationExecutor(SimulationConfig(backend_id=target, backend_type="statevector"))
+        import_core.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_execute_returns_execution_result(self) -> None:
         """Execute returns a properly structured ExecutionResult."""
         config = SimulationConfig(backend_id="qpp", backend_type="statevector")

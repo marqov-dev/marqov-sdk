@@ -66,9 +66,17 @@ class SimulationExecutor(BaseExecutor):
 
 
 def _require_local_backend(config: SimulationConfig) -> None:
-    supported = {entry["provider_target_id"] for entry in (*SIMULATION_BACKENDS.values(), *GPU_SIMULATION_BACKENDS.values())}
+    supported = {
+        entry["provider_target_id"]
+        for entry in (*SIMULATION_BACKENDS.values(), *GPU_SIMULATION_BACKENDS.values())
+    }
+    # Preserve the documented single-precision simulator accepted by direct configs.
+    supported.add("cudaq:custatevec_fp32")
     if config.backend_id not in supported:
-        raise ValueError("QB hardware/unknown backend requires explicit access_path='remote'; local simulator IDs only")
+        raise ValueError(
+            "Unsupported local simulator or hardware ID; "
+            "QB remote execution requires explicit access_path='remote'"
+        )
 
 
 def _import_qristal_core() -> Any:

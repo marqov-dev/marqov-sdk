@@ -9,6 +9,10 @@ release.
 
 ### Fixed
 
+- Direct Qristal simulation configs again accept the documented
+  `cudaq:custatevec_fp32` target, retaining its 28-qubit limit. Hardware and
+  unknown IDs remain refused locally; GPU execution remains unqualified.
+
 - Workflow graphs reject missing dependencies before planning and duplicate task
   IDs before mutation. Generated task IDs use the full UUID to reduce collision
   risk. (marqov-sdk#143)
@@ -79,6 +83,13 @@ release.
 - Alice & Bob executor with real local cat-qubit models, native Qiskit initialization/delay preservation, canonical counts and reproducibility records. Explicit direct remote mode requires provider credentials; live remote and hosted execution remain unqualified.
 
 ### Changed
+
+- Explicit SpeQtrum and Quantum Brilliance remote executors and factory routes
+  are available, with retained job IDs and bounded polling. Lightning adds
+  GPU execution paths and an explicitly unseeded tensor contract, subject to
+  device qualification probes. Local QB simulation rejects hardware and unknown
+  target IDs. Live remote, GPU and hosted execution remain unqualified.
+  (marqov-sdk#191)
 
 - Qilimanjaro digital and analog results now record vendor, framework, actual
   engine, access path, compute provider and software/seed/count provenance.
