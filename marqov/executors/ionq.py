@@ -7,7 +7,8 @@ and exposes IonQ-specific features (e.g. simulator noise models) without requiri
 an AWS account or S3 bucket.
 
 Circuits are converted with ``circuit.to_qiskit()`` and dumped to OpenQASM, then
-submitted using IonQ's ``qasm`` input format.
+submitted using IonQ's ``qasm`` input format by default. The explicit v0.4
+ideal-simulator route uses QASM3 and retains probability artifact provenance.
 
 Note on the official ``ionq`` client:
     The official ``ionq`` Python client is intentionally not used. Its only release
@@ -29,13 +30,18 @@ Example:
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import hashlib
+import json
 import logging
+import math
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 from marqov.executors._counts import allocate_counts
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
@@ -74,7 +80,9 @@ class IonQExecutorConfig:
             "qpu.forte-1").
         api_key: IonQ API key. If None, falls back to the ``IONQ_API_KEY``
             environment variable at request time.
-        base_url: Base URL for the IonQ REST API.
+        base_url: Base URL for the IonQ REST API; defaults to the selected version.
+        api_version: Explicit protocol version: legacy 0.3 (default) or opt-in
+            0.4 QASM3/probabilities-v2 ideal simulator route.
         poll_interval_seconds: Polling interval while waiting for a job to finish.
         timeout_seconds: Maximum time to wait for job completion, one hour by
             default. On timeout the executor issues a best-effort cancel for the
@@ -86,10 +94,23 @@ class IonQExecutorConfig:
 
     target: str = "simulator"
     api_key: str | None = None
-    base_url: str = "https://api.ionq.co/v0.3"
+    base_url: str | None = None
     poll_interval_seconds: float = 1.0
     timeout_seconds: float | None = _DEFAULT_TIMEOUT_SECONDS
     noise_model: str | None = None
+    api_version: str = "0.3"
+
+    def __post_init__(self) -> None:
+        if self.api_version not in {"0.3", "0.4"}:
+            raise ValueError("IonQ api_version must be 0.3 or 0.4")
+        if self.base_url is None:
+            self.base_url = f"https://api.ionq.co/v{self.api_version}"
+        self.base_url = self.base_url.rstrip("/")
+        for version in ("0.3", "0.4"):
+            if self.base_url.endswith(f"/v{version}") and version != self.api_version:
+                raise ValueError("IonQ base_url and api_version disagree")
+        if self.api_version == "0.4" and (self.target != "simulator" or self.noise_model):
+            raise ValueError("IonQ v0.4 route currently supports the ideal simulator only")
 
 
 class IonQExecutor(BaseExecutor):
@@ -303,6 +324,13 @@ class IonQExecutor(BaseExecutor):
         """
         circuit = self._validate_circuit(circuit)
 
+        if self.config.api_version == "0.4":
+            owned = IonQExecutor(
+                replace(self.config, api_key=self._auth_headers()["Authorization"][7:]),
+                session=self._session,
+            )
+            return await owned._execute_v04(circuit, shots)
+
         start_time = time.perf_counter()
 
         qasm, num_qubits = self._circuit_to_qasm(circuit)
@@ -319,17 +347,18 @@ class IonQExecutor(BaseExecutor):
         submit_response = await self._submit_job(payload)
         job_id = submit_response["id"]
 
+        job_artifact: dict[str, Any] = {}
         # Poll until the job reaches a terminal state. If the wait is cut short,
         # the job is still queued or running on IonQ's side, and billable, so ask
         # IonQ to stop it before propagating.
         try:
             if self.config.timeout_seconds is not None:
                 job = await asyncio.wait_for(
-                    self._poll_until_done(job_id),
+                    self._poll_until_done(job_id, artifact=job_artifact),
                     timeout=self.config.timeout_seconds,
                 )
             else:
-                job = await self._poll_until_done(job_id)
+                job = await self._poll_until_done(job_id, artifact=job_artifact)
         except (TimeoutError, asyncio.CancelledError):
             await self._cancel_interrupted_job(job_id)
             raise
@@ -341,11 +370,23 @@ class IonQExecutor(BaseExecutor):
             message = job.get("failure", {}).get("error") or f"job {status}"
             raise RuntimeError(f"IonQ job {job_id} {status}: {message}")
 
+        artifact: dict[str, Any] = {}
         histogram = job.get("data", {}).get("histogram")
         if histogram is None:
-            results = await self._request("GET", f"/jobs/{job_id}/results")
+            results = await self._request("GET", f"/jobs/{job_id}/results", artifact=artifact)
             histogram = self._extract_histogram(results)
 
+        if not artifact:
+            artifact = job_artifact or {
+                "payload": job,
+                "body_base64": None,
+                "sha256": None,
+                "source": "inline-job",
+            }
+        artifact.update({"job_id": job_id, "format": "legacy-probability-histogram"})
+        source_probabilities = {
+            format(int(k), f"0{num_qubits}b"): float(v) for k, v in histogram.items()
+        }
         counts = self._histogram_to_counts(histogram, shots, num_qubits)
 
         # Prefer IonQ's reported execution time; fall back to measured wall time.
@@ -363,11 +404,153 @@ class IonQExecutor(BaseExecutor):
                 "target": self.config.target,
                 "provider": "ionq",
                 "noise_model": self.config.noise_model,
+                "api_version": "0.3",
+                "result_artifact": artifact,
+                "source_probabilities": source_probabilities,
+                "counts_kind": "probability-derived",
+                "counts_allocation": "hamilton",
+                "raw_shot_eligible": False,
+                "wire_order": "legacy-msb-first-unqualified",
                 "wall_time_ms": wall_time * 1000,
             },
         )
 
-    async def _poll_until_done(self, job_id: str) -> dict[str, Any]:
+    async def _execute_v04(self, circuit: Circuit, shots: int) -> ExecutionResult:
+        """Explicit ideal-simulator QASM3 / probabilities-v2 route.
+
+        This instance has a per-call configuration/credential snapshot. The
+        legacy route and its historical integer ordering remain unchanged.
+        """
+        from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister, qasm3
+
+        if type(shots) is not int or not 1 <= shots <= 1_000_000:
+            raise ValueError("IonQ shots must be an integer between 1 and 1000000")
+        labels = {q for gate in circuit.to_dict()["gates"] for q in gate["qubits"]}
+        if labels != set(range(circuit.num_qubits)) or any(type(q) is not int for q in labels):
+            raise ValueError("IonQ v0.4 requires dense integer wires starting at zero")
+        qc = circuit.to_qiskit()  # type: ignore[no-untyped-call]
+        if not qc.num_qubits:
+            raise ValueError("IonQ v0.4 requires at least one qubit")
+        supported = {"h", "x", "y", "z", "s", "t", "rx", "ry", "rz", "cx", "cz", "swap"}
+        if qc.parameters or any(op.operation.name not in supported for op in qc.data):
+            raise ValueError("IonQ v0.4 route supports concrete canonical builder gates only")
+        if any(not math.isfinite(float(p)) for op in qc.data for p in op.operation.params):
+            raise ValueError("IonQ v0.4 rotation parameters must be finite")
+        canonical = QuantumCircuit(
+            QuantumRegister(qc.num_qubits, "q"), ClassicalRegister(qc.num_qubits, "c")
+        )
+        canonical.compose(qc, inplace=True)
+        qc = canonical
+        for i in range(qc.num_qubits):
+            qc.measure(i, i)
+        program = qasm3.dumps(qc)
+        payload = {
+            "type": "ionq.qasm3.v1",
+            "backend": "simulator",
+            "shots": shots,
+            "input": {"data": program},
+        }
+        start = time.perf_counter()
+        submitted = await self._submit_job(payload)
+        job_id = submitted["id"]
+        identity = {
+            "provider": "ionq",
+            "api_version": "0.4",
+            "job_id": job_id,
+            "target": "simulator",
+            "base_url": self.config.base_url,
+        }
+        artifact: dict[str, Any] = {}
+        try:
+            async with asyncio.timeout(self.config.timeout_seconds):
+                job = await self._poll_until_done(job_id)
+                if (
+                    job.get("id") != job_id
+                    or job.get("backend") != "simulator"
+                    or job.get("type") != "ionq.qasm3.v1"
+                ):
+                    raise ValueError("IonQ completed job identity/type/backend mismatch")
+                if job["status"] in _FAILURE_STATUSES:
+                    raise RuntimeError(f"IonQ job {job_id} {job['status']}: {job.get('failure')}")
+                fmt = "ionq.result.probabilities.json.v2"
+                descriptor = job.get("results", {}).get(fmt)
+                if (
+                    not isinstance(descriptor, dict)
+                    or descriptor.get("format") != fmt
+                    or descriptor.get("media_type") != "application/json"
+                ):
+                    raise ValueError("IonQ job has no supported probabilities-v2 artifact")
+                artifact_id = descriptor.get("id")
+                if not isinstance(artifact_id, str) or not artifact_id:
+                    raise ValueError("IonQ result artifact has no usable ID")
+                artifact.update({"format": fmt, "id": artifact_id, "job_id": job_id})
+                result = await self._request(
+                    "GET",
+                    f"/jobs/{quote(job_id, safe='')}/artifacts/{quote(artifact_id, safe='')}",
+                    artifact=artifact,
+                )
+                if artifact["body_base64"] is None:
+                    raise ValueError("IonQ artifact transport must expose original response bytes")
+                probabilities = (
+                    result.get("probabilities", {}).get("registers", {}).get("output_all")
+                )
+                if not isinstance(probabilities, dict) or not probabilities:
+                    raise ValueError("IonQ artifact has no output_all probability distribution")
+                for bits, probability in probabilities.items():
+                    if (
+                        not isinstance(bits, str)
+                        or len(bits) != qc.num_qubits
+                        or set(bits) - {"0", "1"}
+                    ):
+                        raise ValueError("IonQ output_all bitstring width/alphabet mismatch")
+                    if (
+                        type(probability) not in (int, float)
+                        or not math.isfinite(probability)
+                        or not 0 <= probability <= 1
+                    ):
+                        raise ValueError("IonQ artifact contains invalid probability")
+                if not math.isclose(
+                    math.fsum(probabilities.values()), 1.0, rel_tol=0, abs_tol=1e-10
+                ):
+                    raise ValueError("IonQ probabilities must sum to one")
+        except (TimeoutError, asyncio.CancelledError) as error:
+            await self._cancel_interrupted_job(job_id)
+            error.remote_job = identity  # type: ignore[union-attr]
+            raise
+        except Exception as error:
+            error.remote_job = identity  # type: ignore[attr-defined]
+            error.result_artifact = artifact  # type: ignore[attr-defined]
+            raise
+        wall_ms = (time.perf_counter() - start) * 1000
+        reported_ms = job.get("execution_duration_ms")
+        return ExecutionResult(
+            counts=allocate_counts(probabilities, shots),
+            backend="simulator",
+            shots=shots,
+            execution_time_ms=reported_ms if reported_ms is not None else wall_ms,
+            raw_result=job,
+            metadata={
+                **identity,
+                "wall_time_ms": wall_ms,
+                "input_type": "ionq.qasm3.v1",
+                "input_sha256": hashlib.sha256(program.encode()).hexdigest(),
+                "result_artifact": artifact,
+                "source_probabilities": probabilities,
+                "counts_kind": "probability-derived",
+                "counts_allocation": "hamilton",
+                "raw_shot_eligible": False,
+                "wire_order": "q0-leftmost",
+                "wire_order_evidence": "vendor-contract/offline-tests; live-controls-required",
+                "result_register": "output_all",
+                "num_qubits": qc.num_qubits,
+                "wire_labels": list(range(qc.num_qubits)),
+                "ideal_shots_ignored": True,
+            },
+        )
+
+    async def _poll_until_done(
+        self, job_id: str, *, artifact: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Poll a job until it reaches a terminal state.
 
         Returns as soon as the job reports a success or failure status. A status
@@ -386,11 +569,18 @@ class IonQExecutor(BaseExecutor):
                 and pending sets.
         """
         while True:
-            job = await self._request("GET", f"/jobs/{job_id}")
+            job = await self._request(
+                "GET", f"/jobs/{job_id}", **({"artifact": artifact} if artifact is not None else {})
+            )
             status = job.get("status")
             if status in _SUCCESS_STATUSES or status in _FAILURE_STATUSES:
                 return job
-            if status not in _PENDING_STATUSES:
+            pending = (
+                _PENDING_STATUSES | {"started"}
+                if self.config.api_version == "0.4"
+                else _PENDING_STATUSES
+            )
+            if status not in pending:
                 raise RuntimeError(
                     f"IonQ job {job_id} reported unknown status {status!r}. "
                     "Polling stopped because this status is not a known "
@@ -433,13 +623,12 @@ class IonQExecutor(BaseExecutor):
 
         def cancel_submitted(owned_id: str) -> None:
             try:
-                self._request_sync(
-                    "PUT", f"{base_url}/jobs/{owned_id}/status/cancel", headers
-                )
+                self._request_sync("PUT", f"{base_url}/jobs/{owned_id}/status/cancel", headers)
             except Exception:  # noqa: BLE001 - cleanup failures must not mask cancellation
                 _LOGGER.warning(
                     "IonQ cancellation request failed for interrupted submission %r; "
-                    "the job may still be running", owned_id,
+                    "the job may still be running",
+                    owned_id,
                 )
             else:
                 _LOGGER.info("IonQ cancellation requested for interrupted submission %r", owned_id)
@@ -489,7 +678,8 @@ class IonQExecutor(BaseExecutor):
                 except RuntimeError:
                     _LOGGER.warning(
                         "IonQ cleanup could not be scheduled for interrupted submission %r; "
-                        "the job may still be running", owned_id,
+                        "the job may still be running",
+                        owned_id,
                     )
             error.add_note(
                 "IonQ submission was interrupted. Acceptance may be unresolved; "
@@ -498,7 +688,8 @@ class IonQExecutor(BaseExecutor):
             )
             _LOGGER.warning(
                 "IonQ submission interrupted (job ID %r); cancellation is best effort "
-                "and the POST must not be replayed", owned_id,
+                "and the POST must not be replayed",
+                owned_id,
             )
             raise
 
@@ -506,11 +697,29 @@ class IonQExecutor(BaseExecutor):
         self, method: str, url: str, headers: dict[str, str], **kwargs: Any
     ) -> dict[str, Any]:
         """Perform one request without retries; used by request/cleanup workers."""
+        artifact = kwargs.pop("artifact", None)
         response = self._do_request(
             method, url, headers=headers, timeout=_HTTP_TIMEOUT_SECONDS, **kwargs
         )
         response.raise_for_status()
-        data: dict[str, Any] = response.json()
+        body = getattr(response, "content", None)
+        if artifact is not None:
+            artifact.update(
+                {
+                    "source": url,
+                    "body_base64": base64.b64encode(body).decode("ascii")
+                    if isinstance(body, bytes)
+                    else None,
+                    "sha256": hashlib.sha256(body).hexdigest() if isinstance(body, bytes) else None,
+                }
+            )
+        data: dict[str, Any] = (
+            json.loads(body)
+            if artifact is not None and isinstance(body, bytes)
+            else response.json()
+        )
+        if artifact is not None:
+            artifact["payload"] = data
         return data
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:

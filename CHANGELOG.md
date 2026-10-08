@@ -9,6 +9,11 @@ release.
 
 ### Fixed
 
+- IonQ retains original probability result artifacts and labels Hamilton counts
+  as probability-derived, ineligible for raw-shot inference. An explicit v0.4
+  ideal-simulator QASM3 route validates job/artifact identity and uses the
+  documented q0-leftmost register order; legacy defaults and ordering remain.
+
 - Rigetti execution uses non-joining blocking workers and retains native QPU
   handles for best-effort cancellation on timeout or caller cancellation.
   Exceptions preserve job and processor identity; uncertain submission is never
