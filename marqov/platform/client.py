@@ -37,8 +37,10 @@ Observable API contract notes:
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from typing import Any, Mapping, Sequence
+from uuid import UUID
 
 import marqov
 from marqov.circuits import Circuit
@@ -383,6 +385,158 @@ class MarqovClient:
             ) from exc
         return Job(self._transport, job_id)
 
+    def save_script(
+        self,
+        content: str,
+        *,
+        name: str,
+        description: str = "",
+        script_type: str = "script",
+        idempotency_key: str | None = None,
+    ) -> dict:
+        """Save source through the ordinary Scripts API.
+
+        Returns the server response including script_id. Saving does not
+        analyse or submit a job. Supply a durable caller-chosen operation key
+        when the operation must survive a process restart. An ambiguous write
+        raises TransportError; do not create a replacement operation.
+        """
+        _nonempty(content, "content")
+        _nonempty(name, "name")
+        if len(name) > 100:
+            raise ValueError("name must contain at most 100 characters")
+        if not isinstance(description, str):
+            raise ValueError("description must be a string")
+        if script_type not in ("script", "task", "workflow"):
+            raise ValueError("script_type must be script, task or workflow")
+        _operation_key(idempotency_key)
+        return self._transport.request(
+            "POST",
+            "/api/scripts/upload",
+            json={
+                "name": name,
+                "description": description,
+                "script_content": content,
+                "script_type": script_type,
+            },
+            idempotent_write=True,
+            idempotency_key=idempotency_key,
+        )
+
+    def script_execution_options(self, script_id: str, *, shots: int = 1000) -> dict:
+        """Read saved-source SHA256, team and eligible execution destinations.
+
+        This is discovery, not permission to submit: the server rechecks
+        admission at submission. No script or job is created by this method.
+        """
+        identifier = _script_uuid(script_id, "script_id")
+        _positive_integer(shots, "shots")
+        return self._transport.request(
+            "GET",
+            f"/api/scripts/{identifier}/execution-options",
+            params={"shots": shots},
+        )
+
+    def analyse_script(
+        self,
+        script_id: str,
+        *,
+        content: str,
+        backend: str,
+        shots: int = 1000,
+        circuit_count: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict:
+        """Analyse a saved script; return checks, cost and analysis ID.
+
+        The platform validates persisted saved source. The response's
+        content_hash is a signed djb2 staleness hint, not SHA256; use
+        execution-options for saved-source SHA256. A runnable analysis is not
+        a guarantee of submission. No warnings are accepted automatically.
+        """
+        identifier = _script_uuid(script_id, "script_id")
+        _nonempty(content, "content")
+        _nonempty(backend, "backend")
+        _positive_integer(shots, "shots")
+        _operation_key(idempotency_key)
+        body = {
+            "backend": backend,
+            "shots": shots,
+            "content": content,
+            "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        }
+        if circuit_count is not None:
+            _positive_integer(circuit_count, "circuit_count")
+            body["circuit_count"] = circuit_count
+        return self._transport.request(
+            "POST",
+            f"/api/scripts/{identifier}/analyse",
+            json=body,
+            idempotent_write=True,
+            idempotency_key=idempotency_key,
+        )
+
+    def submit_script(
+        self,
+        script_id: str,
+        *,
+        backend: str,
+        analysis_id: str,
+        shots: int = 1000,
+        circuit_count: int | None = None,
+        warn_check_ids: list[str] | None = None,
+        idempotency_key: str | None = None,
+    ) -> Job:
+        """Submit saved source using an explicit analysis reference.
+
+        The server controls eligibility, warnings and paid admission. On the
+        current free route the analysis ID is traceability, not an enforced
+        pin. No analysis or warning acceptance happens automatically. Preserve
+        the operation key before sending; unknown outcomes need reconciliation.
+        """
+        identifier = _script_uuid(script_id, "script_id")
+        analysis = _script_uuid(analysis_id, "analysis_id")
+        _nonempty(backend, "backend")
+        _positive_integer(shots, "shots")
+        _operation_key(idempotency_key)
+        params = {"shots": shots}
+        if circuit_count is not None:
+            _positive_integer(circuit_count, "circuit_count")
+            params["circuit_count"] = circuit_count
+        if warn_check_ids is not None and not isinstance(warn_check_ids, list):
+            raise ValueError("warn_check_ids must be a list of strings")
+        warnings = [] if warn_check_ids is None else list(warn_check_ids)
+        if any(not isinstance(value, str) or not value for value in warnings):
+            raise ValueError("warn_check_ids must contain nonempty strings")
+        body = {
+            "script_id": identifier,
+            "backend": backend,
+            "analysis_id": analysis,
+            "params": params,
+            "warn_check_ids": warnings,
+        }
+        key = idempotency_key if idempotency_key is not None else str(uuid.uuid4())
+        try:
+            response = self._transport.request(
+                "POST",
+                "/api/jobs/submit",
+                json=body,
+                idempotent_write=True,
+                idempotency_key=key,
+            )
+            job_id = _script_uuid(response["job_id"], "job_id")
+        except MarqovPlatformError as exc:
+            exc.idempotency_key = key
+            raise
+        except Exception as exc:
+            raise TransportError(
+                "The submission response could not be read; admission may have occurred. "
+                "Preserve the operation key and reconcile before submitting again.",
+                code="submission_outcome_unknown",
+                idempotency_key=key,
+            ) from exc
+        return Job(transport=self._transport, job_id=job_id)
+
     def job(self, job_id: str) -> Job:
         """Reconnect to an existing job by ID.
 
@@ -485,3 +639,26 @@ class MarqovClient:
             api_version=api_version,
         )
 
+
+def _nonempty(value: str, name: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a nonempty string")
+
+
+def _positive_integer(value: int, name: str) -> None:
+    if type(value) is not int or value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+
+
+def _script_uuid(value: str, name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a UUID string")
+    try:
+        return str(UUID(value))
+    except ValueError:
+        raise ValueError(f"{name} must be a UUID string") from None
+
+
+def _operation_key(value: str | None) -> None:
+    if value is not None:
+        _nonempty(value, "idempotency_key")

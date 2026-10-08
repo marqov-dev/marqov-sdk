@@ -307,6 +307,7 @@ For the full error taxonomy and retry guidance see
 
 - [Getting started](docs/platform-client/getting-started.md)
 - [Native workflows on the hosted platform](docs/platform-client/native-workflows.md)
+- [Saved-script execution](docs/platform-client/saved-scripts.md)
 - [Error handling](docs/platform-client/error-handling.md)
 - [API reference](docs/platform-client/api-reference.md)
 

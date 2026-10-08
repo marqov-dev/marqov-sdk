@@ -85,6 +85,54 @@ the backend; the platform decides whether the program can run there.
 
 ---
 
+### Saved-script execution
+
+Use these helpers for saved source accepted by the hosted Scripts API. They
+return server dictionaries unchanged, except submission returns a Job handle.
+They do not make the generic submit() path accept Python or Circuit payloads.
+
+```python
+saved = client.save_script(content, name="My circuit", description="",
+                           script_type="script", idempotency_key=upload_key)
+options = client.script_execution_options(saved["script_id"], shots=4096)
+analysis = client.analyse_script(saved["script_id"], content=content,
+                                 backend=backend, shots=4096, circuit_count=1,
+                                 idempotency_key=analysis_key)
+# Inspect checks, cost and eligibility before choosing to submit.
+job = client.submit_script(saved["script_id"], backend=backend,
+                           analysis_id=analysis["analysis_id"], shots=4096,
+                           circuit_count=1, warn_check_ids=[],
+                           idempotency_key=submit_key)
+```
+
+- save_script(content, *, name, description="", script_type="script",
+  idempotency_key=None): POST /api/scripts/upload. Types are script, task or
+  workflow; storing source does not promise that it can execute.
+- script_execution_options(script_id, *, shots=1000): GET
+  /api/scripts/{script_id}/execution-options. Discovery includes saved-source
+  SHA256 and eligible destinations; admission is checked again at submission.
+- analyse_script(script_id, *, content, backend, shots=1000,
+  circuit_count=None, idempotency_key=None): POST /api/scripts/{script_id}/analyse.
+  The server analyses persisted source. Its content_hash response is a signed
+  djb2 staleness hint, not SHA256. Preserve the returned analysis_id.
+- submit_script(script_id, *, backend, analysis_id, shots=1000,
+  circuit_count=None, warn_check_ids=None, idempotency_key=None): POST
+  /api/jobs/submit. A UUID analysis reference is required. Warning acceptance
+  defaults to an empty list and must be selected explicitly by the caller.
+  On the current free route this ID provides traceability, not an enforced
+  source/analysis pin. Paid admission remains controlled by the server.
+
+All identifiers are UUIDs; positive shot/circuit counts and other invalid local
+inputs raise ValueError before sending. Platform refusals propagate normally.
+If a submitted response lacks a valid job UUID, TransportError reports
+submission_outcome_unknown and the effective operation key.
+
+See [Saved-script execution](saved-scripts.md) for source checks and recovery
+limits. These helper tests use captured wire contracts; they are not themselves
+live execution qualification.
+
+---
+
 ### `client.managed_runtimes()`
 
 ```python
@@ -193,8 +241,7 @@ and `api_version` (from the server response).
 
 ## `Job`
 
-A handle for a submitted platform job. Returned by `client.submit()` or
-`client.job()`.
+A handle for a submitted platform job. Returned by submission helpers or `client.job()`.
 
 ---
 
