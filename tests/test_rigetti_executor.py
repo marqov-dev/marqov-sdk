@@ -86,28 +86,29 @@ class TestResultNormalisation:
         """Bitstrings put qubit 0 on the left, matching the SDK convention."""
         # ro[0]=1, ro[1]=0 -> "10": qubit 0 measured 1, qubit 1 measured 0.
         readout = [[1, 0], [1, 0], [1, 1]]
-        counts = RigettiExecutor._result_to_counts(_FakeResult(readout), 2)
+        counts = RigettiExecutor._result_to_counts(_FakeResult(readout), 2, len(readout))
         assert counts == {"10": 2, "11": 1}
 
     def test_counts_sum_to_shots(self) -> None:
         """Every shot lands in exactly one bin."""
         readout = [[0, 0], [1, 1], [0, 0], [1, 1], [0, 0]]
-        counts = RigettiExecutor._result_to_counts(_FakeResult(readout), 2)
+        counts = RigettiExecutor._result_to_counts(_FakeResult(readout), 2, len(readout))
         assert sum(counts.values()) == 5
         assert counts == {"00": 3, "11": 2}
 
     def test_zero_qubits_returns_empty(self) -> None:
         """A zero-qubit run has no counts."""
-        assert RigettiExecutor._result_to_counts(_FakeResult([]), 0) == {}
+        assert RigettiExecutor._result_to_counts(_FakeResult([]), 0, 0) == {}
 
-    def test_missing_ro_register_returns_empty(self) -> None:
-        """A result without a ``ro`` register yields empty counts, not an error."""
+    def test_missing_ro_register_raises(self) -> None:
+        """A nonempty execution without its readout is rejected."""
 
         class _NoRo:
             def get_register_map(self) -> dict[str, Any]:
                 return {}
 
-        assert RigettiExecutor._result_to_counts(_NoRo(), 2) == {}
+        with pytest.raises(ValueError, match="missing the ro"):
+            RigettiExecutor._result_to_counts(_NoRo(), 2, 4)
 
 
 class TestExecute:

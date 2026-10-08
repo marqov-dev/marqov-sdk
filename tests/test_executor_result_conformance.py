@@ -124,7 +124,7 @@ class TestRigettiBitOrder:
             def get_register_map(self) -> dict[str, list[list[int]]]:
                 return {"ro": [[1, 0]] * 100}
 
-        counts = RigettiExecutor._result_to_counts(_FakeResult(), num_qubits=2)
+        counts = RigettiExecutor._result_to_counts(_FakeResult(), num_qubits=2, shots=100)
 
         assert counts == {QUBIT0_EXCITED: 100}
 
