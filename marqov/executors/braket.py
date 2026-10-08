@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from dataclasses import dataclass
 from functools import partial
@@ -36,6 +37,7 @@ except ModuleNotFoundError as error:
     boto3 = AwsDevice = AwsSession = BraketCircuit = None
 
 from marqov._braket_native import prepare_braket, validate_options
+from marqov.executors._blocking import BlockingCalls
 from marqov.executors._braket_provenance import measurement_provenance
 from marqov.executors._counts import allocate_counts
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
@@ -89,9 +91,11 @@ class BraketExecutorConfig:
         s3_prefix: Prefix for S3 objects. Defaults to "marqov".
         aws_profile: AWS profile name. None uses default credentials.
         aws_region: AWS region. Inferred from device_arn if not provided.
-        poll_interval_seconds: Currently unused; execution blocks on the vendor
-            SDK's wait for task completion.
-        timeout_seconds: Maximum time to wait for task completion. None for no timeout.
+        poll_interval_seconds: Vendor polling interval when timeout_seconds is
+            configured, capped at that timeout. Otherwise the vendor default is used.
+        timeout_seconds: Maximum result wait after submission. Also bounds the
+            vendor polling budget. None keeps the vendor default. Interruption
+            adds at most one second waiting for a best-effort cancellation request.
     """
 
     device_arn: str
@@ -153,6 +157,13 @@ class BraketExecutor(BaseExecutor):
         """
         if AwsDevice is None:
             raise ImportError('AWS Braket requires pip install "marqov[braket]"')
+        if config.timeout_seconds is not None:
+            for name, value in (
+                ("timeout_seconds", config.timeout_seconds),
+                ("poll_interval_seconds", config.poll_interval_seconds),
+            ):
+                if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+                    raise ValueError(f"{name} must be finite and positive")
         self.config = config
         self._device: AwsDevice | None = None
         self._aws_session: AwsSession | None = None
@@ -220,7 +231,6 @@ class BraketExecutor(BaseExecutor):
         """
         circuit = self._validate_circuit(circuit)
 
-        loop = asyncio.get_running_loop()
         start_time = time.perf_counter()
 
         validate_options(preserve_qubit_labels, kwargs, self.config.device_arn)
@@ -232,37 +242,36 @@ class BraketExecutor(BaseExecutor):
         run_options = {}
         if "disable_qubit_rewiring" in kwargs:
             run_options["disable_qubit_rewiring"] = kwargs["disable_qubit_rewiring"]
+        if self.config.timeout_seconds is not None:
+            run_options["poll_timeout_seconds"] = self.config.timeout_seconds
+            run_options["poll_interval_seconds"] = min(
+                self.config.poll_interval_seconds, self.config.timeout_seconds
+            )
 
-        # Submit task to AWS Braket
-        task = await loop.run_in_executor(
-            None,
-            partial(
+        with BlockingCalls() as calls:
+            task = await calls.call(
                 device.run,
                 braket_circuit,
                 s3_destination_folder=(self.config.s3_bucket, self.config.s3_prefix),
                 shots=shots,
                 **run_options,
-            ),
-        )
-        self._current_task_arn = task.id
-
-        # Wait for result (blocking call in thread pool)
-        if self.config.timeout_seconds is not None:
-            result = await asyncio.wait_for(
-                loop.run_in_executor(None, task.result),
+            )
+            task_arn = task.id
+            self._current_task_arn = task_arn  # Tracking only, never cleanup ownership.
+            result = await calls.wait(
+                partial(self._task_result_sync, task),
+                partial(self._cancel_task_sync, task_arn),
+                job_id=task_arn,
                 timeout=self.config.timeout_seconds,
             )
-        else:
-            result = await loop.run_in_executor(None, task.result)
 
-        wall_time = time.perf_counter() - start_time
+            wall_time = time.perf_counter() - start_time
 
-        # Auxiliary metadata cannot invalidate a successfully retrieved result.
-        # Braket polling normally populated this cache; request no extra refresh.
-        try:
-            await loop.run_in_executor(None, partial(task.metadata, use_cached_value=True))
-        except Exception:
-            logger.debug("Optional Braket task metadata lookup failed after result retrieval", exc_info=True)
+            # Auxiliary metadata cannot invalidate a successfully retrieved result.
+            try:
+                await calls.call(task.metadata, use_cached_value=True)
+            except Exception:
+                logger.debug("Optional Braket task metadata lookup failed after result retrieval", exc_info=True)
 
         execution_duration_ms = _simulator_execution_duration_ms(result)
         # Local wall time includes conversion, polling and download, so its
@@ -302,6 +311,29 @@ class BraketExecutor(BaseExecutor):
             },
         )
 
+    def _task_result_sync(self, task: Any) -> Any:
+        """Own and close the event loop used by Braket's synchronous poller."""
+        worker_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(worker_loop)
+        try:
+            result = task.result()
+            if result is None:
+                status = task.metadata(use_cached_value=True).get("status")
+                if status in {"FAILED", "CANCELLED"}:
+                    raise RuntimeError(f"Braket task {task.id} finished with status {status}")
+                if self.config.timeout_seconds is not None:
+                    raise TimeoutError(f"Braket task {task.id} returned no result within its polling budget")
+                raise RuntimeError(f"Braket task {task.id} returned no result")
+            return result
+        finally:
+            worker_loop.close()
+            asyncio.set_event_loop(None)
+
+    def _cancel_task_sync(self, job_id: str) -> Any:
+        if self._aws_session is None:
+            self._aws_session = self._create_aws_session()
+        return self._aws_session.braket_client.cancel_quantum_task(quantumTaskArn=job_id)
+
     async def cancel(self, job_id: str) -> bool:
         """Cancel a running Braket task.
 
@@ -313,13 +345,9 @@ class BraketExecutor(BaseExecutor):
         """
         try:
             loop = asyncio.get_running_loop()
-            if self._aws_session is None:
-                self._aws_session = self._create_aws_session()
-
-            client = self._aws_session.braket_client
             await loop.run_in_executor(
                 None,
-                partial(client.cancel_quantum_task, quantumTaskArn=job_id),
+                partial(self._cancel_task_sync, job_id),
             )
             return True
         except Exception:

@@ -81,5 +81,6 @@ runtime estimates. See the [Braket simulator result schema](https://amazon-brake
 and result download, so subtracting execution duration does not measure queue
 wait. `wall_time_ms` remains the local elapsed time through result retrieval.
 Neither these fields nor calibration timing qualifies executed pulse overlap.
-The Braket/Azure `poll_interval_seconds` fields remain unused; these executors
-wait through their vendor SDKs.
+Azure's `poll_interval_seconds` remains unused. Braket forwards its interval
+when a timeout is configured, capped at that timeout; otherwise it retains the
+vendor default. See [Braket timeout handling](braket-timeouts.md).

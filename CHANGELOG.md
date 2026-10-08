@@ -9,6 +9,11 @@ release.
 
 ### Fixed
 
+- Braket result waits cancel their own task on timeout or caller cancellation.
+  Configured timeouts also bound vendor polling; blocking result/cleanup calls
+  use a per-execution pool so event-loop shutdown does not join them. Cleanup
+  waits at most one second and is best effort. (marqov-sdk#134, Braket slice)
+
 - IonQ submission workers retain per-call job ownership after caller cancellation
   and request cancellation once if a job ID arrives later. Uncertain acceptance
   and failed cleanup are reported without replaying the POST. (marqov-sdk#216)
@@ -39,8 +44,8 @@ release.
 
 - Braket auxiliary metadata failures no longer discard completed results. Timing
   reads documented simulator result metadata, preserves real zero durations, and
-  reports unknown execution/queue duration as None. Braket and Azure polling
-  config documentation now states that the interval is currently unused. (marqov-sdk#135)
+  reports unknown execution/queue duration as None. Azure polling config
+  documentation states that the interval is currently unused. (marqov-sdk#135)
 
 - Explicit native Braket export preserves sparse source labels in the Rigetti
   Rx/Rz/CZ/XY basis. Both submission paths share validation and support opt-in
