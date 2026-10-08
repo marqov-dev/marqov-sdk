@@ -9,6 +9,11 @@ release.
 
 ### Fixed
 
+- Rigetti measures actual exported physical wires, including sparse labels,
+  and records their ordered mapping in `metadata.measured_qubits`. Incomplete,
+  wrong-width or nonbinary readout is rejected instead of returned as successful
+  counts. Active-wire result width is unchanged. (marqov-sdk#229, marqov-sdk#230)
+
 - IonQ retains original probability result artifacts and labels Hamilton counts
   as probability-derived, ineligible for raw-shot inference. An explicit v0.4
   ideal-simulator QASM3 route validates job/artifact identity and uses the

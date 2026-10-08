@@ -37,8 +37,11 @@ import time
 from collections import Counter, OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from numbers import Integral
 from threading import Lock
 from typing import TYPE_CHECKING, Any
+
+import numpy as np
 
 from marqov.executors._blocking import BlockingCalls
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
@@ -86,7 +89,8 @@ class RigettiExecutor(BaseExecutor):
     Converts a circuit with ``to_pyquil()``, measures every qubit into a ``ro``
     register, compiles with ``quilc`` and runs the program on a pyquil
     ``QuantumComputer``. Counts use the SDK convention where qubit 0 is the
-    leftmost bit, matching :class:`~marqov.executors.local.LocalExecutor`.
+    leftmost bit for dense circuits. For sparse physical labels, counts keys
+    follow ascending active labels recorded in ``metadata.measured_qubits``.
 
     A ``QuantumComputer`` may be injected for unit testing without a running QVM
     or QCS credentials.
@@ -155,7 +159,7 @@ class RigettiExecutor(BaseExecutor):
         return self._qc
 
     @staticmethod
-    def _build_measured_program(program: Any, num_qubits: int, shots: int) -> Any:
+    def _build_measured_program(program: Any, qubits: list[int], shots: int) -> Any:
         """Add a readout register, measurements and a shot loop to a program.
 
         ``Circuit.to_pyquil()`` returns the gate sequence only, so the executor
@@ -164,7 +168,7 @@ class RigettiExecutor(BaseExecutor):
 
         Args:
             program: The pyquil ``Program`` produced by ``to_pyquil()``.
-            num_qubits: Number of qubits to measure (qubit ``i`` -> ``ro[i]``).
+            qubits: Ordered physical qubits; ``qubits[i]`` maps to ``ro[i]``.
             shots: Number of shots to run.
 
         Returns:
@@ -175,29 +179,33 @@ class RigettiExecutor(BaseExecutor):
         from pyquil.gates import MEASURE
 
         measured = Program()
-        ro = measured.declare("ro", "BIT", num_qubits)
+        ro = measured.declare("ro", "BIT", len(qubits))
         measured += program
-        for qubit in range(num_qubits):
-            measured += MEASURE(qubit, ro[qubit])
+        for position, qubit in enumerate(qubits):
+            measured += MEASURE(qubit, ro[position])
         measured.wrap_in_numshots_loop(shots)
         return measured
 
     @staticmethod
-    def _result_to_counts(result: Any, num_qubits: int) -> dict[str, int]:
+    def _result_to_counts(result: Any, num_qubits: int, shots: int) -> dict[str, int]:
         """Convert a pyquil execution result into measurement counts.
 
         Reads the ``ro`` register (a ``shots`` x ``num_qubits`` array of bits) and
-        bins the per-shot bitstrings. Qubit 0 is the leftmost character, matching
-        the SDK's :class:`~marqov.executors.local.LocalExecutor` convention.
+        bins the per-shot bitstrings. The first measured qubit is leftmost;
+        for dense wires this is qubit 0. Sparse physical labels are recorded
+        in ``metadata.measured_qubits`` in ascending order.
 
         Args:
             result: The object returned by ``QuantumComputer.run`` (exposes
                 ``get_register_map()``).
-            num_qubits: Number of measured qubits, used only as a guard.
+            num_qubits: Expected readout width.
+            shots: Expected number of readout rows.
 
         Returns:
-            Mapping of bitstrings to integer counts. Empty when there is no
-            readout data or no qubits.
+            Mapping of bitstrings to integer counts. Empty for zero qubits.
+
+        Raises:
+            ValueError: If readout is missing, incomplete or not binary.
         """
         if num_qubits == 0:
             return {}
@@ -205,9 +213,22 @@ class RigettiExecutor(BaseExecutor):
         register_map = result.get_register_map()
         readout = register_map.get("ro")
         if readout is None:
-            return {}
+            raise ValueError("Rigetti result is missing the ro readout register")
+        try:
+            bits = np.asarray(readout)
+        except (TypeError, ValueError) as error:
+            raise ValueError("Rigetti ro readout must be a rectangular binary array") from error
+        if bits.shape != (shots, num_qubits):
+            raise ValueError(
+                f"Rigetti ro readout shape {bits.shape} does not match "
+                f"requested ({shots}, {num_qubits})"
+            )
+        if not (np.issubdtype(bits.dtype, np.integer) or np.issubdtype(bits.dtype, np.bool_)):
+            raise ValueError("Rigetti ro readout must contain integer or boolean bits")
+        if not np.all((bits == 0) | (bits == 1)):
+            raise ValueError("Rigetti ro readout contains nonbinary values")
 
-        counts: Counter[str] = Counter("".join(str(int(bit)) for bit in shot) for shot in readout)
+        counts: Counter[str] = Counter("".join(str(int(bit)) for bit in shot) for shot in bits)
         return dict(counts)
 
     async def execute(
@@ -227,10 +248,20 @@ class RigettiExecutor(BaseExecutor):
             ExecutionResult with measurement counts and metadata.
 
         Raises:
-            RuntimeError: If compilation or execution fails on the backend.
+            RuntimeError: If compilation, execution or readout validation fails.
+            ValueError: If shots are not positive integers or the exported active
+                qubit count differs from the circuit.
             TimeoutError: If execution exceeds ``config.timeout_seconds``.
         """
         circuit = self._validate_circuit(circuit)
+        requested_shots: Any = shots
+        if (
+            isinstance(requested_shots, bool)
+            or not isinstance(requested_shots, Integral)
+            or requested_shots <= 0
+        ):
+            raise ValueError("Rigetti shots must be a positive integer")
+        shots = int(requested_shots)
 
         start_time = time.perf_counter()
 
@@ -249,7 +280,10 @@ class RigettiExecutor(BaseExecutor):
             )
 
         program = circuit.to_pyquil()  # type: ignore[no-untyped-call]
-        measured = self._build_measured_program(program, num_qubits, shots)
+        measured_qubits = sorted(program.get_qubit_indices())
+        if len(measured_qubits) != num_qubits:
+            raise ValueError("Rigetti export does not preserve the circuit's active qubit count")
+        measured = self._build_measured_program(program, measured_qubits, shots)
 
         identity: dict[str, Any] = {
             "provider": "rigetti",
@@ -316,7 +350,7 @@ class RigettiExecutor(BaseExecutor):
                         identity["phase"] = "execution"
                         result = await calls.call(qc.run, executable)
             wall_time = time.perf_counter() - start_time
-            counts = self._result_to_counts(result, num_qubits)
+            counts = self._result_to_counts(result, num_qubits, shots)
         except (TimeoutError, asyncio.CancelledError) as error:
             error.remote_job = dict(identity)  # type: ignore[union-attr]
             error.add_note(
@@ -338,7 +372,11 @@ class RigettiExecutor(BaseExecutor):
             execution_time_ms=wall_time * 1000,
             shots=shots,
             raw_result=result,
-            metadata={**self._metadata(num_qubits, shots, wall_time * 1000), **identity},
+            metadata={
+                **self._metadata(num_qubits, shots, wall_time * 1000),
+                **identity,
+                "measured_qubits": measured_qubits,
+            },
         )
 
     async def cancel(self, job_id: str) -> bool:

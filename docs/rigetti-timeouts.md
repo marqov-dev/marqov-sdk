@@ -45,3 +45,27 @@ The offline tests exercise real pyQuil QPU submission/cancellation primitives
 with network boundaries replaced. They cover exact job ownership, concurrent
 execution, interruption in compilation/submission/result phases, bounded handle
 retention and failed or slow cleanup. They do not qualify live QCS execution.
+
+## Measurement mapping and result validation
+
+Rigetti measures the physical labels preserved by `Circuit.to_pyquil()`, in
+ascending order, into consecutive `ro` positions. `metadata.measured_qubits[i]`
+identifies the physical wire represented by character i of each counts key.
+Dense circuits retain qubit 0 at the left. For `Circuit().x(2)`, counts are
+`{"1": shots}` and the mapping is `[2]`; for wires 0, 1 and 3, the mapping is
+`[0, 1, 3]`. Untouched wires are not inserted into counts keys. This preserves
+the current active-wire width while fixing wrong-wire measurement; broader
+register-width semantics remain a separate decision.
+
+For nonempty executions, the `ro` register must contain exactly the requested
+number of rows and one column per measured wire. Values must be integer or
+boolean binary bits. Missing registers, empty/partial/extra rows, wrong widths,
+ragged arrays, fractional values and string coercion are refused. Readout
+validation failures raise `RuntimeError` with a `ValueError` cause and the
+existing `remote_job` recovery context. A successful result preserves the raw
+pyQuil result. Shots must be positive integers; an empty circuit still returns
+empty counts without contacting the backend.
+
+Offline tests use pyQuil's actual `PyQVM` to check sparse physical measurements
+and asymmetric entanglement. They establish local adapter semantics, not
+connected QVM/QCS availability or hardware placement.
