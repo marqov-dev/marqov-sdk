@@ -373,7 +373,7 @@ class ExecutorFactory:
             backend_slug: Backend slug used as the IonQ target if not given
                 (e.g. "simulator", "qpu.aria-1").
             backend_config: Configuration with optional target, api_key,
-                base_url, noise_model, and polling options.
+                base_url, api_version, noise_model, and polling options.
 
         Returns:
             Configured IonQExecutor instance.
@@ -390,6 +390,7 @@ class ExecutorFactory:
             "poll_interval_seconds",
             "timeout_seconds",
             "noise_model",
+            "api_version",
         ):
             if key in backend_config:
                 config_kwargs[key] = backend_config[key]
