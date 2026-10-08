@@ -11,9 +11,9 @@ The same code path targets two backends, selected by ``quantum_processor_id``:
 - A **local QVM** (a name ending in ``-qvm`` such as ``"2q-qvm"``). Rigetti's
   Quantum Virtual Machine is fully open source and runs locally via Docker, so it
   needs no cloud account or credits. This is the path the tests exercise.
-- A **real QCS QPU** (e.g. ``"Ankaa-3"``). ``QuantumComputer.run`` submits to QCS
-  and blocks until the job finishes, so the job lifecycle (queued, running,
-  completed) is handled internally by pyquil.
+- A **real QCS QPU** (e.g. ``"Ankaa-3"``). The executor submits through the
+  native QPU interface, retains its response and waits for results separately.
+  Interrupted result waits request best-effort cancellation.
 
 Example:
     >>> from marqov.circuits import bell_state
@@ -32,11 +32,15 @@ before running against a local QVM.
 from __future__ import annotations
 
 import asyncio
+import math
 import time
-from collections import Counter
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable
+from collections import Counter, OrderedDict
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from threading import Lock
+from typing import TYPE_CHECKING, Any
 
+from marqov.executors._blocking import BlockingCalls
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 
 if TYPE_CHECKING:
@@ -66,6 +70,14 @@ class RigettiExecutorConfig:
     compiler_timeout_seconds: float = 30.0
     execution_timeout_seconds: float = 30.0
     timeout_seconds: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.timeout_seconds is not None and (
+            type(self.timeout_seconds) not in (int, float)
+            or not math.isfinite(self.timeout_seconds)
+            or self.timeout_seconds <= 0
+        ):
+            raise ValueError("timeout_seconds must be finite and positive")
 
 
 class RigettiExecutor(BaseExecutor):
@@ -107,6 +119,10 @@ class RigettiExecutor(BaseExecutor):
                 ``get_status`` testable without QCS credentials.
         """
         self.config = config
+        self._connection_config = replace(config)
+        self._active_jobs: dict[str, tuple[Any, Any]] = {}
+        self._interrupted_jobs: OrderedDict[str, tuple[Any, Any]] = OrderedDict()
+        self._jobs_lock = Lock()
         self._qc = qc
         self._list_processors = list_processors
 
@@ -131,10 +147,10 @@ class RigettiExecutor(BaseExecutor):
             from pyquil import get_qc
 
             self._qc = get_qc(
-                self.config.quantum_processor_id,
-                as_qvm=self.config.as_qvm,
-                compiler_timeout=self.config.compiler_timeout_seconds,
-                execution_timeout=self.config.execution_timeout_seconds,
+                self._connection_config.quantum_processor_id,
+                as_qvm=self._connection_config.as_qvm,
+                compiler_timeout=self._connection_config.compiler_timeout_seconds,
+                execution_timeout=self._connection_config.execution_timeout_seconds,
             )
         return self._qc
 
@@ -216,7 +232,6 @@ class RigettiExecutor(BaseExecutor):
         """
         circuit = self._validate_circuit(circuit)
 
-        loop = asyncio.get_running_loop()
         start_time = time.perf_counter()
 
         num_qubits = circuit.num_qubits
@@ -236,35 +251,114 @@ class RigettiExecutor(BaseExecutor):
         program = circuit.to_pyquil()  # type: ignore[no-untyped-call]
         measured = self._build_measured_program(program, num_qubits, shots)
 
-        def _compile_and_run() -> Any:
-            qc = self._get_qc_sync()
-            executable = qc.compile(measured)
-            return qc.run(executable)
-
+        identity: dict[str, Any] = {
+            "provider": "rigetti",
+            "quantum_processor_id": self._connection_config.quantum_processor_id,
+            "requested_quantum_processor_id": self._connection_config.quantum_processor_id,
+            "as_qvm": self._connection_config.as_qvm
+            if self._connection_config.as_qvm is not None
+            else self._connection_config.quantum_processor_id.endswith("-qvm"),
+            "job_id": None,
+            "submission_status": "not_submitted",
+            "phase": "initialization",
+            "cancellation_supported": False,
+        }
         try:
-            coro = loop.run_in_executor(None, _compile_and_run)
-            if self.config.timeout_seconds is not None:
-                result = await asyncio.wait_for(coro, timeout=self.config.timeout_seconds)
-            else:
-                result = await coro
-        except asyncio.TimeoutError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - normalised to RuntimeError below
-            raise RuntimeError(
-                f"Rigetti execution failed on {self.config.quantum_processor_id}: {exc}"
-            ) from exc
+            with BlockingCalls() as calls:
+                async with asyncio.timeout(self.config.timeout_seconds) as deadline:
+                    qc = await calls.call(self._get_qc_sync)
+                    identity["phase"] = "compilation"
+                    executable = await calls.call(qc.compile, measured)
+                    qam: Any = getattr(qc, "qam", None)
+                    from pyquil.api import QPU
 
-        wall_time = time.perf_counter() - start_time
-        counts = self._result_to_counts(result, num_qubits)
+                    native_cancel = isinstance(qam, QPU)
+                    identity["phase"] = "submission"
+                    identity["submission_status"] = "unknown"
+                    if native_cancel:
+                        identity["cancellation_supported"] = True
+                        identity["as_qvm"] = False
+                        identity["quantum_processor_id"] = qam.quantum_processor_id
+                        response = await calls.call(qam.execute, executable)
+                        identity["job_id"] = response.job_id
+                        identity["submission_status"] = "submitted"
+                        identity["phase"] = "result"
+                        with self._jobs_lock:
+                            self._active_jobs[response.job_id] = (qam, response)
+                        # Use the remaining overall budget for the result wait.
+                        # Its TimeoutError must survive a second cancellation
+                        # during best-effort cleanup.
+                        expires = deadline.when()
+                        remaining = (
+                            None
+                            if expires is None
+                            else max(0.0, expires - asyncio.get_running_loop().time())
+                        )
+                        deadline.reschedule(None)
+                        try:
+                            result = await calls.wait(
+                                lambda: qam.get_result(response),
+                                lambda: qam.cancel(response),
+                                job_id=response.job_id,
+                                timeout=remaining,
+                            )
+                        except BaseException:
+                            with self._jobs_lock:
+                                self._interrupted_jobs[response.job_id] = (qam, response)
+                                while len(self._interrupted_jobs) > 32:
+                                    self._interrupted_jobs.popitem(last=False)
+                            raise
+                        finally:
+                            with self._jobs_lock:
+                                self._active_jobs.pop(response.job_id, None)
+                    else:
+                        # QVM and compatible injected run-only backends expose no remote handle.
+                        identity["phase"] = "execution"
+                        result = await calls.call(qc.run, executable)
+            wall_time = time.perf_counter() - start_time
+            counts = self._result_to_counts(result, num_qubits)
+        except (TimeoutError, asyncio.CancelledError) as error:
+            error.remote_job = dict(identity)  # type: ignore[union-attr]
+            error.add_note(
+                f"Rigetti execution interrupted in {identity['phase']}; native job "
+                f"{identity['job_id']!r}, acceptance {identity['submission_status']}. "
+                "Cancellation is best effort when a handle exists; provider state is unconfirmed."
+            )
+            raise
+        except Exception as exc:
+            failure = RuntimeError(
+                f"Rigetti execution failed on {identity['quantum_processor_id']}: {exc}"
+            )
+            failure.remote_job = dict(identity)  # type: ignore[attr-defined]
+            raise failure from exc
 
         return ExecutionResult(
             counts=counts,
-            backend=self.config.quantum_processor_id,
+            backend=identity["quantum_processor_id"],
             execution_time_ms=wall_time * 1000,
             shots=shots,
             raw_result=result,
-            metadata=self._metadata(num_qubits, shots, wall_time * 1000),
+            metadata={**self._metadata(num_qubits, shots, wall_time * 1000), **identity},
         )
+
+    async def cancel(self, job_id: str) -> bool:
+        """Request cancellation for an owned active or recently interrupted native job.
+
+        QVM/run-only backends and IDs without a retained handle return
+        False. The last 32 interrupted handles are retained; successes are removed.
+        A successful request does not confirm terminal cancellation.
+        """
+        with self._jobs_lock:
+            owned = self._active_jobs.get(job_id) or self._interrupted_jobs.get(job_id)
+        if owned is None:
+            return False
+        qam, response = owned
+        try:
+            with BlockingCalls() as calls:
+                await asyncio.wait_for(calls.call(qam.cancel, response), 1.0)
+            return True
+        except Exception:  # noqa: BLE001 - public best-effort cancellation contract
+            return False
 
     def _metadata(self, num_qubits: int, shots: int, wall_time_ms: float) -> dict[str, Any]:
         """Build the ExecutionResult metadata for a run.
