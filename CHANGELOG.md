@@ -9,6 +9,12 @@ release.
 
 ### Fixed
 
+- Rigetti execution uses non-joining blocking workers and retains native QPU
+  handles for best-effort cancellation on timeout or caller cancellation.
+  Exceptions preserve job and processor identity; uncertain submission is never
+  replayed. QVM/run-only backends expose no native cancellation handle.
+  (marqov-sdk#134, Rigetti slice)
+
 - Azure Cirq execution retains its native job handle, requests best-effort
   cancellation after an interrupted result wait, and preserves structured
   recovery context. Native and IonQ result conversion and no-timeout vendor
