@@ -59,6 +59,9 @@ pip install "marqov[braket]"
 # IBM Quantum
 pip install "marqov[ibm]"
 
+# Azure Quantum (Qiskit and Cirq adapters)
+pip install "marqov[azure]"
+
 # QuTiP solvers and Marqov's result-recording helper
 pip install "marqov[qutip]"
 
@@ -75,6 +78,9 @@ pip install "marqov[all]"
 Use Python 3.12 for `[all]`, `[rigetti]` and `[pyquil]`: current pyQuil/quil
 dependencies do not reliably install and import on Python 3.13. Release
 verification covers Python 3.12; it does not establish 3.13 support for these extras.
+
+The Azure extra selects the vendor's Qiskit and Cirq adapter dependencies,
+including Q# support. See [Azure installation checks](docs/azure-installation.md).
 
 AWS Braket is an optional provider dependency. Existing Braket installations
 should use `marqov[braket]` (or `marqov[all]`) when upgrading. Core workflows,

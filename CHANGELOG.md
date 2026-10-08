@@ -9,6 +9,10 @@ release.
 
 ### Fixed
 
+- Azure and all extras now install the vendor's Qiskit/Cirq adapter dependencies,
+  including Q# support and the supported Cirq range. Credential-free adapter
+  imports are checked in CI and installed-wheel release verification. (marqov-sdk#223)
+
 - Azure Qiskit result waits request best-effort cancellation on their own job
   after timeout or caller cancellation. Vendor polling receives the configured
   budget, workers do not delay event-loop shutdown, and exceptions retain
