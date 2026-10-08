@@ -69,8 +69,11 @@ class _FakeQiskitJob:
     def job_id(self) -> str:
         return "fake-job-id"
 
-    def result(self) -> Any:
+    def result(self, timeout: float | None = None) -> Any:
         return self._result
+
+    def cancel(self) -> None:
+        raise AssertionError("Successful execution must not cancel")
 
     def properties(self) -> Any:
         return None
