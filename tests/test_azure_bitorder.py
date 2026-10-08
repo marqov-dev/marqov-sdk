@@ -11,6 +11,7 @@ See marqov-sdk#131.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -46,18 +47,22 @@ def _executor(framework: str, backend: Any) -> AzureQuantumExecutor:
 class _FakeCirqService:
     """Stand-in for azure.quantum.cirq.AzureQuantumService.
 
-    Like the real service, `run()` submits, waits, and returns the finished
-    `cirq.Result` itself rather than a job handle.
+    Like the real service, `create_job()` returns a native job handle.
+    Its injected target converts an offline result without Azure contact.
     """
 
     def __init__(self) -> None:
         self.calls: list[tuple[Any, int]] = []
 
-    def run(self, program: Any, repetitions: int = 1, **kwargs: Any) -> Any:
+    def create_job(self, program: Any, repetitions: int = 1, **kwargs: Any) -> Any:
         import cirq
+        from azure.quantum.cirq.job import Job
 
         self.calls.append((program, repetitions))
-        return cirq.Simulator().run(program, repetitions=repetitions)
+        result = cirq.Simulator().run(program, repetitions=repetitions)
+        native = SimpleNamespace(id="fake-cirq-job", get_results=lambda **kw: result)
+        target = SimpleNamespace(_to_cirq_result=lambda **kw: kw["result"])
+        return Job(native, program=program, target=target)
 
 
 class _FakeQiskitJob:
@@ -162,14 +167,14 @@ class TestCirqExecutionPath:
         assert service.calls[0][1] == 50
 
     @pytest.mark.asyncio
-    async def test_job_id_is_none(self, cirq_module: Any) -> None:
-        """service.run() returns a result, so no job id can be recorded."""
+    async def test_job_id_is_retained(self, cirq_module: Any) -> None:
+        """create_job() exposes the native submission ID."""
         executor = _executor("cirq", _FakeCirqService())
 
         result = await executor.execute(Circuit().x(0).z(1), shots=10)
 
-        assert result.metadata["job_id"] is None
-        assert executor._current_job_id is None
+        assert result.metadata["job_id"] == "fake-cirq-job"
+        assert executor._current_job_id == "fake-cirq-job"
         assert result.metadata["framework"] == "cirq"
         assert result.shots == 10
 
