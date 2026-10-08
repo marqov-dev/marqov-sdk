@@ -37,11 +37,13 @@ Example (Cirq):
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from marqov.executors._blocking import BlockingCalls
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 
 if TYPE_CHECKING:
@@ -59,7 +61,10 @@ class AzureQuantumExecutorConfig:
         location: Azure region (e.g., "eastus", "westus").
         target: Target device name (e.g., "ionq.simulator", "quantinuum.qpu.h2-1").
         framework: Quantum framework to use ("qiskit" or "cirq").
-        timeout_seconds: Maximum time to wait for job completion. None for no timeout.
+        timeout_seconds: Maximum result wait after Qiskit submission, also passed
+            to the vendor poller. Cirq bounds the combined submit-and-wait call.
+            None preserves vendor defaults. Qiskit interruption adds at most
+            one second waiting for best-effort cancellation.
         poll_interval_seconds: Currently unused; execution blocks on the vendor
             SDK's wait for job completion.
     """
@@ -75,6 +80,12 @@ class AzureQuantumExecutorConfig:
 
     def __post_init__(self) -> None:
         """Validate configuration."""
+        if self.timeout_seconds is not None and (
+            type(self.timeout_seconds) not in (int, float)
+            or not math.isfinite(self.timeout_seconds)
+            or self.timeout_seconds <= 0
+        ):
+            raise ValueError("timeout_seconds must be finite and positive")
         if self.framework not in ("qiskit", "cirq"):
             raise ValueError(f"Unsupported framework: {self.framework}. Must be 'qiskit' or 'cirq'.")
 
@@ -106,6 +117,14 @@ class AzureQuantumExecutor(BaseExecutor):
             config: Executor configuration including workspace and target details.
         """
         self.config = config
+        # The cached Qiskit workspace/backend and recovery context use one route.
+        self._qiskit_route = {
+            "subscription_id": config.subscription_id,
+            "resource_group": config.resource_group,
+            "workspace_name": config.workspace_name,
+            "location": config.location,
+            "backend": config.target,
+        }
         self._workspace = None
         self._backend = None
         self._current_job_id: str | None = None
@@ -118,11 +137,17 @@ class AzureQuantumExecutor(BaseExecutor):
         """
         from azure.quantum import Workspace
 
+        route = self._qiskit_route if self.config.framework == "qiskit" else {
+            "subscription_id": self.config.subscription_id,
+            "resource_group": self.config.resource_group,
+            "workspace_name": self.config.workspace_name,
+            "location": self.config.location,
+        }
         return Workspace(
-            subscription_id=self.config.subscription_id,
-            resource_group=self.config.resource_group,
-            name=self.config.workspace_name,
-            location=self.config.location,
+            subscription_id=route["subscription_id"],
+            resource_group=route["resource_group"],
+            name=route["workspace_name"],
+            location=route["location"],
         )
 
     async def _get_workspace(self):
@@ -148,7 +173,7 @@ class AzureQuantumExecutor(BaseExecutor):
         from azure.quantum.qiskit import AzureQuantumProvider
 
         provider = AzureQuantumProvider(workspace=workspace)
-        return provider.get_backend(self.config.target)
+        return provider.get_backend(self._qiskit_route["backend"])
 
     async def _get_qiskit_backend(self):
         """Get or create Qiskit backend (async wrapper).
@@ -250,8 +275,6 @@ class AzureQuantumExecutor(BaseExecutor):
         Returns:
             ExecutionResult with counts and metadata.
         """
-        loop = asyncio.get_running_loop()
-
         # Get Qiskit backend
         backend = await self._get_qiskit_backend()
 
@@ -264,21 +287,54 @@ class AzureQuantumExecutor(BaseExecutor):
             # No classical registers, need to add measurements
             qiskit_circuit.measure_all()
 
-        # Submit job
-        job = await loop.run_in_executor(
-            None,
-            partial(backend.run, qiskit_circuit, shots=shots),
-        )
-        self._current_job_id = job.job_id()
+        identity = {
+            "provider": "Azure Quantum",
+            "framework": "qiskit",
+            **self._qiskit_route,
+            "job_id": None,
+            "submission_status": "unknown",
+        }
+        timeout = self.config.timeout_seconds
+        with BlockingCalls() as calls:
+            try:
+                job = await calls.call(backend.run, qiskit_circuit, shots=shots)
+            except (Exception, asyncio.CancelledError) as error:
+                self._retain_qiskit_identity(error, identity)
+                raise
+            try:
+                identity["job_id"] = job.job_id()
+                identity["submission_status"] = "submitted"
+                self._current_job_id = identity["job_id"]  # Tracking only.
+                return await self._qiskit_result(job, calls, shots, timeout, identity)
+            except (Exception, asyncio.CancelledError) as error:
+                self._retain_qiskit_identity(error, identity)
+                raise
 
-        # Wait for result
-        if self.config.timeout_seconds is not None:
-            result = await asyncio.wait_for(
-                loop.run_in_executor(None, job.result),
-                timeout=self.config.timeout_seconds,
-            )
+    @staticmethod
+    def _retain_qiskit_identity(error: BaseException, identity: dict[str, Any]) -> None:
+        """Keep recovery context without changing the original exception type."""
+        error.remote_job = dict(identity)  # type: ignore[attr-defined]
+        if identity["job_id"] is None:
+            error.add_note("Azure submission acceptance is unknown; do not replay automatically.")
         else:
-            result = await loop.run_in_executor(None, job.result)
+            error.add_note(
+                f"Azure job {identity['job_id']!r} remains recoverable in "
+                f"workspace {identity['workspace_name']!r}; interruption does not "
+                "confirm provider cancellation."
+            )
+
+    async def _qiskit_result(
+        self,
+        job: Any,
+        calls: BlockingCalls,
+        shots: int,
+        timeout: float | None,
+        identity: dict[str, Any],
+    ) -> ExecutionResult:
+        result_call = job.result if timeout is None else partial(job.result, timeout=timeout)
+        result = await calls.wait(
+            result_call, job.cancel, job_id=identity["job_id"], timeout=timeout,
+        )
 
         # Check if job succeeded
         if not result.success:
@@ -298,18 +354,12 @@ class AzureQuantumExecutor(BaseExecutor):
         raw_counts = dict(result.get_counts())
         counts = {k.replace(" ", "")[::-1]: v for k, v in raw_counts.items()}
 
-        # Extract metadata
-        metadata = {
-            "job_id": job.job_id(),
-            "backend": self.config.target,
-            "framework": "qiskit",
-            "provider": "Azure Quantum",
-        }
+        metadata = dict(identity)
 
         # Try to get cost and timing info
         try:
             # Azure job metadata may have cost information
-            job_metadata = await loop.run_in_executor(None, lambda: job.properties())
+            job_metadata = await calls.call(job.properties)
             if hasattr(job_metadata, "cost_estimate"):
                 metadata["cost_estimate"] = job_metadata.cost_estimate
             if hasattr(job_metadata, "execution_time"):
@@ -321,7 +371,7 @@ class AzureQuantumExecutor(BaseExecutor):
 
         return ExecutionResult(
             counts=counts,
-            backend=self.config.target,
+            backend=identity["backend"],
             execution_time_ms=execution_time_ms,
             shots=shots,
             raw_result=result,

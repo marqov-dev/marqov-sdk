@@ -9,6 +9,12 @@ release.
 
 ### Fixed
 
+- Azure Qiskit result waits request best-effort cancellation on their own job
+  after timeout or caller cancellation. Vendor polling receives the configured
+  budget, workers do not delay event-loop shutdown, and exceptions retain
+  structured job/workspace recovery context. In-flight submission acceptance
+  remains explicit and unknown. (marqov-sdk#134, Qiskit slice)
+
 - Braket result waits cancel their own task on timeout or caller cancellation.
   Configured timeouts also bound vendor polling; blocking result/cleanup calls
   use a per-execution pool so event-loop shutdown does not join them. Cleanup
