@@ -9,6 +9,11 @@ release.
 
 ### Fixed
 
+- Azure Cirq execution retains its native job handle, requests best-effort
+  cancellation after an interrupted result wait, and preserves structured
+  recovery context. Native and IonQ result conversion and no-timeout vendor
+  polling defaults are preserved. (marqov-sdk#134, Cirq slice)
+
 - Azure and all extras now install the vendor's Qiskit/Cirq adapter dependencies,
   including Q# support and the supported Cirq range. Credential-free adapter
   imports are checked in CI and installed-wheel release verification. (marqov-sdk#223)

@@ -61,9 +61,8 @@ class AzureQuantumExecutorConfig:
         location: Azure region (e.g., "eastus", "westus").
         target: Target device name (e.g., "ionq.simulator", "quantinuum.qpu.h2-1").
         framework: Quantum framework to use ("qiskit" or "cirq").
-        timeout_seconds: Maximum result wait after Qiskit submission, also passed
-            to the vendor poller. Cirq bounds the combined submit-and-wait call.
-            None preserves vendor defaults. Qiskit interruption adds at most
+        timeout_seconds: Maximum result wait after submission, also passed
+            to the vendor poller. None preserves vendor defaults. Interruption adds at most
             one second waiting for best-effort cancellation.
         poll_interval_seconds: Currently unused; execution blocks on the vendor
             SDK's wait for job completion.
@@ -117,8 +116,8 @@ class AzureQuantumExecutor(BaseExecutor):
             config: Executor configuration including workspace and target details.
         """
         self.config = config
-        # The cached Qiskit workspace/backend and recovery context use one route.
-        self._qiskit_route = {
+        # The cached workspace/backend and recovery context use one route.
+        self._route = {
             "subscription_id": config.subscription_id,
             "resource_group": config.resource_group,
             "workspace_name": config.workspace_name,
@@ -137,12 +136,7 @@ class AzureQuantumExecutor(BaseExecutor):
         """
         from azure.quantum import Workspace
 
-        route = self._qiskit_route if self.config.framework == "qiskit" else {
-            "subscription_id": self.config.subscription_id,
-            "resource_group": self.config.resource_group,
-            "workspace_name": self.config.workspace_name,
-            "location": self.config.location,
-        }
+        route = self._route
         return Workspace(
             subscription_id=route["subscription_id"],
             resource_group=route["resource_group"],
@@ -173,7 +167,7 @@ class AzureQuantumExecutor(BaseExecutor):
         from azure.quantum.qiskit import AzureQuantumProvider
 
         provider = AzureQuantumProvider(workspace=workspace)
-        return provider.get_backend(self._qiskit_route["backend"])
+        return provider.get_backend(self._route["backend"])
 
     async def _get_qiskit_backend(self):
         """Get or create Qiskit backend (async wrapper).
@@ -202,7 +196,7 @@ class AzureQuantumExecutor(BaseExecutor):
 
         service = AzureQuantumService(
             workspace=workspace,
-            default_target=self.config.target,
+            default_target=self._route["backend"],
         )
         return service
 
@@ -290,7 +284,7 @@ class AzureQuantumExecutor(BaseExecutor):
         identity = {
             "provider": "Azure Quantum",
             "framework": "qiskit",
-            **self._qiskit_route,
+            **self._route,
             "job_id": None,
             "submission_status": "unknown",
         }
@@ -299,7 +293,7 @@ class AzureQuantumExecutor(BaseExecutor):
             try:
                 job = await calls.call(backend.run, qiskit_circuit, shots=shots)
             except (Exception, asyncio.CancelledError) as error:
-                self._retain_qiskit_identity(error, identity)
+                self._retain_job_identity(error, identity)
                 raise
             try:
                 identity["job_id"] = job.job_id()
@@ -307,11 +301,11 @@ class AzureQuantumExecutor(BaseExecutor):
                 self._current_job_id = identity["job_id"]  # Tracking only.
                 return await self._qiskit_result(job, calls, shots, timeout, identity)
             except (Exception, asyncio.CancelledError) as error:
-                self._retain_qiskit_identity(error, identity)
+                self._retain_job_identity(error, identity)
                 raise
 
     @staticmethod
-    def _retain_qiskit_identity(error: BaseException, identity: dict[str, Any]) -> None:
+    def _retain_job_identity(error: BaseException, identity: dict[str, Any]) -> None:
         """Keep recovery context without changing the original exception type."""
         error.remote_job = dict(identity)  # type: ignore[attr-defined]
         if identity["job_id"] is None:
@@ -394,8 +388,6 @@ class AzureQuantumExecutor(BaseExecutor):
         Returns:
             ExecutionResult with counts and metadata.
         """
-        loop = asyncio.get_running_loop()
-
         # Get Cirq service
         service = await self._get_cirq_service()
 
@@ -415,22 +407,59 @@ class AzureQuantumExecutor(BaseExecutor):
             qubits = sorted(cirq_circuit.all_qubits())
             cirq_circuit.append(cirq.measure(*qubits, key="result"))
 
-        # Submit the job and wait for it. AzureQuantumService.run() creates the
-        # job, blocks until it completes, and returns a cirq.Result, not a job
-        # handle, so the timeout wraps this call rather than a second one.
-        run_cirq = partial(service.run, cirq_circuit, repetitions=shots)
-        if self.config.timeout_seconds is not None:
-            result = await asyncio.wait_for(
-                loop.run_in_executor(None, run_cirq),
-                timeout=self.config.timeout_seconds,
-            )
-        else:
-            result = await loop.run_in_executor(None, run_cirq)
+        identity = {
+            "provider": "Azure Quantum", "framework": "cirq", **self._route,
+            "job_id": None, "submission_status": "unknown",
+        }
+        timeout = self.config.timeout_seconds
+        with BlockingCalls() as calls:
+            try:
+                job = await calls.call(service.create_job, cirq_circuit, repetitions=shots)
+            except (Exception, asyncio.CancelledError) as error:
+                self._retain_job_identity(error, identity)
+                raise
+            try:
+                identity["job_id"] = job.job_id()
+                identity["submission_status"] = "submitted"
+                self._current_job_id = identity["job_id"]  # Tracking only.
+                return await self._cirq_result(service, job, cirq_circuit, calls, shots, timeout, identity)
+            except (Exception, asyncio.CancelledError) as error:
+                self._retain_job_identity(error, identity)
+                raise
 
-        # run() hands back a result, not a job, so there is no job id to
-        # record. Reporting one would mean switching to service.create_job()
-        # plus job.results(), which is a separate change.
-        self._current_job_id = None
+    @staticmethod
+    def _cirq_result_sync(service: Any, job: Any, timeout: float | None, target: str) -> Any:
+        """Preserve Azure's native and provider-specific Cirq conversions."""
+        import cirq
+        from azure.quantum.cirq.job import Job as AzureCirqJob
+        from azure.quantum.job.base_job import DEFAULT_TIMEOUT
+
+        budget = DEFAULT_TIMEOUT if timeout is None else timeout
+        if isinstance(job, AzureCirqJob):
+            return job.results(timeout_seconds=budget)
+        # Azure's IonQ wrapper returns provider results rather than cirq.Result.
+        target_wrapper = service.get_target(name=target)
+        try:
+            result = job.results(timeout_seconds=budget)
+        except RuntimeError as error:
+            # Preserve the legacy provider polling error mapped by service.run().
+            if "Job was not completed successful. Instead had status: " in str(error):
+                raise TimeoutError(
+                    f"The wait time has exceeded {budget} seconds. Job status: '{job.status()}'."
+                ) from error
+            raise
+        return target_wrapper._to_cirq_result(
+            result=result, param_resolver=cirq.ParamResolver({}), seed=None,
+        )
+
+    async def _cirq_result(
+        self, service: Any, job: Any, cirq_circuit: Any, calls: BlockingCalls,
+        shots: int, timeout: float | None, identity: dict[str, Any],
+    ) -> ExecutionResult:
+        result = await calls.wait(
+            partial(self._cirq_result_sync, service, job, timeout, identity["backend"]),
+            job.cancel, job_id=identity["job_id"], timeout=timeout,
+        )
 
         # Convert Cirq result to counts
         # Cirq results are typically a list of measurement results
@@ -451,16 +480,11 @@ class AzureQuantumExecutor(BaseExecutor):
                 bitstring = "".join(str(int(b)) for b in measurement)
                 counts[bitstring] = counts.get(bitstring, 0) + 1
 
-        metadata = {
-            "job_id": self._current_job_id,
-            "backend": self.config.target,
-            "framework": "cirq",
-            "provider": "Azure Quantum",
-        }
+        metadata = dict(identity)
 
         return ExecutionResult(
             counts=counts,
-            backend=self.config.target,
+            backend=identity["backend"],
             execution_time_ms=0.0,  # Cirq doesn't provide this easily
             shots=shots,
             raw_result=result,
