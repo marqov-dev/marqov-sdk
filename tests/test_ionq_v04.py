@@ -280,3 +280,68 @@ async def test_execution_snapshots_route_and_credentials_before_submit():
     assert result.backend == "simulator"
     assert result.metadata["base_url"] == "https://api.ionq.co/v0.4"
     assert result.metadata["source_probabilities"] == {"10": 1.0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["failed", "canceled", "cancelled"])
+async def test_terminal_failure_does_not_require_success_payload_fields(status):
+    transport = Transport(
+        {}, job={"id": "owned", "status": status, "failure": {"error": "vendor reason"}}
+    )
+    with pytest.raises(RuntimeError, match=f"owned {status}:.*vendor reason") as caught:
+        await ex(transport).execute(Circuit().x(0))
+    assert caught.value.remote_job["job_id"] == "owned"
+    assert len(transport.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_canceled_job_without_failure_has_useful_status_message():
+    transport = Transport({}, job={"id": "owned", "status": "canceled"})
+    with pytest.raises(RuntimeError, match="IonQ job owned canceled$"):
+        await ex(transport).execute(Circuit().x(0))
+
+
+@pytest.mark.asyncio
+async def test_wrong_job_failure_is_not_trusted():
+    transport = Transport(
+        {}, job={"id": "other", "status": "failed", "failure": {"error": "untrusted"}}
+    )
+    with pytest.raises(ValueError, match="identity") as caught:
+        await ex(transport).execute(Circuit().x(0))
+    assert caught.value.remote_job["job_id"] == "owned"
+    assert len(transport.calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        None,
+        5,
+        {"probabilities": []},
+        {"probabilities": None},
+        {"probabilities": {"registers": []}},
+        {"probabilities": {"registers": None}},
+    ],
+)
+async def test_nonobject_artifact_retains_original_bytes_with_clear_error(payload):
+    transport = Transport({}, body=json.dumps(payload).encode())
+    with pytest.raises(ValueError, match="must be a JSON object") as caught:
+        await ex(transport).execute(Circuit().x(0))
+    assert caught.value.remote_job["job_id"] == "owned"
+    artifact = caught.value.result_artifact
+    assert base64.b64decode(artifact["body_base64"]) == transport.body
+    assert artifact["sha256"] == hashlib.sha256(transport.body).hexdigest()
+    assert len(transport.calls) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("results", [[], None, 5])
+async def test_nonobject_results_descriptor_refused_before_artifact_fetch(results):
+    transport = Transport({"1": 1.0})
+    transport.job["results"] = results
+    with pytest.raises(ValueError, match="supported probabilities-v2 artifact") as caught:
+        await ex(transport).execute(Circuit().x(0))
+    assert caught.value.remote_job["job_id"] == "owned"
+    assert len(transport.calls) == 2
