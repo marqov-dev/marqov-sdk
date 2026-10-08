@@ -464,16 +464,18 @@ class IonQExecutor(BaseExecutor):
         try:
             async with asyncio.timeout(self.config.timeout_seconds):
                 job = await self._poll_until_done(job_id)
-                if (
-                    job.get("id") != job_id
-                    or job.get("backend") != "simulator"
-                    or job.get("type") != "ionq.qasm3.v1"
-                ):
-                    raise ValueError("IonQ completed job identity/type/backend mismatch")
+                if job.get("id") != job_id:
+                    raise ValueError("IonQ completed job identity mismatch")
                 if job["status"] in _FAILURE_STATUSES:
-                    raise RuntimeError(f"IonQ job {job_id} {job['status']}: {job.get('failure')}")
+                    message = f"IonQ job {job_id} {job['status']}"
+                    if job.get("failure"):
+                        message += f": {job['failure']}"
+                    raise RuntimeError(message)
+                if job.get("backend") != "simulator" or job.get("type") != "ionq.qasm3.v1":
+                    raise ValueError("IonQ completed job type/backend mismatch")
                 fmt = "ionq.result.probabilities.json.v2"
-                descriptor = job.get("results", {}).get(fmt)
+                results = job.get("results")
+                descriptor = results.get(fmt) if isinstance(results, dict) else None
                 if (
                     not isinstance(descriptor, dict)
                     or descriptor.get("format") != fmt
@@ -491,9 +493,15 @@ class IonQExecutor(BaseExecutor):
                 )
                 if artifact["body_base64"] is None:
                     raise ValueError("IonQ artifact transport must expose original response bytes")
-                probabilities = (
-                    result.get("probabilities", {}).get("registers", {}).get("output_all")
-                )
+                if not isinstance(result, dict):
+                    raise ValueError("IonQ artifact must be a JSON object")  # noqa: TRY004 - invalid provider JSON
+                probability_data = result.get("probabilities", {})
+                if not isinstance(probability_data, dict):
+                    raise ValueError("IonQ artifact probabilities must be a JSON object")  # noqa: TRY004 - invalid provider JSON
+                registers = probability_data.get("registers", {})
+                if not isinstance(registers, dict):
+                    raise ValueError("IonQ artifact registers must be a JSON object")  # noqa: TRY004 - invalid provider JSON
+                probabilities = registers.get("output_all")
                 if not isinstance(probabilities, dict) or not probabilities:
                     raise ValueError("IonQ artifact has no output_all probability distribution")
                 for bits, probability in probabilities.items():

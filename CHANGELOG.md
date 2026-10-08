@@ -9,6 +9,10 @@ release.
 
 ### Fixed
 
+- IonQ v0.4 reports terminal vendor failures before validating success-only
+  fields, while still checking job identity. Malformed result objects raise
+  clear validation errors with job identity and original artifact bytes retained.
+
 - Rigetti measures actual exported physical wires, including sparse labels,
   and records their ordered mapping in `metadata.measured_qubits`. Incomplete,
   wrong-width or nonbinary readout is rejected instead of returned as successful
