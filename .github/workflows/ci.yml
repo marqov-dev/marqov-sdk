@@ -16,6 +16,10 @@ jobs:
         with: { python-version: "3.12" }
       - name: Install uv
         run: pip install uv
+      # Lockfile consistency and fresh dependency compatibility are separate
+      # checks: retain the existing unconstrained extras installation below.
+      - name: Verify lockfile is current
+        run: uv lock --check
       # Install the [all] backend extras (qiskit/cirq/pennylane/pytket/quantinuum/
       # pyquil): the circuit-interop / device / executor tests import these at
       # module load and HARD-FAIL (ModuleNotFoundError) rather than skip when
@@ -43,12 +47,42 @@ jobs:
       - name: CUDA-Q executor tests (incl. real qpp-cpu run)
         run: pytest tests/test_cudaq_executor.py -q
 
+  lint:
+    # Existing findings are visible without weakening required test gates.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install lint environment
+        run: pip install uv && uv pip install --system -e ".[all,dev]"
+      - name: Ruff findings by rule
+        run: ruff check . --statistics
+      - name: Mypy findings
+        if: success() || failure()
+        run: mypy marqov
+
+  test-python313:
+    # Measure the declared Python surface separately. Rigetti/pyQuil currently
+    # prevent all-extras qualification on 3.13; this job does not certify it.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      - name: Install (with all backend extras + dev)
+        run: pip install uv && uv pip install --system -e ".[all,dev]"
+      - name: Test suite
+        run: pytest tests/ -q
+
   # Single required status check — the ruleset requires only "CI Success", so the
   # required context stays stable if the job set ever changes.
   #
-  # INVARIANT: every job above must be listed in `needs:` here. A job missing here
-  # can fail while CI Success stays green and the ruleset stays satisfied — its
-  # failures become invisible. Add new jobs to `needs:` in the same PR.
+  # INVARIANT: every blocking job must be listed in `needs:` here (test and
+  # test-cudaq). Only lint and test-python313 are advisory and excluded by name.
+  # Add new blocking jobs to `needs:` in the same PR.
   #
   # `if: always()` runs this even when an upstream job fails; the step then fails
   # unless EVERY needed result is 'success'. A naive `success()` gate would go

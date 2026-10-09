@@ -178,3 +178,7 @@ strict = true
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+addopts = "--strict-markers"
+markers = [
+    "integration: requires external hardware, a cluster, or a local service; opt-in via module environment guards",
+]

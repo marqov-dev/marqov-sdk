@@ -26,10 +26,13 @@ from tests._qpe_reference import build_no_comm_qpe_circuit, expected_phase_bin
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("MARQOV_CUNQA_INTEGRATION") != "1",
-    reason="requires a live CUNQA cluster; set MARQOV_CUNQA_INTEGRATION=1 to run",
-)
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        os.environ.get("MARQOV_CUNQA_INTEGRATION") != "1",
+        reason="requires a live CUNQA cluster; set MARQOV_CUNQA_INTEGRATION=1 to run",
+    ),
+]
 
 
 def test_no_comm_qpe_recovers_correct_phase_at_n4() -> None:
