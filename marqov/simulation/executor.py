@@ -35,6 +35,9 @@ class SimulationExecutor(BaseExecutor):
 
     Cancellation is not supported — C++ execution is a blocking call in a
     thread pool. The default cancel() returning False applies.
+
+    A configured noise model selects Aer. Its qubit limit is checked before
+    native execution; results report both the requested and actual simulator.
     """
 
     def __init__(self, config: SimulationConfig):
@@ -57,12 +60,18 @@ class SimulationExecutor(BaseExecutor):
         num_qubits = count_qubits(qasm_str)
 
         config = dataclasses.replace(self.config, num_qubits=num_qubits)
-        _validate_qubit_limit(config)
+        resolved_backend_id = _resolve_backend_id(config)
+        _validate_qubit_limit(config, resolved_backend_id)
 
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
-            None, _run_simulation, qasm_str, shots, config
+            None, _run_simulation, qasm_str, shots, config, resolved_backend_id
         )
+
+
+def _resolve_backend_id(config: SimulationConfig) -> str:
+    """Preserve the existing Aer route for any configured noise model."""
+    return "aer" if config.noise_model is not None else config.backend_id
 
 
 def _require_local_backend(config: SimulationConfig) -> None:
@@ -102,18 +111,21 @@ def _import_qristal_core() -> Any:
 
 
 def _run_simulation(
-    qasm_str: str, shots: int, config: SimulationConfig
+    qasm_str: str, shots: int, config: SimulationConfig,
+    resolved_backend_id: str | None = None,
 ) -> ExecutionResult:
     """Execute simulation in a thread (blocking C++ call)."""
     qristal_core = _import_qristal_core()
     _require_local_backend(config)
+    if resolved_backend_id is None:
+        resolved_backend_id = _resolve_backend_id(config)
     session = qristal_core.session()
     # Current Qristal initializes on construction; older releases expose init().
     if hasattr(session, "init"):
         session.init()
     if config.remote_backend_database_path is not None:
         session.remote_backend_database_path = config.remote_backend_database_path
-    session.acc = config.backend_id
+    session.acc = resolved_backend_id
     session.qn = config.num_qubits
     session.sn = shots
     session.instring = qasm_str
@@ -127,14 +139,13 @@ def _run_simulation(
     if config.seed is not None:
         session.seed = config.seed
 
-    # Override backend to aer if noise model is present
+    # The accelerator was resolved before qubit-limit validation and dispatch.
     if config.noise_model is not None:
         if not hasattr(qristal_core, "NoiseModel"):
             raise RuntimeError(
                 "Noise simulation requires the 'aer' backend, which is not "
                 "available in this qristal build."
             )
-        session.acc = "aer"
         qb_noise = qristal_core.NoiseModel()
         qb_noise.name = "marqov_noise"
 
@@ -197,10 +208,11 @@ def _run_simulation(
     metadata = {
         "vendor": "Quantum Brilliance",
         "framework": "Qristal",
-        "engine": "aer" if config.noise_model is not None else config.backend_id,
+        "engine": resolved_backend_id,
         "access_path": "local",
         "compute_provider": "local",
-        "simulator": "aer" if config.noise_model is not None else config.backend_id,
+        "simulator": resolved_backend_id,
+        "requested_simulator": config.backend_id,
         "reproducibility": {
             "record_version": 1,
             "qristal_version": getattr(qristal_core, "__version__", None),
@@ -220,15 +232,22 @@ def _run_simulation(
 
     return ExecutionResult(
         counts=counts,
-        backend=f"qb-sim-{config.backend_type}",
+        backend=(
+            "qb-sim-noisy-aer" if resolved_backend_id == "aer"
+            else f"qb-sim-{config.backend_type}"
+        ),
         execution_time_ms=elapsed_ms,
         shots=shots,
         metadata=metadata,
     )
 
 
-def _validate_qubit_limit(config: SimulationConfig) -> None:
+def _validate_qubit_limit(
+    config: SimulationConfig, resolved_backend_id: str | None = None,
+) -> None:
     """Raise ValueError if qubit count exceeds backend limit."""
+    if resolved_backend_id is None:
+        resolved_backend_id = _resolve_backend_id(config)
     limits = {
         "qpp": 28,
         "cudaq:custatevec_fp64": 28,
@@ -238,9 +257,9 @@ def _validate_qubit_limit(config: SimulationConfig) -> None:
         "cudaq:qb_mps": 100,
         "aer": 28,
     }
-    max_q = limits.get(config.backend_id, 28)
+    max_q = limits.get(resolved_backend_id, 28)
     if config.num_qubits > max_q:
         raise ValueError(
-            f"Backend {config.backend_id} supports up to {max_q} qubits, "
+            f"Backend {resolved_backend_id} supports up to {max_q} qubits, "
             f"got {config.num_qubits}"
         )

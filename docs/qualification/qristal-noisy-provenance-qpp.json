@@ -1,0 +1,43 @@
+{
+  "qualification": "offline candidate-wheel native QPP compatibility only",
+  "sdk_version": "0.9.0",
+  "quantumflow_version": "1.0.2",
+  "sdk_import": "/opt/venv/lib/python3.12/site-packages/marqov/__init__.py",
+  "passed": 3,
+  "results": [
+    {
+      "counts": {
+        "10": 32
+      },
+      "backend": "qb-sim-statevector",
+      "requested_simulator": "qpp"
+    },
+    {
+      "counts": {
+        "01": 32
+      },
+      "backend": "qb-sim-statevector",
+      "requested_simulator": "qpp"
+    },
+    {
+      "counts": {
+        "00": 16,
+        "11": 16
+      },
+      "backend": "qb-sim-statevector",
+      "requested_simulator": "qpp"
+    }
+  ],
+  "native_aer_qualified": false,
+  "hosted": false,
+  "sdk_source_commit": "496679b842ea56cd1c9d2d5cd1612ce2e4daeb74",
+  "base_image_digest": "sha256:4d1ef798dcb81a854ebf73829a8f223a793dac696bc05550baf7a4e0c92722c9",
+  "platform": "linux/amd64",
+  "dependency_check": "passed",
+  "network": "disabled",
+  "candidate_wheel_sha256": "daed2ab4218dd7371459e5b9dd506b56888680f8944367eeb54b196c43c829bc",
+  "published_quantumflow_wheel_sha256": "a9586674955a26b434c49d8ce190e904c8b9ff74a4ba3c7624042a6a1475fc14",
+  "published_sdk_artifact": false,
+  "image_published": false,
+  "image_deployed": false
+}
