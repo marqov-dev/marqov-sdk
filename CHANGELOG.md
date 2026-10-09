@@ -9,6 +9,11 @@ release.
 
 ### Fixed
 
+- CI rejects dependency metadata/lockfile drift and unregistered pytest markers.
+  All live integration modules carry the integration marker; environment guards
+  still control execution. Lint and Python 3.13 all-extras checks are advisory,
+  separate from required Python 3.12 and CUDA-Q gates. (marqov-sdk#166)
+
 - Circuit dictionaries normalize NumPy integer and float16/float32/float64
   parameters and qubit labels to JSON-native values, enabling ordinary JSON
   round trips without mutating the source circuit. Python numeric output and
