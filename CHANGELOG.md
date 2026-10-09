@@ -7,6 +7,14 @@ release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Circuit dictionaries normalize NumPy integer and float16/float32/float64
+  parameters and qubit labels to JSON-native values, enabling ordinary JSON
+  round trips without mutating the source circuit. Python numeric output and
+  existing Lightning circuit hashes are unchanged. Symbolic and extended-precision
+  serialization remain separate decisions. (marqov-sdk#194, numeric slice)
+
 ## [0.9.0] — 2026-10-08
 
 ### Fixed

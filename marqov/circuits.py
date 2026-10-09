@@ -16,6 +16,7 @@ import re
 from numbers import Integral
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import quantumflow as qf
 
 from marqov._optional import require_braket
@@ -24,6 +25,15 @@ if TYPE_CHECKING:
     from braket.circuits import Circuit as BraketCircuit
     from pennylane.tape import QuantumScript  # type: ignore[import-untyped]
     from pyquil import Program as PyQuilProgram
+
+
+def _json_numeric_scalar(value: Any) -> Any:
+    """Unbox NumPy integers/floats without narrowing extended precision."""
+    if isinstance(value, (np.integer, np.floating)):
+        scalar = value.item()
+        if type(scalar) in (int, float):
+            return scalar
+    return value
 
 
 class Circuit:
@@ -1195,7 +1205,12 @@ class Circuit:
         by Temporal activities today — those serialize `Circuit` (and
         everything else) opaquely via cloudpickle, not through this method
         (see `marqov/workflows/activity.py`). This is a plain gate-sequence
-        dump for callers who want a JSON-friendly representation.
+        dump for callers who want a JSON-friendly representation. NumPy
+        integers and float16/float32/float64 scalars in parameters or qubit
+        labels become Python int/float values without changing the circuit.
+        Symbolic and extended-precision values remain in memory and are not
+        guaranteed to be JSON-serializable. Matrix-bearing gates are not
+        losslessly represented by this gate-sequence format.
 
         Returns:
             Dictionary representation of the circuit.
@@ -1203,8 +1218,11 @@ class Circuit:
         gates = []
         for op in self._qf._elements:
             gate_name = op.name
-            qubits = list(op.qubits)
-            params = list(op.params) if hasattr(op, "params") and op.params else []
+            qubits = [_json_numeric_scalar(qubit) for qubit in op.qubits]
+            params = (
+                [_json_numeric_scalar(param) for param in op.params]
+                if hasattr(op, "params") and op.params else []
+            )
             gates.append({
                 "gate": gate_name,
                 "qubits": qubits,

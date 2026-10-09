@@ -162,3 +162,48 @@ def test_xy_still_refuses_instruction_modifiers(modifiers):
 
     with pytest.raises(NotImplementedError, match="gate 'XY' at index 0"):
         Circuit.from_braket(BK().xy(1, 0, 0.37, **modifiers))
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64, np.int32, np.int64])
+def test_numpy_numeric_parameters_json_roundtrip(dtype):
+    angle = dtype(1) if issubclass(dtype, np.integer) else dtype(0.37)
+    original = Circuit().h(0).rx(angle, 1).cnot(1, 0)
+    data = original.to_dict()
+    parameter = data["gates"][1]["params"][0]
+    assert type(parameter) is (int if issubclass(dtype, np.integer) else float)
+    assert parameter == angle
+    restored = Circuit.from_dict(json.loads(json.dumps(data)))
+    assert restored.to_dict() == data
+    np.testing.assert_allclose(
+        original.simulate().tensor, restored.simulate().tensor, atol=1e-12, rtol=1e-12
+    )
+    assert original._qf[1].params[0] is angle
+
+
+@pytest.mark.parametrize("dtype", [np.int32, np.int64, np.uint64])
+def test_numpy_qubit_labels_json_roundtrip(dtype):
+    original = Circuit().h(dtype(1)).cnot(dtype(1), dtype(0))
+    data = original.to_dict()
+    assert data == {"gates": [
+        {"gate": "H", "qubits": [1], "params": []},
+        {"gate": "CNot", "qubits": [1, 0], "params": []},
+    ]}
+    assert all(type(q) is int for gate in data["gates"] for q in gate["qubits"])
+    restored = Circuit.from_dict(json.loads(json.dumps(data)))
+    np.testing.assert_array_equal(original.simulate().tensor, restored.simulate().tensor)
+    assert all(isinstance(q, dtype) for q in original._qf.qubits)
+
+
+def test_numpy_integer_parameter_keeps_exact_value():
+    angle = np.uint64(2**63 + 1)
+    data = Circuit().rx(angle, 0).to_dict()
+    assert type(data["gates"][0]["params"][0]) is int
+    assert json.loads(json.dumps(data))["gates"][0]["params"] == [2**63 + 1]
+
+
+def test_extended_precision_parameter_is_not_rounded_for_json():
+    angle = np.longdouble("0.1234567890123456789")
+    data = Circuit().rx(angle, 0).to_dict()
+    assert data["gates"][0]["params"][0] is angle
+    with pytest.raises(TypeError):
+        json.dumps(data)
