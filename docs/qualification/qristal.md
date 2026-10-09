@@ -15,6 +15,16 @@ identify Aer. Input configuration is retained. SDK boundary tests cover this
 resolution and early refusal with a vendor-shaped fake; they do not qualify
 native Aer noise simulation in any of the images recorded below.
 
+The candidate wheel's noiseless compatibility check is recorded in
+[`qristal-noisy-provenance-qpp.json`](qristal-noisy-provenance-qpp.json).
+It installed that exact candidate and the published QuantumFlow 1.0.2 wheel
+offline in a disposable container based on the retained Qristal image. Three
+real QPP cases passed, with expected asymmetric/Bell counts and requested/actual
+simulator identity. Dependency consistency passed. This candidate is not the
+published SDK 0.9.0 artifact; its source commit and wheel hash identify it.
+No native Aer, GPU, hosted execution or image adoption is established by this
+check, and no image was published or deployed.
+
 The exact SDK native execution function source ran successfully against the
 retained source-built Qristal QPP image on Linux/amd64: asymmetric `10` and `01`
 and a Bell circuit (32 shots each). The native engine was real, not mocked.
