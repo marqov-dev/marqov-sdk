@@ -21,6 +21,7 @@ classifiers = [
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
+    "six>=1.0",
     # Workflow engine
     "temporalio>=1.7.0",
     # Circuit transpilation (marqov-owned fork of QuantumFlow v1.4.0; see marqov-dev/marqov-quantumflow)
