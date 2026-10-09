@@ -7,7 +7,14 @@ release.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-10-08
+
 ### Fixed
+
+- Local QuantumFlow sampling accepts floating-point overshoot/undershoot near
+  unit probability mass without changing the simulated state. Nonfinite or
+  materially unnormalized states are rejected explicitly. Requires the
+  corrected marqov-quantumflow 1.0.2 dependency. (marqov-sdk#233)
 
 - IonQ v0.4 reports terminal vendor failures before validating success-only
   fields, while still checking job identity. Malformed result objects raise
@@ -140,6 +147,15 @@ release.
 - Quantum Brilliance simulation supports current Qristal sessions without `init()` and their flat result map, preserving legacy session support. Counts are checked against shots, and results record the actual engine and reproducibility hashes. Native QPP checks pass; full SDK and hosted qualification remain separate.
 
 ### Added
+
+- Platform client saved-script helpers upload source, request analysis explicitly,
+  and submit an ordinary saved-script job using the existing server contracts.
+  Analysis and submission remain separate caller actions; existing native
+  workflow and inline submission APIs are unchanged. (marqov-sdk#234)
+
+- PennyLane Lightning CPU execution with seed and numerical configuration in
+  reproducibility records. GPU and tensor paths require separate device
+  qualification. (marqov-sdk#184)
 
 - Alice & Bob executor with real local cat-qubit models, native Qiskit initialization/delay preservation, canonical counts and reproducibility records. Explicit direct remote mode requires provider credentials; live remote and hosted execution remain unqualified.
 

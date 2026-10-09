@@ -24,7 +24,7 @@ dependencies = [
     # Workflow engine
     "temporalio>=1.7.0",
     # Circuit transpilation (marqov-owned fork of QuantumFlow v1.4.0; see marqov-dev/marqov-quantumflow)
-    "marqov-quantumflow==1.0.1",
+    "marqov-quantumflow==1.0.2",
     # Workflow serialization is core, independent of provider installations.
     "cloudpickle>=2.2.1",
     # Azure Quantum

@@ -1558,7 +1558,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.0.0" },
     { name = "cloudpickle", specifier = ">=2.2.1" },
     { name = "cudaq", marker = "sys_platform == 'linux' and extra == 'cudaq'", specifier = ">=0.14.2" },
-    { name = "marqov-quantumflow", specifier = "==1.0.1" },
+    { name = "marqov-quantumflow", specifier = "==1.0.2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
     { name = "numpy", specifier = ">=1.26.0,<2.4" },
     { name = "pennylane", marker = "extra == 'all'", specifier = ">=0.45.0" },
@@ -1613,7 +1613,7 @@ provides-extras = ["all", "azure", "braket", "cirq", "cudaq", "dev", "ibm", "ion
 
 [[package]]
 name = "marqov-quantumflow"
-version = "1.0.1"
+version = "1.0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "matplotlib" },
@@ -1625,9 +1625,9 @@ dependencies = [
     { name = "sympy" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/90/60/01991400b6aeb37011f25c0254d0b5c86eca99de0073c272571dc080016c/marqov_quantumflow-1.0.1.tar.gz", hash = "sha256:1214b4ec08852ae5e6cadecc4c5ec69ed96f90d3c8bc22a060a10064061d8343", size = 184434, upload-time = "2026-10-05T21:33:51.859Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/33/f732951183b58793b95f469e8b00d4b1b3b40a1659385cab8681bae1e971/marqov_quantumflow-1.0.2.tar.gz", hash = "sha256:5a5c3221c187e64dead5975aab14375de3c5cd70f7a7d814865f0f2e9f04f84b", size = 185490, upload-time = "2026-10-09T00:15:40.203Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7c/d6/878f264b9531a2fc7be1685accbd6e2748fe518cc7e00d2cfb3a3211b43d/marqov_quantumflow-1.0.1-py3-none-any.whl", hash = "sha256:31e05e70f5f316bf814fcfb318c5c64cf4432891314f1909be47a5dc3258a75d", size = 191506, upload-time = "2026-10-05T21:33:50.44Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/28/d50bf736ee0c77763621b6dac995e85d105de66de377c56dcd727ab2919d/marqov_quantumflow-1.0.2-py3-none-any.whl", hash = "sha256:a9586674955a26b434c49d8ce190e904c8b9ff74a4ba3c7624042a6a1475fc14", size = 192582, upload-time = "2026-10-09T00:15:38.355Z" },
 ]
 
 [[package]]
