@@ -9,6 +9,12 @@ release.
 
 ### Fixed
 
+- Noisy Quantum Brilliance simulation validates Aer’s actual qubit limit
+  before native execution, reports the canonical `qb-sim-noisy-aer` backend,
+  and retains both actual and requested simulator metadata. Existing Aer noise
+  routing, input configuration and noiseless backend selection are preserved.
+  (marqov-sdk#129)
+
 - CI rejects dependency metadata/lockfile drift and unregistered pytest markers.
   All live integration modules carry the integration marker; environment guards
   still control execution. Lint and Python 3.13 all-extras checks are advisory,
