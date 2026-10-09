@@ -12,7 +12,7 @@ labels. Angles must be finite real numeric values representable as float;
 symbolic parameters, unsupported gates and empty circuits raise `ValueError`.
 Rx/Rz angles use radians. QuantumFlow XY(t) is exported with Braket angle
 `-2*pi*t`, matching the published marqov-quantumflow 1.0.1 convention. Use the SDK's
-required dependency (==1.0.1); older QuantumFlow XY import bugs are not repaired
+required dependency (==1.0.2); older QuantumFlow XY import bugs are not repaired
 by this export. Importing external circuits still relies on their importer.
 
 ## Explicit submission
