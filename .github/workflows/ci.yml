@@ -48,6 +48,7 @@ jobs:
         run: pytest tests/test_cudaq_executor.py -q
 
   lint:
+    name: Lint (advisory)
     # Existing findings are visible without weakening required test gates.
     continue-on-error: true
     runs-on: ubuntu-latest
@@ -57,13 +58,17 @@ jobs:
         with: { python-version: "3.12" }
       - name: Install lint environment
         run: pip install uv && uv pip install --system -e ".[all,dev]"
+      - name: Ruff findings
+        run: ruff --version && ruff check .
       - name: Ruff findings by rule
+        if: success() || failure()
         run: ruff check . --statistics
       - name: Mypy findings
         if: success() || failure()
         run: mypy marqov
 
   test-python313:
+    name: Python 3.13 (advisory)
     # Measure the declared Python surface separately. Rigetti/pyQuil currently
     # prevent all-extras qualification on 3.13; this job does not certify it.
     continue-on-error: true
