@@ -512,3 +512,17 @@ class TestUnseededTensorContract:
         e = ExecutorFactory.create_executor("lightning-tensor", {"provider": "PennyLane Lightning",
              "tensor_method": "mps", "tensor_max_bond_dim": 32})
         assert e.config.tensor_method == "mps" and e.config.tensor_max_bond_dim == 32
+
+
+@pytest.mark.asyncio
+async def test_numpy_float32_rotation_executes_with_canonical_hash():
+    import numpy as np
+
+    angle = np.float32(0.37)
+    native = await _executor().execute(Circuit().rx(angle, 0), shots=100, seed=7)
+    canonical = await _executor().execute(Circuit().rx(float(angle), 0), shots=100, seed=7)
+    assert native.counts == canonical.counts
+    assert (
+        native.metadata["reproducibility"]["circuit_sha256"]
+        == canonical.metadata["reproducibility"]["circuit_sha256"]
+    )
