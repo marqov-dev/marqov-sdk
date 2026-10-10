@@ -7,6 +7,26 @@ release.
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-10-10
+
+### Changed
+
+- Quantum Brilliance simulation now returns `result.backend == "qb-sim-noisy-aer"`
+  whenever Aer runs, including noise-enabled requests for statevector,
+  tensor-network or GPU simulators. Previously the result retained the requested
+  backend label, or used the unregistered `qb-sim-noisy` label for direct Aer
+  requests. Consumers should use `metadata.requested_simulator` for the requested
+  simulator and `metadata.simulator` for the simulator that ran.
+- Noise-enabled simulation requests now use Aer's SDK limit of 28 qubits:
+  requests above 28 that previously passed a tensor-network limit are rejected
+  before execution, while requests for `cudaq:dm` are no longer capped at 14
+  when routed to Aer. This validation limit does not establish available memory
+  or native Aer qualification.
+- NumPy numeric parameters and qubit labels normalized by `Circuit.to_dict()`
+  can now pass QB remote payload validation as Python numeric values; NumPy
+  integer qubit labels also pass IonQ v0.4's dense-wire validation. Other
+  provider checks still apply, and execution requires an explicit request.
+
 ### Fixed
 
 - Noisy Quantum Brilliance simulation validates Aer’s actual qubit limit
