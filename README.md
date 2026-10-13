@@ -78,6 +78,8 @@ pip install "marqov[all]"
 Use Python 3.12 for `[all]`, `[rigetti]` and `[pyquil]`: current pyQuil/quil
 dependencies do not reliably install and import on Python 3.13. Release
 verification covers Python 3.12; it does not establish 3.13 support for these extras.
+See the [Python compatibility matrix](docs/python-compatibility.md) for independently
+qualified Python 3.13 paths, exact candidate versions and known restrictions.
 
 The Azure extra selects the vendor's Qiskit and Cirq adapter dependencies,
 including Q# support. See [Azure installation checks](docs/azure-installation.md).

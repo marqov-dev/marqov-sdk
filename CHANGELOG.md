@@ -7,6 +7,14 @@ release.
 
 ## [Unreleased]
 
+### Added
+
+- Independent installed-wheel Python 3.13 qualification and a user-facing
+  compatibility matrix with exact dependency records. Seventeen Linux profiles
+  feed required CI; Rigetti, pyQuil and the all-extras bundle retain visible
+  installation restrictions. Native GPU, live provider and deployed-runtime
+  qualification remain separate.
+
 ### Fixed
 
 - Noisy Quantum Brilliance simulation validates Aer’s actual qubit limit
