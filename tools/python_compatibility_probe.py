@@ -56,6 +56,10 @@ if profile in {
     native = getattr(circuit, "to_" + framework)()
     restored = getattr(Circuit, "from_" + framework)(native)
     assert np.allclose(restored.simulate().tensor, expected)
+    parameterized = Circuit().ry(0.37, 0).rx(-0.21, 1).cnot(0, 1).rz(0.19, 0)
+    native_parameters = getattr(parameterized, "to_" + framework)()
+    restored_parameters = getattr(Circuit, "from_" + framework)(native_parameters)
+    assert np.allclose(restored_parameters.simulate().tensor, parameterized.simulate().tensor)
     if profile == "openqasm":
         assert np.allclose(Circuit.from_openqasm(circuit.to_openqasm()).simulate().tensor, expected)
     if profile == "ibm":
@@ -112,6 +116,21 @@ elif profile == "qilisdk":
         assert result.counts == {"10": 32}, result.counts
 
     asyncio.run(qili())
+elif profile == "alice-bob":
+    from marqov.executors import AliceBobExecutor
+
+    async def alice_bob() -> None:
+        result = await AliceBobExecutor().execute(circuit, shots=32, seed=7)
+        assert result.counts == {"10": 32}, result.counts
+
+    asyncio.run(alice_bob())
+elif profile == "qb-remote":
+    from marqov.executors.qb_remote import _payload
+
+    payload = _payload(Circuit().rx(0.5, 0).cz(0, 1), 32)
+    assert payload["measure"] == [[0, 0], [1, 1]]
+    assert payload["init"] == [0, 0]
+
 print(
     json.dumps(
         {

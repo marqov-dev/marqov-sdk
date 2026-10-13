@@ -11,7 +11,7 @@ jobs:
       fail-fast: false
       max-parallel: 4
       matrix:
-        profile: [core, braket, qiskit, cirq, pennylane, qutip, pytket, quantinuum, openqasm, ibm, azure, ionq, lightning-kokkos, cudaq, qilisdk]
+        profile: [core, braket, qiskit, cirq, pennylane, qutip, pytket, quantinuum, openqasm, ibm, azure, ionq, lightning-kokkos, cudaq, qilisdk, alice-bob, qb-remote]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

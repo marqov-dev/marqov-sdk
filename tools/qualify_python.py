@@ -53,6 +53,8 @@ PROFILES = {
         "tests/test_qilisdk_seed.py",
         "tests/test_qilisdk_analog_executor.py",
     ],
+    "alice-bob": ["tests/test_alice_bob_executor.py"],
+    "qb-remote": [],
     "all": [],
 }
 
@@ -113,9 +115,19 @@ def main() -> int:
             if code:
                 raise RuntimeError(f"venv creation failed: {code}")
             python = str(venv / "bin/python")
-            packages = [str(wheel) if profile in {"core", "qilisdk"} else f"{wheel}[{profile}]"]
+            packages = [
+                str(wheel)
+                if profile in {"core", "qilisdk", "alice-bob", "qb-remote"}
+                else f"{wheel}[{profile}]"
+            ]
             if profile == "qilisdk":
                 packages += ["qilisdk==0.3.0", "qutip-qip>=0.4.0"]
+            if profile == "alice-bob":
+                packages += [
+                    "qiskit-alice-bob-provider==1.2.0",
+                    "qiskit>=1.3,<2",
+                    "qiskit-aer==0.17.2",
+                ]
             # Minimal test tools, deliberately not [dev] (it installs other integrations).
             packages += ["pytest>=8", "pytest-asyncio>=0.23", "pyyaml>=6"]
             code = command(
