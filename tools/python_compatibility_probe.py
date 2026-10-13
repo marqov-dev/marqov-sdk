@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib.metadata as md
+from importlib import import_module
 import json
 from pathlib import Path
 import sys
@@ -27,7 +28,7 @@ expected = circuit.simulate().tensor
 assert Circuit.from_dict(json.loads(json.dumps(circuit.to_dict()))).to_dict() == circuit.to_dict()
 
 
-async def local():
+async def local() -> None:
     result = await LocalExecutor().execute(circuit, shots=32)
     assert result.counts == {"10": 32}, result.counts
 
@@ -58,22 +59,22 @@ if profile in {
     if profile == "openqasm":
         assert np.allclose(Circuit.from_openqasm(circuit.to_openqasm()).simulate().tensor, expected)
     if profile == "ibm":
-        from qiskit_ibm_runtime import SamplerV2
+        SamplerV2 = import_module("qiskit_ibm_runtime").SamplerV2
 
         assert callable(SamplerV2)
     if profile == "azure":
-        from azure.quantum.qiskit import AzureQuantumProvider
-        from azure.quantum.cirq import AzureQuantumService
+        AzureQuantumProvider = import_module("azure.quantum.qiskit").AzureQuantumProvider
+        AzureQuantumService = import_module("azure.quantum.cirq").AzureQuantumService
 
         assert callable(AzureQuantumProvider) and callable(AzureQuantumService)
 elif profile in {"pytket", "quantinuum"}:
-    assert np.allclose(circuit.to_pytket().get_unitary()[:, 0].reshape(2, 2), expected)
+    assert np.allclose(getattr(circuit, "to_pytket")().get_unitary()[:, 0].reshape(2, 2), expected)
     if profile == "quantinuum":
-        from pytket.extensions.quantinuum import QuantinuumBackend
+        QuantinuumBackend = import_module("pytket.extensions.quantinuum").QuantinuumBackend
 
         assert callable(QuantinuumBackend)
 elif profile == "qutip":
-    import qutip
+    qutip = import_module("qutip")
     from marqov.qutip import record
     import contextlib
     import io
@@ -86,7 +87,7 @@ elif profile == "qutip":
 elif profile == "lightning-kokkos":
     from marqov.executors import LightningExecutor, LightningExecutorConfig
 
-    async def kokkos():
+    async def kokkos() -> None:
         result = await LightningExecutor(
             LightningExecutorConfig(device="lightning.kokkos")
         ).execute(circuit, shots=32)
@@ -96,7 +97,7 @@ elif profile == "lightning-kokkos":
 elif profile == "cudaq":
     from marqov.executors import CudaqExecutor, CudaqExecutorConfig
 
-    async def cudaq_check():
+    async def cudaq_check() -> None:
         result = await CudaqExecutor(CudaqExecutorConfig(target="qpp-cpu")).execute(
             circuit, shots=32
         )
@@ -106,7 +107,7 @@ elif profile == "cudaq":
 elif profile == "qilisdk":
     from marqov.executors import QiliSDKExecutor
 
-    async def qili():
+    async def qili() -> None:
         result = await QiliSDKExecutor().execute(circuit, shots=32)
         assert result.counts == {"10": 32}, result.counts
 

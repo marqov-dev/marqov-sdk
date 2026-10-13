@@ -57,7 +57,7 @@ PROFILES = {
 }
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wheel", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
@@ -88,7 +88,7 @@ def main():
         "results": [],
     }
 
-    def command(argv, log, cwd=root):
+    def command(argv: list[str], log: Path, cwd: Path = root) -> int:
         with log.open("w") as stream:
             completed = subprocess.run(
                 argv,

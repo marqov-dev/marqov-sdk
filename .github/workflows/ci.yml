@@ -67,26 +67,46 @@ jobs:
         if: success() || failure()
         run: mypy marqov
 
-  test-python313:
-    name: Python 3.13 (advisory)
-    # Measure the declared Python surface separately. Rigetti/pyQuil currently
-    # prevent all-extras qualification on 3.13; this job does not certify it.
+  python313-qualified:
+    uses: ./.github/workflows/python-compatibility.yml
+
+  python313-unsupported:
+    name: Python 3.13 / ${{ matrix.profile }} (advisory)
+    # These installs currently fail upstream. Retain each restriction visibly;
+    # they must not prevent testing the independently qualified integrations.
     continue-on-error: true
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [pyquil, rigetti, all]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.13" }
-      - name: Install (with all backend extras + dev)
-        run: pip install uv && uv pip install --system -e ".[all,dev]"
-      - name: Test suite
-        run: pytest tests/ -q
+        with: {python-version: '3.13'}
+      - name: Build candidate wheel
+        run: pip install uv && uv build && uv venv .venv
+      - name: Measure unsupported integration
+        run: >-
+          .venv/bin/python tools/qualify_python.py
+          --wheel "$(realpath dist/*.whl)"
+          --output "$RUNNER_TEMP/qualification-${{ matrix.profile }}"
+          --source-commit "$GITHUB_SHA"
+          --profiles "${{ matrix.profile }}"
+      - name: Retain compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python313-${{ matrix.profile }}
+          path: ${{ runner.temp }}/qualification-${{ matrix.profile }}/
 
   # Single required status check — the ruleset requires only "CI Success", so the
   # required context stays stable if the job set ever changes.
   #
-  # INVARIANT: every blocking job must be listed in `needs:` here (test and
-  # test-cudaq). Only lint and test-python313 are advisory and excluded by name.
+  # INVARIANT: every blocking job must be listed in `needs:` here (test,
+  # test-cudaq and python313-qualified). Lint and python313-unsupported are
+  # advisory and excluded by name.
   # Add new blocking jobs to `needs:` in the same PR.
   #
   # `if: always()` runs this even when an upstream job fails; the step then fails
@@ -95,7 +115,7 @@ jobs:
   ci-success:
     name: CI Success
     if: always()
-    needs: [test, test-cudaq]
+    needs: [test, test-cudaq, python313-qualified]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
