@@ -7,6 +7,14 @@ release.
 
 ## [Unreleased]
 
+### Fixed
+
+- SPAM calibration registers wires through each target before preparation,
+  preserving absolute bit positions and preventing false 0.5 readout fidelity
+  on noiseless qubits above zero. Correction accepts mixed-width bitstrings
+  independent of insertion order, combines equivalent padded outcomes and
+  reports matrix-width mismatches clearly. (marqov-sdk#159)
+
 ## [0.9.1] — 2026-10-10
 
 ### Changed
