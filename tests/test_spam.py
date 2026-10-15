@@ -8,13 +8,13 @@ import pytest
 from marqov.benchmarking.spam import (
     ConfusionMatrix,
     SPAMResult,
-    spam_benchmark,
-    build_correction_matrix,
     apply_spam_correction,
+    build_correction_matrix,
+    spam_benchmark,
 )
 from marqov.circuits import Circuit
-from marqov.executors.local import LocalExecutor, LocalExecutorConfig
 from marqov.executors.base import BaseExecutor, ExecutionResult
+from marqov.executors.local import LocalExecutor, LocalExecutorConfig
 
 
 class TestConfusionMatrix:
