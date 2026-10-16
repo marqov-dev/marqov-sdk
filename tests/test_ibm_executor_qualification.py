@@ -3,6 +3,7 @@
 import asyncio
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
@@ -159,3 +160,44 @@ async def test_cancelled_call_retains_its_own_job_under_concurrency(monkeypatch)
             call_b.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await call_b
+
+
+def _sampler_result(**registers):
+    data = SimpleNamespace(keys=lambda: list(registers), **{
+        name: SimpleNamespace(get_counts=lambda counts=counts: counts)
+        for name, counts in registers.items()
+    })
+    return [SimpleNamespace(data=data)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result,expected",
+    [
+        (_sampler_result(c0={"0": 8}, c1={"1": 8}), NotImplementedError),
+        (_sampler_result(meas={"0": 7}), ValueError),
+    ],
+    ids=["multi-register", "shot-mismatch"],
+)
+async def test_sdk_refusal_of_resolved_result_is_not_execution_error(
+    monkeypatch, result, expected
+):
+    job = Mock()
+    job.job_id.return_value = "resolved-provider-job"
+    job.result.return_value = result
+    executor = _stub_executor(monkeypatch, job)
+    with pytest.raises(expected) as error:
+        await executor.execute(Circuit().h(0), shots=8)
+    assert not isinstance(error.value, IBMExecutionError)
+    assert "resolved-provider-job" in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_undecodable_resolved_result_keeps_type_and_notes_job(monkeypatch):
+    job = Mock()
+    job.job_id.return_value = "resolved-provider-job"
+    job.result.return_value = []  # result[0] raises IndexError in extraction
+    executor = _stub_executor(monkeypatch, job)
+    with pytest.raises(IndexError) as error:
+        await executor.execute(Circuit().h(0), shots=8)
+    assert any("resolved-provider-job" in note for note in error.value.__notes__)
