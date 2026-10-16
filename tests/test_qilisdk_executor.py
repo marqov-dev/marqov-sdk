@@ -116,6 +116,8 @@ class TestQiliSDKExecutor:
             json.dumps(result.counts, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
         assert record["seed"] is None
+        assert record["shots"] == sum(result.counts.values())
+        assert record["bit_order"] == "QiliSDK sampling order; qubit 0 leftmost"
         assert "no hardware execution" in record["scope"]
 
     def test_unsupported_simulator_raises(self) -> None:

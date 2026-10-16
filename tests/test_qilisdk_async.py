@@ -152,3 +152,35 @@ async def test_cancellation_stops_waiting_but_not_simulator(local_executor, mode
         if not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["digital", "analog"])
+@pytest.mark.parametrize(
+    "bad",
+    [{"0": 6}, {"0": 8}, {"0": 3, "2": 4}, {"0": 4, "1": -1, "": 4}, {"0": 3.0, "1": 4}],
+)
+async def test_miscounted_or_malformed_samples_raise(local_executor, mode, bad):
+    local_executor.samples.clear()
+    local_executor.samples.update(bad)
+    with pytest.raises(RuntimeError, match="invalid counts or shot accounting"):
+        await run_program(local_executor, mode)
+
+
+@pytest.mark.asyncio
+async def test_digital_key_width_must_match_circuit(local_executor):
+    local_executor.samples.clear()
+    local_executor.samples.update({"00": 7})
+    with pytest.raises(RuntimeError, match="invalid counts or shot accounting"):
+        await run_program(local_executor, "digital")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["digital", "analog"])
+async def test_provenance_shots_is_observed_total_and_bit_order(local_executor, mode):
+    local_executor.samples.clear()
+    local_executor.samples.update({"0": 3, "1": 4})
+    result = await run_program(local_executor, mode)
+    record = result.metadata["reproducibility"]
+    assert record["shots"] == sum(result.counts.values()) == result.shots == 7
+    assert record["bit_order"] == "QiliSDK sampling order; qubit 0 leftmost"

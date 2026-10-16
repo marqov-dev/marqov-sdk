@@ -137,6 +137,7 @@ class QiliSDKExecutor(BaseExecutor):
             ExecutionResult with measurement counts.
 
         Raises:
+            RuntimeError: If the simulator's samples are malformed or do not sum to `shots`.
             TypeError: If unsupported keyword options or a non-integer seed are supplied.
             ValueError: If the seed is out of range or the simulator is qutip.
         """
@@ -157,7 +158,7 @@ class QiliSDKExecutor(BaseExecutor):
         readout = Readout().with_sampling(nshots=shots)
 
         result = await asyncio.to_thread(backend.execute, propagation, readout)
-        counts = result.get_samples()
+        counts = self._checked_counts(result.get_samples(), shots, circuit.num_qubits)
 
         execution_time_ms = (time.perf_counter() - start_time) * 1000
 
@@ -209,6 +210,7 @@ class QiliSDKExecutor(BaseExecutor):
             ExecutionResult with measurement counts.
 
         Raises:
+            RuntimeError: If the simulator's samples are malformed or do not sum to `shots`.
             TypeError: If unsupported keyword options or a non-integer seed are supplied.
             ValueError: If the seed is out of range or the simulator is qutip.
         """
@@ -231,7 +233,7 @@ class QiliSDKExecutor(BaseExecutor):
         readout = Readout().with_sampling(nshots=shots)
 
         result = await asyncio.to_thread(backend.execute, evolution, readout)
-        counts = result.get_samples()
+        counts = self._checked_counts(result.get_samples(), shots)
 
         execution_time_ms = (time.perf_counter() - start_time) * 1000
 
@@ -249,6 +251,30 @@ class QiliSDKExecutor(BaseExecutor):
             },
         )
 
+    @staticmethod
+    def _checked_counts(counts: Any, shots: int, width: int | None = None) -> dict[str, int]:
+        """Refuse samples that are not exact bitstring counts summing to `shots`.
+
+        `width` is the circuit's qubit count for digital runs; analog schedules
+        have no Marqov-side width, so keys need only share one length.
+        """
+        if isinstance(counts, dict) and counts:
+            width = width if width is not None else len(next(iter(counts)))
+        if (
+            not isinstance(counts, dict)
+            or any(
+                not isinstance(bits, str)
+                or len(bits) != width
+                or set(bits) - {"0", "1"}
+                or type(count) is not int
+                or count < 0
+                for bits, count in counts.items()
+            )
+            or sum(counts.values()) != shots
+        ):
+            raise RuntimeError("QiliSDK returned invalid counts or shot accounting")
+        return counts
+
     def _provenance(
         self, backend: Any, counts: dict[str, int], shots: int, seed: int | None
     ) -> dict[str, Any]:
@@ -265,7 +291,8 @@ class QiliSDKExecutor(BaseExecutor):
                 "packages": {name: version(name) for name in ("qilisdk", "numpy", "marqov")},
                 "python": platform.python_version(),
                 "engine": engine,
-                "shots": shots,
+                "shots": sum(counts.values()),
+                "bit_order": "QiliSDK sampling order; qubit 0 leftmost",
                 "seed": seed,
                 "rng_policy": "fresh seeded single-threaded QiliSim" if seed is not None else "vendor default",
                 "counts_sha256": hashlib.sha256(

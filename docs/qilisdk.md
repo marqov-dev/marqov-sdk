@@ -56,6 +56,12 @@ coroutines on the event loop can progress during simulation. Execution timing
 includes the awaited simulator call; seed handling and result provenance are
 unchanged.
 
+Local results are validated before they are returned: sample keys must be
+bitstrings of the circuit's width (digital) or of one common width (analog),
+counts must be non-negative integers, and they must sum to the requested shots,
+otherwise `RuntimeError` is raised. `reproducibility.shots` records the observed
+total and `reproducibility.bit_order` records the key order (qubit 0 leftmost).
+
 Cancelling the awaiting task stops waiting for its result, but does not stop
 an already-running simulator thread. That thread can continue consuming CPU,
 and event-loop shutdown may wait for it to finish. No local simulation or
