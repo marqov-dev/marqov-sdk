@@ -904,6 +904,33 @@ class TestOpenQASM:
         restored = Circuit.from_openqasm(qasm)
         assert restored.num_qubits == 2
 
+    @staticmethod
+    def _single_gate_circuit(method_name: str) -> Circuit:
+        """A two-qubit circuit whose last gate is ``method_name``."""
+        circuit = Circuit().h(0).h(1)
+        if method_name in Circuit._ROTATION_GATES:
+            return getattr(circuit, method_name)(0.37, 0)
+        if method_name in ("cnot", "cz", "swap"):
+            return getattr(circuit, method_name)(0, 1)
+        return getattr(circuit, method_name)(0)
+
+    @pytest.mark.parametrize("version", [2, 3])
+    @pytest.mark.parametrize("method_name", sorted(set(Circuit._QISKIT_GATE_MAP.values())))
+    def test_every_canonical_gate_roundtrips(self, method_name, version) -> None:
+        """to_openqasm(version) output parses back to the same unitary."""
+        import numpy as np
+
+        original = self._single_gate_circuit(method_name)
+        restored = Circuit.from_openqasm(original.to_openqasm(version=version))
+        np.testing.assert_allclose(
+            restored._qf.asgate().asoperator(),
+            original._qf.asgate().asoperator(),
+            atol=1e-12, rtol=1e-12,
+        )
+
+    def test_canonical_gate_set_has_twelve_gates(self) -> None:
+        assert len(set(Circuit._QISKIT_GATE_MAP.values())) == 12
+
     def test_roundtrip_bell_state(self) -> None:
         """Bell state survives QASM roundtrip."""
         import numpy as np
@@ -1005,7 +1032,7 @@ class TestOpenQASM:
 
         calls = []
 
-        def parser(source):
+        def parser(source, **kwargs):
             calls.append(source)
             raise qasm2.QASM2ParseError("preamble is not supported")
 

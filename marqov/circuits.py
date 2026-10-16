@@ -1187,7 +1187,14 @@ class Circuit:
         header = re.match(r"OPENQASM\s+(\d+)\b", stripped[header_start:])
         version = 3 if header is not None and header.group(1) == "3" else 2
         try:
-            qiskit_circuit = (qasm3 if version == 3 else qasm2).loads(stripped)
+            if version == 3:
+                qiskit_circuit = qasm3.loads(stripped)
+            else:
+                # Qiskit's QASM 2 exporter writes gates such as `swap` as if
+                # qelib1.inc defined them; the legacy set lets us read them back.
+                qiskit_circuit = qasm2.loads(
+                    stripped, custom_instructions=qasm2.LEGACY_CUSTOM_INSTRUCTIONS
+                )
         except ImportError:
             # Missing optional parser dependencies are installation errors.
             raise
