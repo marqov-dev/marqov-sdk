@@ -24,7 +24,9 @@ route. Timeout budgets are still read per invocation. This captures the configur
 workspace route; it does not attest the Azure credential's principal or prove
 billing account ownership. Credentials are not included. The exception keeps
 its original type, including `TimeoutError` and `asyncio.CancelledError`, and
-has a recovery note naming the job and workspace.
+has a recovery note naming the job and workspace. `asyncio.run()` replaces the
+task's `CancelledError` with a bare `KeyboardInterrupt` on Ctrl+C, so there the
+retained job ID is in the warning an interrupted result wait logs, not on the exception.
 
 Errors or cancellation while `backend.run()` or `service.create_job()` is in
 flight carry the same

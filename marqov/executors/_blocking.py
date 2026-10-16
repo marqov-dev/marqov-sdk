@@ -44,6 +44,12 @@ class BlockingCalls:
                 return await self.call(result)
             return await asyncio.wait_for(self.call(result), timeout)
         except (TimeoutError, asyncio.CancelledError) as interruption:
+            # asyncio.run() turns a Ctrl+C CancelledError into a bare
+            # KeyboardInterrupt, dropping the note below; log the id first.
+            logger.warning(
+                "Remote task %r interrupted; cancellation requested, provider state unconfirmed",
+                job_id,
+            )
             try:
                 await asyncio.wait_for(self.call(cancel), _CANCEL_WAIT_SECONDS)
             except (Exception, asyncio.CancelledError):  # noqa: BLE001 - preserve original interruption

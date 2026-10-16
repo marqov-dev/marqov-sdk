@@ -14,7 +14,9 @@ cancellation request for that invocation's task ARN. Another concurrent call's
 last-task tracking cannot replace this ID. Cleanup is given at most one second
 of additional waiting. Failure, a slow request, or repeated caller cancellation
 preserves the original `TimeoutError` or `CancelledError`; a warning reports
-unconfirmed cleanup. The exception note includes the task ARN. A completed
+unconfirmed cleanup. The exception note includes the task ARN. `asyncio.run()`
+replaces the task's `CancelledError` with a bare `KeyboardInterrupt` on Ctrl+C,
+so there the task ARN is in the warning an interrupted result wait logs, not on the exception. A completed
 cancellation request is not proof that the provider stopped execution.
 
 Blocking submission, result and cached-metadata calls use a pool owned by the
