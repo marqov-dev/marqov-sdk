@@ -920,6 +920,57 @@ class TestFromPyquil:
             Circuit.from_pyquil(program)
 
 
+def _braket_importable_gates() -> list[str]:
+    from quantumflow.xbraket import BRAKET_TO_QF
+
+    return sorted(BRAKET_TO_QF)
+
+
+class TestToPyquil:
+    """Tests for Circuit.to_pyquil()."""
+
+    @staticmethod
+    def _program_unitary_big_endian(program, num_qubits: int):
+        """pyQuil's program unitary reordered to QuantumFlow's q0-major order."""
+        import numpy as np
+        from pyquil.simulation.tools import program_unitary
+
+        unitary = program_unitary(program, n_qubits=num_qubits)
+        perm = [int(format(i, f"0{num_qubits}b")[::-1], 2) for i in range(2 ** num_qubits)]
+        return unitary[np.ix_(perm, perm)]
+
+    @pytest.mark.parametrize("gate_name", _braket_importable_gates())
+    def test_every_braket_importable_gate_exports_with_same_unitary(self, gate_name) -> None:
+        """Each gate exports, as valid Quil, with the circuit's unitary."""
+        import numpy as np
+        from braket.circuits import Circuit as BK
+        from braket.circuits import Instruction, gates
+        from braket.circuits.angled_gate import AngledGate
+
+        ctor = getattr(gates, gate_name)
+        operator = ctor(0.37) if issubclass(ctor, AngledGate) else ctor()
+        source = BK().add_instruction(
+            Instruction(operator, list(range(ctor.fixed_qubit_count())))
+        )
+        circuit = Circuit.from_braket(source)
+        program = circuit.to_pyquil()
+        exported = self._program_unitary_big_endian(program, circuit.num_qubits)
+        expected = circuit._qf.asgate().asoperator()
+        # Quil has no global-phase gate, so translated gates (V, Si, CY, ...)
+        # can only match up to one global phase factor.
+        pivot = np.unravel_index(np.argmax(np.abs(expected)), expected.shape)
+        phase = exported[pivot] / expected[pivot]
+        assert abs(abs(phase) - 1) < 1e-12
+        np.testing.assert_allclose(exported, phase * expected, atol=1e-12, rtol=1e-12)
+
+    def test_unbound_parameter_is_refused(self) -> None:
+        import sympy
+
+        circuit = Circuit().h(0).rx(sympy.Symbol("theta"), 0)
+        with pytest.raises(ValueError, match="Circuit.to_pyquil\\(\\): gate 'Rx' at position 1 has an unbound"):
+            circuit.to_pyquil()
+
+
 class TestOpenQASM:
     """Tests for OpenQASM import and export."""
 

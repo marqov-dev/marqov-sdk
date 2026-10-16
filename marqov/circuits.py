@@ -260,13 +260,50 @@ class Circuit:
         """
         return qf.transpile(self._qf, output_format="cirq")
 
+    # QuantumFlow gate name -> Quil gate name. The fork's map spells two of
+    # these wrong ("PhaseShift", "CHPHASE10"), which pyQuil cannot interpret.
+    _QF_TO_QUIL: dict[str, str] = {
+        **{qf_name: quil_name for quil_name, qf_name in qf.xforest.QUIL_TO_QF.items()},
+        "PhaseShift": "PHASE",
+        "CPhase10": "CPHASE10",
+    }
+
     def to_pyquil(self):
         """Convert to Rigetti PyQuil program.
 
+        Gates outside the Quil-native set (for example Braket's ``V``, ``XY``
+        or ``CY``) are first translated into Quil-native gates, so the program
+        equals the circuit up to a global phase (Quil has no global-phase
+        gate). Every parameter is exported as a float.
+
         Returns:
             PyQuil Program object.
+
+        Raises:
+            ImportError: If PyQuil is not installed.
+            ValueError: If a gate parameter is unbound (symbolic) or not a
+                real number.
         """
-        return qf.transpile(self._qf, output_format="pyquil")
+        try:
+            from pyquil import Program
+        except ImportError:
+            raise ImportError(
+                "PyQuil is required for Circuit.to_pyquil(). "
+                "Install with: pip install marqov[pyquil]"
+            )
+
+        method = "Circuit.to_pyquil()"
+        for index, op in enumerate(self._qf._elements):
+            for param in op.params:
+                self._bound_angle(param, op.name, index, method)
+
+        # Translation leaves sympy expressions such as `pi/2` in parameters,
+        # which pyQuil rejects, so cast them to floats.
+        program = Program()
+        for index, op in enumerate(qf.xforest.translate_to_pyquil(self._qf)):
+            params = [self._bound_angle(param, op.name, index, method) for param in op.params]
+            program.gate(self._QF_TO_QUIL[op.name], params, list(op.qubits))
+        return program
 
     def to_pytket(self):
         """Convert to pytket Circuit.
@@ -386,18 +423,20 @@ class Circuit:
         return qml.tape.QuantumScript(operations)
 
     @staticmethod
-    def _bound_angle(value: Any, gate: str, index: int) -> float:
+    def _bound_angle(
+        value: Any, gate: str, index: int, method: str = "Circuit.to_pennylane()"
+    ) -> float:
         """Return a gate angle as a float, refusing unbound or non-real values."""
         try:
             numeric = complex(value)
         except (TypeError, ValueError) as exc:
             raise ValueError(
-                f"Circuit.to_pennylane(): gate '{gate}' at position {index} has an "
+                f"{method}: gate '{gate}' at position {index} has an "
                 f"unbound parameter {value!r}. Bind every angle to a number first."
             ) from exc
         if numeric.imag != 0:
             raise ValueError(
-                f"Circuit.to_pennylane(): gate '{gate}' at position {index} has a "
+                f"{method}: gate '{gate}' at position {index} has a "
                 f"non-real angle {value!r}."
             )
         return float(numeric.real)
