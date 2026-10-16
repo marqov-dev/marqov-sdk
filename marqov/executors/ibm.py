@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from marqov.executors._blocking import BlockingCalls
 from marqov.executors._counts import extract_sampler_counts
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 
@@ -117,7 +118,10 @@ class IBMExecutorConfig:
         poll_interval_seconds: Currently unused. `execute()` blocks
                                 synchronously on `job.result()` rather than
                                 polling.
-        timeout_seconds: Maximum time to wait for job completion.
+        timeout_seconds: Maximum time to wait for job completion. On timeout
+                         the provider job is not cancelled, and the thread
+                         blocked on `job.result()` outlives the timeout; the
+                         caller is released without waiting for either.
     """
 
     backend_name: str
@@ -169,6 +173,8 @@ class IBMExecutor(BaseExecutor):
         self.config = config
         self._service = None
         self._backend = None
+        # Last-submitted job on this instance, for tracking only. Concurrent
+        # calls overwrite it; each call's own job ID is on its result or error.
         self._current_job_id: str | None = None
 
     def _get_service_sync(self):
@@ -284,6 +290,9 @@ class IBMExecutor(BaseExecutor):
         Raises:
             IBMExecutionError: Result retrieval failed after submission; includes
                 the job ID. A timeout does not cancel the provider job.
+            asyncio.CancelledError: Re-raised when the caller cancels the wait,
+                with ``remote_job`` naming this call's job ID; the provider
+                job is not cancelled.
             Exception: Pre-submission provider/availability failures propagate.
         """
         if kwargs:
@@ -317,18 +326,33 @@ class IBMExecutor(BaseExecutor):
             partial(self._submit_sampler_sync, transpiled, backend, shots),
         )
         job_id = job.job_id()
-        try:
-            result_future = loop.run_in_executor(None, job.result)
-            result = (
-                await asyncio.wait_for(result_future, self.config.timeout_seconds)
-                if self.config.timeout_seconds is not None
-                else await result_future
-            )
-            counts = self._extract_counts(result)
-            if sum(counts.values()) != shots:
-                raise ValueError("IBM result shot accounting differs from the submission")
-        except Exception as exc:
-            raise IBMExecutionError(job_id) from exc
+        # A per-execution pool, not the default executor: asyncio.run() joins
+        # the default executor on exit, which would hold the caller until the
+        # job finishes. No cancel callable: a timeout never cancels the job.
+        with BlockingCalls() as calls:
+            try:
+                result_call = calls.call(job.result)
+                result = (
+                    await asyncio.wait_for(result_call, self.config.timeout_seconds)
+                    if self.config.timeout_seconds is not None
+                    else await result_call
+                )
+                counts = self._extract_counts(result)
+                if sum(counts.values()) != shots:
+                    raise ValueError("IBM result shot accounting differs from the submission")
+            except asyncio.CancelledError as exc:
+                exc.remote_job = {  # type: ignore[attr-defined]
+                    "provider": "IBM Quantum",
+                    "backend_name": self.config.backend_name,
+                    "job_id": job_id,
+                }
+                exc.add_note(
+                    f"IBM job {job_id!r} was submitted; cancelling the wait does not "
+                    "cancel the provider job, which may still be running."
+                )
+                raise
+            except Exception as exc:
+                raise IBMExecutionError(job_id) from exc
 
         wall_time = time.perf_counter() - start_time
 

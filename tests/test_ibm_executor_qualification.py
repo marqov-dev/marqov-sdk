@@ -1,5 +1,8 @@
 """Real IBM Runtime SamplerV2 local execution and submitted-job identity."""
 
+import asyncio
+import threading
+import time
 from unittest.mock import Mock
 
 import numpy as np
@@ -7,6 +10,7 @@ import pytest
 
 pytest.importorskip("qiskit_ibm_runtime")
 pytest.importorskip("qiskit_aer")
+import qiskit_ibm_runtime
 from qiskit_aer import AerSimulator
 from marqov.circuits import Circuit
 from marqov.executors import IBMExecutor, IBMExecutorConfig
@@ -62,3 +66,96 @@ async def test_shots_accept_numpy_integers_only(shots, accepted):
     result = await executor.execute(Circuit().x(0), shots=shots)
     assert result.counts == {"1": 16}
     assert type(result.shots) is int
+
+
+def _stub_executor(monkeypatch, job, timeout_seconds=None):
+    executor = IBMExecutor(
+        IBMExecutorConfig(backend_name="configured-provider-device", timeout_seconds=timeout_seconds)
+    )
+    executor._backend = Mock()
+    monkeypatch.setattr(executor, "_transpile_sync", lambda circuit, backend: circuit)
+    monkeypatch.setattr(executor, "_submit_sampler_sync", lambda circuit, backend, shots: job)
+    return executor
+
+
+def test_timeout_returns_from_asyncio_run_without_joining_result_thread(monkeypatch):
+    finished = threading.Event()
+
+    def slow_result():
+        try:
+            time.sleep(1.5)  # stands in for a queued IBM job
+        finally:
+            finished.set()
+
+    job = Mock()
+    job.job_id.return_value = "queued-provider-job"
+    job.result.side_effect = slow_result
+    executor = _stub_executor(monkeypatch, job, timeout_seconds=0.05)
+
+    async def main():
+        with pytest.raises(IBMExecutionError) as error:
+            await executor.execute(Circuit().h(0), shots=32)
+        assert error.value.job_id == "queued-provider-job"
+        return time.perf_counter()
+
+    raised_at = asyncio.run(main())
+    assert time.perf_counter() - raised_at < 0.5
+    assert not finished.is_set()
+    job.cancel.assert_not_called()
+    finished.wait(5)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_call_retains_its_own_job_under_concurrency(monkeypatch):
+    release = threading.Event()
+    started = {"job-A": threading.Event(), "job-B": threading.Event()}
+
+    def make_job(job_id):
+        job = Mock()
+        job.job_id.return_value = job_id
+
+        def result():
+            started[job_id].set()
+            release.wait(10)
+            return Mock()
+
+        job.result.side_effect = result
+        return job
+
+    jobs = iter([make_job("job-A"), make_job("job-B")])
+
+    class FakeSampler:
+        def __init__(self, mode):
+            pass
+
+        def run(self, circuits, shots):
+            return next(jobs)
+
+    monkeypatch.setattr(qiskit_ibm_runtime, "SamplerV2", FakeSampler)
+    executor = IBMExecutor(IBMExecutorConfig(backend_name="configured-provider-device"))
+    executor._backend = Mock()
+    monkeypatch.setattr(executor, "_transpile_sync", lambda circuit, backend: circuit)
+
+    async def wait_started(job_id):
+        while not started[job_id].is_set():
+            await asyncio.sleep(0.005)
+
+    call_a = asyncio.create_task(executor.execute(Circuit().h(0), shots=8))
+    call_b = None
+    try:
+        await asyncio.wait_for(wait_started("job-A"), 5)
+        call_b = asyncio.create_task(executor.execute(Circuit().h(0), shots=8))
+        await asyncio.wait_for(wait_started("job-B"), 5)
+        assert executor._current_job_id == "job-B"
+        call_a.cancel()
+        with pytest.raises(asyncio.CancelledError) as cancelled:
+            await call_a
+        assert cancelled.value.remote_job["job_id"] == "job-A"
+        assert any("job-A" in note for note in cancelled.value.__notes__)
+        assert not call_b.done()
+    finally:
+        release.set()
+        if call_b is not None:
+            call_b.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await call_b
