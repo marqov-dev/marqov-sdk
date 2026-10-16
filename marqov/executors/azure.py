@@ -454,15 +454,7 @@ class AzureQuantumExecutor(BaseExecutor):
             return job.results(timeout_seconds=budget)
         # Azure's IonQ wrapper returns provider results rather than cirq.Result.
         target_wrapper = service.get_target(name=target)
-        try:
-            result = job.results(timeout_seconds=budget)
-        except RuntimeError as error:
-            # Preserve the legacy provider polling error mapped by service.run().
-            if "Job was not completed successful. Instead had status: " in str(error):
-                raise TimeoutError(
-                    f"The wait time has exceeded {budget} seconds. Job status: '{job.status()}'."
-                ) from error
-            raise
+        result = job.results(timeout_seconds=budget)
         return target_wrapper._to_cirq_result(
             result=result, param_resolver=cirq.ParamResolver({}), seed=None,
         )

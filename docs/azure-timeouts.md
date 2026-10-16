@@ -55,8 +55,8 @@ resubmitting a job. Platform recovery must confirm provider state separately.
 This covers both Azure result-wait paths in marqov-sdk#134. Cirq submission
 now precedes its result deadline; previously the deadline wrapped the combined
 `service.run()` call. Native Cirq wrappers return `cirq.Result`; provider-specific
-IonQ wrappers still use the vendor target conversion and legacy polling-error
-mapping to `TimeoutError`. With no configured timeout,
+IonQ wrappers still use the vendor target conversion; their polling timeout is
+cirq-ionq's own `TimeoutError`. With no configured timeout,
 Cirq retains `service.run()`'s vendor default polling budget (300 seconds in the
 tested Azure release), rather than the job wrapper's different default.
 Submission ownership after a lost handle still needs separate work. IBM's
