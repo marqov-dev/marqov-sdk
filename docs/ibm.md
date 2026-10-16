@@ -23,7 +23,8 @@ checks. Neither is claimed complete by the offline result.
 
 ## Isolated Linux qualification
 
-`qualification/ibm-python312.json` records the current installed SDK on Linux
+`docs/qualification/ibm-python312.json` records marqov0.8.1 and
+marqov-quantumflow1.0.0 (a receipt that predates 0.9.x) on Linux
 amd64/Python3.12, Qiskit2.4.1, IBM Runtime0.50.0 and Aer0.17.2. The existing
 asymmetric basis workloads returned `10:32` and `01:32` through the real
 SamplerV2. The container had no network or credentials, a read-only root,
@@ -31,7 +32,7 @@ non-root user and dropped capabilities. These are offline results.
 
 The qualification starts from the retained compiler base and preserves its
 70 non-SDK package versions; only published Marqov0.7.0 is replaced with the
-current source SDK0.8.1. Requirements carry distribution hashes. This image
+source SDK0.8.1 recorded in the receipt. Requirements carry distribution hashes. This image
 is an isolated qualification candidate, not a minimal hosted runtime.
 Alice & Bob1.2 requires Qiskit1.x, while this IBM Runtime requires Qiskit2.x;
 this image must not replace the existing shared partner environment. Hosted

@@ -58,7 +58,7 @@ qualification evidence. `MarqovDevice.run` still returns counts alone.
 ## Offline qualification seam
 
 Run `python -m pytest -q tests/test_braket_native.py` in the SDK environment with
-published marqov-quantumflow 1.0.1. Tests use real Braket circuits and fake
+published marqov-quantumflow 1.0.2 (the pinned version). Tests use real Braket circuits and fake
 provider tasks: replace `BraketExecutor._get_device` with an `AsyncMock` and
 `MarqovDevice._get_provider_device` with a fake provider, then inspect
 `device.run` arguments. No AWS/provider call is needed. Sparse [7,1] targets,

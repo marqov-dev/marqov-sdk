@@ -29,7 +29,8 @@ An interruption during compilation prevents subsequent submission by that call.
 
 `await executor.cancel(job_id)` supports owned active handles and the last 32
 interrupted handles retained by that executor instance. It returns `True` when
-the cancellation request finishes, without confirming provider state. Unknown,
+the cancellation request finishes, without confirming provider state; the
+handle is not removed, so a repeat call sends another request. Unknown,
 evicted, completed or other-instance handles return `False`; request failures
 and requests exceeding one second also return `False`. Retained handles include
 compiled programs, so the cache is bounded. QVM and compatible run-only injected

@@ -121,7 +121,9 @@ Dependencies resolve from real PyPI; it does not upload anything.
 ### ⚠️ The tag is the point of no return
 Pushing a `v*` tag publishes to real PyPI, and **a PyPI version can never be
 reused or unpublished.** Tag the exact SHA you validated on TestPyPI, and only
-after CI is green on it:
+after CI is green on it. Under squash-merge the PyPI wheel is rebuilt from the
+merge commit and will differ from the TestPyPI wheel built from the PR branch;
+the `verify` job re-runs on the tag:
 
 ```
 git tag -a vX.Y.Z <validated-sha> -m "marqov X.Y.Z"

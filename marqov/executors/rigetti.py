@@ -383,7 +383,8 @@ class RigettiExecutor(BaseExecutor):
         """Request cancellation for an owned active or recently interrupted native job.
 
         QVM/run-only backends and IDs without a retained handle return
-        False. The last 32 interrupted handles are retained; successes are removed.
+        False. The last 32 interrupted handles are retained; a successful cancel does
+        not remove the handle, so a repeat call sends another request.
         A successful request does not confirm terminal cancellation.
         """
         with self._jobs_lock:
