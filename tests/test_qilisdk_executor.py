@@ -365,21 +365,64 @@ class TestSpeQtrumDirect:
         assert calls == ['login', '/devices', '/execute']
 
     @pytest.mark.asyncio
-    async def test_cancel_during_unanswered_post_is_acceptance_unknown(self, monkeypatch):
+    async def test_cancel_during_unanswered_post_stays_cancelled(self, monkeypatch, caplog):
+        import asyncio
+        import logging
         import threading
 
-        from marqov.executors.speqtrum import SpeQtrumExecutionError, SpeQtrumExecutor
-        monkeypatch.setattr('marqov.executors.speqtrum._CANCEL_WAIT_SECONDS', 0.05)
+        from marqov.executors.speqtrum import SpeQtrumExecutor
+        monkeypatch.setattr('marqov.executors._blocking._CANCEL_WAIT_SECONDS', 0.05)
         executor = SpeQtrumExecutor(self.config())
         release = threading.Event()
+        with caplog.at_level(logging.WARNING, logger='marqov.executors._blocking'):
+            try:
+                task, calls = await self._cancel_during(executor, '/execute', lambda: release.wait(5))
+                with pytest.raises(asyncio.CancelledError) as error:
+                    await task
+                assert task.cancelled() and error.value.acceptance_unknown
+                assert any('acceptance unknown' in note for note in error.value.__notes__)
+                assert calls.count('/execute') == 1 and executor.last_job is None
+            finally:
+                release.set()
+            for _ in range(100):
+                if 'SpeQtrum job 42' in caplog.text:
+                    break
+                await asyncio.sleep(0.02)
+        # A reply after the caller stopped waiting is logged, never replayed.
+        assert 'SpeQtrum job 42' in caplog.text and calls.count('/execute') == 1
+
+    @pytest.mark.asyncio
+    async def test_wait_for_timeout_during_unanswered_post_surfaces_timeout(self, monkeypatch):
+        import asyncio
+        import threading
+
+        from marqov.executors.speqtrum import SpeQtrumExecutor
+        monkeypatch.setattr('marqov.executors._blocking._CANCEL_WAIT_SECONDS', 0.05)
+        circuit = Circuit().x(0).x(1).x(1)
+        QiliSDKExecutor._to_qilisdk_circuit(circuit)  # warm vendor imports before the timer starts
+        executor = SpeQtrumExecutor(self.config())
+        release = threading.Event()
+
+        class Client:
+            def login(self, deadline):
+                return 'fixture-token'
+
+            def request(self, method, path, deadline, **kwargs):
+                if path == '/devices':
+                    return {'items': [{'code': 'fixture-device', 'nqubits': 2,
+                                       'type': 'simulator', 'status': 'online'}]}
+                release.wait(5)
+                return {'id': 42}
+
+        executor._client = Client()
         try:
-            task, calls = await self._cancel_during(executor, '/execute', lambda: release.wait(5))
-            with pytest.raises(SpeQtrumExecutionError) as error:
-                await task
-            assert error.value.acceptance_unknown and error.value.job_id is None
-            assert calls.count('/execute') == 1
+            with pytest.raises(TimeoutError) as error:
+                await asyncio.wait_for(executor.execute(circuit, shots=32), 0.3)
         finally:
             release.set()
+        interruption = error.value.__cause__
+        assert isinstance(interruption, asyncio.CancelledError) and interruption.acceptance_unknown
+        assert any('acceptance unknown' in note for note in interruption.__notes__)
 
     @pytest.mark.asyncio
     async def test_cancel_before_post_sends_nothing(self):

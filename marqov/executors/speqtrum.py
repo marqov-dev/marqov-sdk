@@ -11,7 +11,6 @@ import base64
 import hashlib
 import json
 import math
-import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -22,7 +21,7 @@ from urllib.parse import urlsplit
 import requests
 from requests.adapters import HTTPAdapter
 
-from marqov.executors._blocking import _CANCEL_WAIT_SECONDS, BlockingCalls
+from marqov.executors._blocking import BlockingCalls
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 from marqov.executors.qilisdk import QiliSDKExecutor
 
@@ -324,53 +323,17 @@ class SpeQtrumExecutor(BaseExecutor):
     async def _run(self, functional: Any, kind: str, shots: int, width: int) -> ExecutionResult:
         deadline = time.monotonic() + self.config.timeout_seconds
         with BlockingCalls() as calls:
-            job, token = await self._submit_owned(calls, functional, kind, shots, width, deadline)
-            return cast(ExecutionResult, await calls.call(self._readback, job, token, deadline))
-
-    async def _submit_owned(
-        self,
-        calls: BlockingCalls,
-        functional: Any,
-        kind: str,
-        shots: int,
-        width: int,
-        deadline: float,
-    ) -> tuple[SpeQtrumJob, str]:
-        """Keep the POST's job identity across cancellation of the awaiting task.
-
-        Cancellation before the POST starts sends nothing. Once it has started, wait
-        a bounded interval for its reply: a known ID is kept in last_job and noted on
-        the re-raised interruption; otherwise acceptance is unknown. No POST is replayed.
-        """
-        lock = threading.Lock()
-        state = {"interrupted": False, "sending": False}
-
-        def claim() -> None:
-            with lock:
-                if state["interrupted"]:
-                    raise RuntimeError("SpeQtrum submission interrupted before POST")
-                state["sending"] = True
-
-        post = asyncio.ensure_future(
-            calls.call(self._submit, functional, kind, shots, width, deadline, claim)
-        )
-        try:
-            return cast(tuple[SpeQtrumJob, str], await asyncio.shield(post))
-        except (TimeoutError, asyncio.CancelledError) as interruption:
-            with lock:
-                state["interrupted"] = True
-                sending = state["sending"]
-            if not sending:
-                raise
-            try:
-                job, _ = await asyncio.wait_for(asyncio.shield(post), _CANCEL_WAIT_SECONDS)
-            except (Exception, asyncio.CancelledError):  # noqa: BLE001 - reply still unknown
-                raise SpeQtrumExecutionError(None, acceptance_unknown=True) from None
-            interruption.add_note(
-                f"SpeQtrum job {job.job_id} was accepted before the interruption; "
-                "it is retained in last_job for readback and must not be resubmitted."
+            job, token = await calls.submit_owned(
+                self._submit,
+                functional,
+                kind,
+                shots,
+                width,
+                deadline,
+                label="SpeQtrum job",
+                job_id_of=lambda sent: sent[0].job_id,
             )
-            raise
+            return cast(ExecutionResult, await calls.call(self._readback, job, token, deadline))
 
     def _submit(
         self,
