@@ -7,6 +7,13 @@ release.
 
 ## [Unreleased]
 
+### Added
+
+- `marqov watch`: a read-only Ratatui dashboard with existing API-key authentication,
+  project selection, automatic bounded refresh, stale-data retention and retry backoff.
+  The viewer builds from bundled locked Rust source on first launch; JSON and project
+  listing modes work without Rust.
+
 ## [0.9.1] — 2026-10-10
 
 ### Changed

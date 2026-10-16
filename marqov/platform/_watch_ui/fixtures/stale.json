@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "source": "replay",
+  "observed_at": "2026-10-08T12:00:00Z",
+  "freshness": "stale",
+  "jobs": [
+    {
+      "workflow_id": "workflow-1",
+      "provider_job_id": "p-001",
+      "slurm_job_id": "421",
+      "state": "queued",
+      "reason": "Resources unavailable",
+      "provenance": "Synthetic sanitized presentation fixture; NOT live scheduler evidence. Journeys J3-J8.",
+      "cancellation": "none"
+    },
+    {
+      "workflow_id": "workflow-2",
+      "provider_job_id": "p-002",
+      "slurm_job_id": "422",
+      "state": "running",
+      "reason": "Matched execution observed",
+      "provenance": "Synthetic sanitized presentation fixture; NOT live scheduler evidence. Journeys J3-J8.",
+      "cancellation": "none"
+    },
+    {
+      "workflow_id": "workflow-3",
+      "provider_job_id": null,
+      "slurm_job_id": "423",
+      "state": "needs_review",
+      "reason": "Provider identity missing; no replacement execution",
+      "provenance": "Synthetic sanitized presentation fixture; NOT live scheduler evidence. Journeys J3-J8.",
+      "cancellation": "none"
+    },
+    {
+      "workflow_id": "workflow-4",
+      "provider_job_id": null,
+      "slurm_job_id": null,
+      "state": "checking_execution",
+      "reason": "Worker lost; ownership reconciliation ongoing",
+      "provenance": "Synthetic sanitized presentation fixture; NOT live scheduler evidence. Journeys J3-J8.",
+      "cancellation": "none"
+    },
+    {
+      "workflow_id": "workflow-5",
+      "provider_job_id": "p-005",
+      "slurm_job_id": "425",
+      "state": "running",
+      "reason": "Stop intent recorded; execution not confirmed stopped",
+      "provenance": "Synthetic sanitized presentation fixture; NOT live scheduler evidence. Journeys J3-J8.",
+      "cancellation": "requested"
+    },
+    {
+      "workflow_id": "workflow-6",
+      "provider_job_id": "p-006",
+      "slurm_job_id": "426",
+      "state": "cancelled",
+      "reason": "Coordinator confirmed terminal cancellation",
+      "provenance": "Synthetic sanitized presentation fixture; NOT live scheduler evidence. Journeys J3-J8.",
+      "cancellation": "confirmed"
+    },
+    {
+      "workflow_id": "workflow-7",
+      "provider_job_id": "p-007",
+      "slurm_job_id": "427",
+      "state": "completed",
+      "reason": "Bound completion; artifact authorization remains server-owned",
+      "provenance": "Synthetic sanitized presentation fixture; NOT live scheduler evidence. Journeys J3-J8.",
+      "cancellation": "none"
+    },
+    {
+      "workflow_id": "workflow-8",
+      "provider_job_id": "p-008",
+      "slurm_job_id": "428",
+      "state": "failed",
+      "reason": "Coordinator confirmed failure: exit code 1",
+      "provenance": "Synthetic sanitized presentation fixture; NOT live scheduler evidence. Journeys J3-J8.",
+      "cancellation": "none"
+    }
+  ]
+}
