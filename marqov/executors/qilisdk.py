@@ -21,6 +21,7 @@ from importlib.metadata import version
 import json
 import platform
 import time
+from numbers import Integral
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -170,7 +171,7 @@ class QiliSDKExecutor(BaseExecutor):
             raw_result=result,
             metadata={
                 "simulator": self.config.simulator,
-                **self._provenance(backend, counts, shots, seed),
+                **self._provenance(backend, counts, seed),
                 **({"seed": seed, "num_threads": 1} if seed is not None else {}),
             },
         )
@@ -245,7 +246,7 @@ class QiliSDKExecutor(BaseExecutor):
             raw_result=result,
             metadata={
                 "simulator": self.config.simulator,
-                **self._provenance(backend, counts, shots, seed),
+                **self._provenance(backend, counts, seed),
                 "mode": "analog",
                 **({"seed": seed, "num_threads": 1} if seed is not None else {}),
             },
@@ -266,17 +267,19 @@ class QiliSDKExecutor(BaseExecutor):
                 not isinstance(bits, str)
                 or len(bits) != width
                 or set(bits) - {"0", "1"}
-                or type(count) is not int
+                or not isinstance(count, Integral)
+                or isinstance(count, bool)
                 or count < 0
                 for bits, count in counts.items()
             )
             or sum(counts.values()) != shots
         ):
             raise RuntimeError("QiliSDK returned invalid counts or shot accounting")
-        return counts
+        # Backends may return NumPy integers; hand back plain ints.
+        return {bits: int(count) for bits, count in counts.items()}
 
     def _provenance(
-        self, backend: Any, counts: dict[str, int], shots: int, seed: int | None
+        self, backend: Any, counts: dict[str, int], seed: int | None
     ) -> dict[str, Any]:
         """Record the actual local engine; this is not hosted execution evidence."""
         engine = f"{type(backend).__module__}.{type(backend).__qualname__}"

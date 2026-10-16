@@ -184,3 +184,24 @@ async def test_provenance_shots_is_observed_total_and_bit_order(local_executor, 
     record = result.metadata["reproducibility"]
     assert record["shots"] == sum(result.counts.values()) == result.shots == 7
     assert record["bit_order"] == "QiliSDK sampling order; qubit 0 leftmost"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["digital", "analog"])
+async def test_numpy_integer_counts_are_accepted_as_plain_ints(local_executor, mode):
+    import numpy as np
+
+    local_executor.samples.clear()
+    local_executor.samples.update({"0": np.int64(3), "1": np.int64(4)})
+    result = await run_program(local_executor, mode)
+    assert result.counts == {"0": 3, "1": 4}
+    assert all(type(v) is int for v in result.counts.values())
+    assert result.metadata["reproducibility"]["shots"] == 7
+
+
+@pytest.mark.asyncio
+async def test_bool_counts_are_refused(local_executor):
+    local_executor.samples.clear()
+    local_executor.samples.update({"0": True, "1": 6})
+    with pytest.raises(RuntimeError, match="invalid counts or shot accounting"):
+        await run_program(local_executor, "digital")
