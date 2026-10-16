@@ -72,7 +72,7 @@ qiskit = [
 ]
 ibm = [
     "qiskit>=1.0.0",
-    "qiskit-ibm-runtime>=0.20.0",
+    "qiskit-ibm-runtime>=0.21.0",
 ]
 cirq = [
     "cirq-core>=1.0.0",
@@ -136,7 +136,7 @@ all = [
     "amazon-braket-sdk>=1.117.0",
     "qutip>=5.3.0,<6.0.0",
     "qiskit>=1.0.0",
-    "qiskit-ibm-runtime>=0.20.0",
+    "qiskit-ibm-runtime>=0.21.0",
     "qiskit-qasm3-import>=0.5.0",
     "cirq-core>=1.0.0",
     "pennylane>=0.45.0",
