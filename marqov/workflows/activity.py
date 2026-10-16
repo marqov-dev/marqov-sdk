@@ -135,8 +135,10 @@ def _deserialize_value(value: Any) -> Any:
 
     Handles cloudpickle-encoded complex objects.
 
-    NOTE: This function is used only by prepare_node_inputs (proxy resolution)
-    and by tests.  execute_task MUST NOT call it — results are forwarded opaquely.
+    NOTE: This function is called client-side by WorkflowDispatch.run() and
+    run_with_ids() (the caller owns the pickled bytes) and by tests.
+    execute_task and prepare_node_inputs MUST NOT call it: results are
+    forwarded opaquely through the worker.
     """
     import cloudpickle
 
@@ -152,13 +154,28 @@ def _deserialize_value(value: Any) -> Any:
         return value
 
 
+def _unbox_numpy_scalar(value: Any) -> Any:
+    """Unbox NumPy bool/integer/float scalars without narrowing extended precision.
+
+    Mirrored in _task_child._unbox_numpy_scalar; keep the two in sync.
+    """
+    np = sys.modules.get("numpy")
+    if np is not None and isinstance(value, (np.bool_, np.integer, np.floating)):
+        scalar = value.item()
+        if type(scalar) in (bool, int, float):
+            return scalar
+    return value
+
+
 def _serialize_value(value: Any) -> Any:
     """Serialize a value for JSON transport.
 
     Uses cloudpickle for complex objects, JSON-compatible types pass through.
+    NumPy bool/integer/float scalars are unboxed to Python bool/int/float.
     """
     import cloudpickle
 
+    value = _unbox_numpy_scalar(value)
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     elif isinstance(value, (list, tuple)):

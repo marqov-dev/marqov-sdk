@@ -41,10 +41,24 @@ def _deserialize_value(value: Any) -> Any:
         return value
 
 
+def _unbox_numpy_scalar(value: Any) -> Any:
+    """Unbox NumPy bool/integer/float scalars without narrowing extended precision.
+
+    Mirrored in activity._unbox_numpy_scalar; keep the two in sync.
+    """
+    np = sys.modules.get("numpy")
+    if np is not None and isinstance(value, (np.bool_, np.integer, np.floating)):
+        scalar = value.item()
+        if type(scalar) in (bool, int, float):
+            return scalar
+    return value
+
+
 def _serialize_value(value: Any) -> Any:
     """Serialize a value for JSON transport (mirrors activity._serialize_value)."""
     import cloudpickle
 
+    value = _unbox_numpy_scalar(value)
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     elif isinstance(value, (list, tuple)):

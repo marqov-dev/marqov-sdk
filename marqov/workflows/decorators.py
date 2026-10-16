@@ -301,11 +301,20 @@ class WorkflowDispatch:
             task_queue: Temporal task queue name.
 
         Returns:
-            The result of the workflow execution.
+            The workflow's output, decoded in this process: a single output
+            node yields that task's return value, several output nodes yield a
+            dict keyed by node ID, and a workflow with no output nodes yields
+            a dict of every node's result. JSON values (None, bool, int,
+            float, str, list, dict) come back as-is, with tuples as lists and
+            NumPy bool/integer/float scalars as Python bool/int/float. Any
+            other return value (a dataclass, an ``ExecutionResult``, an
+            array) travels as cloudpickle bytes and is unpickled here, so the
+            classes it needs must be importable by the caller.
         """
         import json
         import uuid
 
+        from marqov.workflows.activity import _deserialize_value
         from marqov.workflows.temporal_workflow import JobWorkflow
 
         # Prepare pure JSON input (no marqov objects)
@@ -329,8 +338,8 @@ class WorkflowDispatch:
         # Deserialize result — unwrap enriched format for backward compat
         parsed = json.loads(result_json)
         if isinstance(parsed, dict) and "result" in parsed and "_workflow_metadata" in parsed:
-            return parsed["result"]
-        return parsed
+            return _deserialize_value(parsed["result"])
+        return _deserialize_value(parsed)
 
     async def start_with_ids(self, client: Any, task_queue: str = "marqov-workflows") -> tuple[Any, str, str]:
         """Start workflow and return handle with IDs, without waiting for result.
@@ -377,8 +386,12 @@ class WorkflowDispatch:
 
         Returns:
             Tuple of (result, workflow_id, run_id) for tracking and debugging.
+            ``result`` is the enriched dict, ``{"result": ..., "_workflow_metadata": ...}``,
+            with ``result["result"]`` decoded as described in :meth:`run`.
         """
         import json
+
+        from marqov.workflows.activity import _deserialize_value
 
         handle, workflow_id, run_id = await self.start_with_ids(client, task_queue)
 
@@ -387,6 +400,8 @@ class WorkflowDispatch:
 
         # Deserialize result — return full enriched dict (metadata included)
         parsed = json.loads(result_json)
+        if isinstance(parsed, dict) and "result" in parsed and "_workflow_metadata" in parsed:
+            parsed["result"] = _deserialize_value(parsed["result"])
 
         return parsed, workflow_id, run_id
 
