@@ -271,3 +271,63 @@ def test_invalid_active_poll_interval_is_rejected_before_submission(interval):
                 poll_interval_seconds=interval,
             )
         )
+
+
+def assert_identity(error, task_arn, *, status="submitted"):
+    assert error.remote_job == {
+        "provider": "AWS Braket",
+        "device_arn": "offline",
+        "task_arn": task_arn,
+        "s3_location": "s3://unused/marqov",
+        "submission_status": status,
+    }
+    assert error.__notes__
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["provider-result", "counts"])
+async def test_post_submission_result_processing_errors_keep_task(failure):
+    if failure == "provider-result":
+        result = Mock(side_effect=RuntimeError("S3 AccessDenied"))
+    else:
+        result = Mock(return_value=SimpleNamespace(measurement_counts=None))
+    task = SimpleNamespace(
+        id="processing-failure-task", result=result, metadata=lambda **kw: {"status": "COMPLETED"}
+    )
+    ex, _, cancel = executor([task])
+    with pytest.raises((RuntimeError, TypeError)) as caught:
+        await ex.execute(Circuit().x(0))
+    assert_identity(caught.value, task.id)
+    assert task.id in " ".join(caught.value.__notes__)
+    cancel.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_interrupted_submission_is_explicitly_unknown_and_not_replayed():
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+    task = Task("late-task", complete=True)
+
+    def run(circuit, **kwargs):
+        started.set()
+        try:
+            release.wait(1)
+            return task
+        finally:
+            finished.set()
+
+    submit = Mock(side_effect=run)
+    ex, _, cancel = executor([])
+    ex._get_device.return_value.run = submit
+    call = asyncio.create_task(ex.execute(Circuit().x(0)))
+    try:
+        await wait_event(started)
+        call.cancel("submission interrupted")
+        with pytest.raises(asyncio.CancelledError, match="submission interrupted") as caught:
+            await call
+        assert_identity(caught.value, None, status="unknown")
+        assert "do not replay" in " ".join(caught.value.__notes__)
+        submit.assert_called_once()
+        cancel.assert_not_called()
+    finally:
+        release.set()
+        await wait_event(finished)
