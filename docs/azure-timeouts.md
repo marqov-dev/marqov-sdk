@@ -42,8 +42,13 @@ Python interpreter shutdown can still wait for live worker threads, and repeated
 interruptions can accumulate workers until their calls finish. Use finite
 budgets when bounded vendor polling is required.
 
-Counts and bit ordering, raw results, cost/timing extraction and successful
-wall-time reporting are preserved. Neither an interrupted wait nor a cancellation
+Counts and bit ordering, raw results and successful wall-time reporting are
+preserved. On the Qiskit path, after the result arrives the executor refreshes
+the vendor job and reads its `JobDetails`: `cost_estimate` is recorded when
+present, and `quantum_time_ms` is `end_execution_time - begin_execution_time`.
+Missing or inaccessible timing leaves `quantum_time_ms` as `None` (the lookup
+failure is logged at debug level), and `execution_time_ms` then falls back to
+local wall time, as in the Braket executor. Neither an interrupted wait nor a cancellation
 request authorizes releasing financial holds, settling as no contact, or
 resubmitting a job. Platform recovery must confirm provider state separately.
 
@@ -55,5 +60,7 @@ mapping to `TimeoutError`. With no configured timeout,
 Cirq retains `service.run()`'s vendor default polling budget (300 seconds in the
 tested Azure release), rather than the job wrapper's different default.
 Submission ownership after a lost handle still needs separate work. IBM's
-preserve-job-on-timeout policy is unchanged. Tests use real vendor service/job wrappers with injected offline objects; connected cancellation and deployed runtime compatibility remain
+preserve-job-on-timeout policy is unchanged. Tests use real vendor service/job wrappers (`AzureQuantumService` and Cirq `Job`;
+Qiskit `AzureQuantumJob` around an `azure.quantum.job.Job`) with injected
+offline objects and an offline `result()` on the Qiskit job; connected cancellation and deployed runtime compatibility remain
 unqualified.

@@ -13,8 +13,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import Mock
 
 import pytest
+from azure.quantum._client.models import JobDetails
+from azure.quantum.job import Job as AzureJob
+from azure.quantum.qiskit.job import AzureQuantumJob
 from qiskit.result import Result  # type: ignore[import-untyped]
 
 from marqov.circuits import Circuit
@@ -65,23 +69,23 @@ class _FakeCirqService:
         return Job(native, program=program, target=target)
 
 
-class _FakeQiskitJob:
-    """Stand-in for a Qiskit job returned by backend.run()."""
+class _FakeQiskitJob(AzureQuantumJob):
+    """Real Azure Qiskit job around an offline vendor Job; only result() is offline."""
 
     def __init__(self, result: Any) -> None:
         self._result = result
+        workspace = Mock()
+        workspace.cancel_job.side_effect = AssertionError("Successful execution must not cancel")
+        native = AzureJob(workspace, JobDetails(
+            id="fake-job-id", name="fake-job-id", provider_id="ionq", target="ionq.simulator",
+            input_data_format="qir.v1", container_uri="https://offline/job",
+        ))
+        workspace.get_job.return_value = native
+        backend = SimpleNamespace(provider=SimpleNamespace(get_workspace=lambda: workspace))
+        super().__init__(backend, azure_job=native)
 
-    def job_id(self) -> str:
-        return "fake-job-id"
-
-    def result(self, timeout: float | None = None) -> Any:
+    def result(self, timeout: float | None = None, sampler_seed: Any = None) -> Any:
         return self._result
-
-    def cancel(self) -> None:
-        raise AssertionError("Successful execution must not cancel")
-
-    def properties(self) -> Any:
-        return None
 
 
 class _FakeQiskitBackend:

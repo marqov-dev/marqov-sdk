@@ -37,6 +37,7 @@ Example (Cirq):
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import time
 from dataclasses import dataclass
@@ -48,6 +49,8 @@ from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 
 if TYPE_CHECKING:
     from marqov.circuits import Circuit
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -240,7 +243,7 @@ class AzureQuantumExecutor(BaseExecutor):
         start_time = time.perf_counter()
 
         if self.config.framework == "qiskit":
-            result = await self._execute_qiskit(circuit, shots, **kwargs)
+            result = await self._execute_qiskit(circuit, shots, start_time=start_time, **kwargs)
         elif self.config.framework == "cirq":
             result = await self._execute_cirq(circuit, shots, **kwargs)
         else:
@@ -248,8 +251,8 @@ class AzureQuantumExecutor(BaseExecutor):
 
         wall_time = time.perf_counter() - start_time
 
-        # Add wall time to metadata
-        result.metadata["wall_time_ms"] = wall_time * 1000
+        # Add wall time to metadata (the Qiskit path records its own)
+        result.metadata.setdefault("wall_time_ms", wall_time * 1000)
 
         return result
 
@@ -257,6 +260,7 @@ class AzureQuantumExecutor(BaseExecutor):
         self,
         circuit: Circuit,
         shots: int,
+        start_time: float | None = None,
         **kwargs: Any,
     ) -> ExecutionResult:
         """Execute circuit using Qiskit framework.
@@ -264,6 +268,8 @@ class AzureQuantumExecutor(BaseExecutor):
         Args:
             circuit: The circuit to execute.
             shots: Number of shots.
+            start_time: ``time.perf_counter()`` origin for wall time;
+                defaults to the start of result retrieval.
             **kwargs: Additional options.
 
         Returns:
@@ -299,7 +305,7 @@ class AzureQuantumExecutor(BaseExecutor):
                 identity["job_id"] = job.job_id()
                 identity["submission_status"] = "submitted"
                 self._current_job_id = identity["job_id"]  # Tracking only.
-                return await self._qiskit_result(job, calls, shots, timeout, identity)
+                return await self._qiskit_result(job, calls, shots, timeout, identity, start_time)
             except (Exception, asyncio.CancelledError) as error:
                 self._retain_job_identity(error, identity)
                 raise
@@ -324,7 +330,10 @@ class AzureQuantumExecutor(BaseExecutor):
         shots: int,
         timeout: float | None,
         identity: dict[str, Any],
+        start_time: float | None = None,
     ) -> ExecutionResult:
+        if start_time is None:
+            start_time = time.perf_counter()
         result_call = job.result if timeout is None else partial(job.result, timeout=timeout)
         result = await calls.wait(
             result_call, job.cancel, job_id=identity["job_id"], timeout=timeout,
@@ -350,18 +359,24 @@ class AzureQuantumExecutor(BaseExecutor):
 
         metadata = dict(identity)
 
-        # Try to get cost and timing info
+        # Cost and timing live on the vendor job's JobDetails. Unknown
+        # provider timing stays None and execution_time_ms falls back to
+        # local wall time, as in the Braket executor.
+        metadata["quantum_time_ms"] = None
         try:
-            # Azure job metadata may have cost information
-            job_metadata = await calls.call(job.properties)
-            if hasattr(job_metadata, "cost_estimate"):
-                metadata["cost_estimate"] = job_metadata.cost_estimate
-            if hasattr(job_metadata, "execution_time"):
-                metadata["quantum_time_ms"] = job_metadata.execution_time * 1000
+            await calls.call(job.refresh)
+            details = job._azure_job.details
+            if details.cost_estimate is not None:
+                metadata["cost_estimate"] = details.cost_estimate
+            begin, end = details.begin_execution_time, details.end_execution_time
+            if begin is not None and end is not None:
+                metadata["quantum_time_ms"] = (end - begin).total_seconds() * 1000
         except Exception:
-            pass
+            logger.debug("Optional Azure job details lookup failed after result retrieval", exc_info=True)
 
-        execution_time_ms = metadata.get("quantum_time_ms", 0.0)
+        metadata["wall_time_ms"] = (time.perf_counter() - start_time) * 1000
+        quantum_time_ms = metadata["quantum_time_ms"]
+        execution_time_ms = quantum_time_ms if quantum_time_ms is not None else metadata["wall_time_ms"]
 
         return ExecutionResult(
             counts=counts,
