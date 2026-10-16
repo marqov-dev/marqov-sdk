@@ -291,6 +291,7 @@ class Circuit:
 
         Raises:
             ImportError: If PyQuil is not installed.
+            NotImplementedError: If a translated gate has no Quil name.
             ValueError: If a gate parameter is unbound (symbolic) or not a
                 real number.
         """
@@ -311,8 +312,13 @@ class Circuit:
         # which pyQuil rejects, so cast them to floats.
         program = Program()
         for index, op in enumerate(qf.xforest.translate_to_pyquil(self._qf)):
+            quil_name = self._QF_TO_QUIL.get(op.name)
+            if quil_name is None:
+                raise NotImplementedError(
+                    f"{method}: gate {op.name!r} at position {index} has no Quil equivalent."
+                )
             params = [self._bound_angle(param, op.name, index, method) for param in op.params]
-            program.gate(self._QF_TO_QUIL[op.name], params, list(op.qubits))
+            program.gate(quil_name, params, list(op.qubits))
         return program
 
     def to_pytket(self):
@@ -471,8 +477,10 @@ class Circuit:
         Use explicit gates such as ``cnot`` or decompose modified instructions
         before importing; their modifiers would be lost by the converter.
         Terminal measurements (nothing after them touches the measured qubit)
-        are skipped. Result types (e.g. ``probability()``) are not imported:
-        the returned circuit carries gates only.
+        are skipped; as in ``from_qiskit``, a qubit that only a measurement
+        touches is not part of the returned circuit. Result types (e.g.
+        ``probability()``) are not imported: the returned circuit carries
+        gates only.
 
         Args:
             braket_circuit: Braket Circuit to import.

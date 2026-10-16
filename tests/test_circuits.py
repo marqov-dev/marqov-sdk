@@ -204,6 +204,20 @@ class TestFromBraket:
         with pytest.raises(NotImplementedError, match=f"'{name}' at index {index}"):
             Circuit.from_braket(source(bk))
 
+    def test_measured_idle_qubit_is_dropped_like_from_qiskit(self) -> None:
+        """A qubit only a measurement touches is dropped, as from_qiskit does."""
+        from braket.circuits import Circuit as BK
+        from qiskit import QuantumCircuit
+
+        reference = QuantumCircuit(2, 2)
+        reference.h(0)
+        reference.measure([0, 1], [0, 1])
+        expected = Circuit.from_qiskit(reference)
+
+        imported = Circuit.from_braket(BK().h(0).measure([0, 1]))
+        assert list(imported._qf.qubits) == list(expected._qf.qubits) == [0]
+        assert imported.to_dict() == expected.to_dict()
+
     def test_result_types_are_dropped(self) -> None:
         from braket.circuits import Circuit as BK
 
@@ -978,6 +992,15 @@ class TestToPyquil:
         phase = exported[pivot] / expected[pivot]
         assert abs(abs(phase) - 1) < 1e-12
         np.testing.assert_allclose(exported, phase * expected, atol=1e-12, rtol=1e-12)
+
+    def test_gate_without_quil_name_is_refused(self, monkeypatch) -> None:
+        mapping = {k: v for k, v in Circuit._QF_TO_QUIL.items() if k != "H"}
+        monkeypatch.setattr(Circuit, "_QF_TO_QUIL", mapping)
+        with pytest.raises(
+            NotImplementedError,
+            match="Circuit.to_pyquil\\(\\): gate 'H' at position 1 has no Quil equivalent",
+        ):
+            Circuit().x(0).h(0).to_pyquil()
 
     def test_unbound_parameter_is_refused(self) -> None:
         import sympy
