@@ -9,7 +9,10 @@ NotImplementedError or ValueError naming the job ID instead, since re-polling th
 job would return the same result. A timeout does not cancel the provider's running job,
 and the caller is released at the timeout rather than when the job finishes.
 Cancelling the awaiting task re-raises CancelledError with a `remote_job` record
-naming that call's job ID; it does not cancel the provider job either.
+naming that call's job ID and `submission_status` "submitted"; it does not cancel
+the provider job either. A call cancelled during submission, or a submission that
+raises (its exception type unchanged), carries a record with no job ID and
+`submission_status` "unknown": the job may still be accepted, so do not replay it automatically.
 
 Results use the shared canonical count decoder and identify IBM, Qiskit Runtime,
 SamplerV2, local versus direct access, submitted job ID, exact package versions,

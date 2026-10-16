@@ -152,6 +152,7 @@ async def test_cancelled_call_retains_its_own_job_under_concurrency(monkeypatch)
         with pytest.raises(asyncio.CancelledError) as cancelled:
             await call_a
         assert cancelled.value.remote_job["job_id"] == "job-A"
+        assert cancelled.value.remote_job["submission_status"] == "submitted"
         assert any("job-A" in note for note in cancelled.value.__notes__)
         assert not call_b.done()
     finally:
@@ -201,3 +202,54 @@ async def test_undecodable_resolved_result_keeps_type_and_notes_job(monkeypatch)
     with pytest.raises(IndexError) as error:
         await executor.execute(Circuit().h(0), shots=8)
     assert any("resolved-provider-job" in note for note in error.value.__notes__)
+
+
+def test_cancel_during_submission_marks_acceptance_unknown(monkeypatch):
+    started = threading.Event()
+    finished = threading.Event()
+    job = Mock()
+    job.job_id.return_value = "late-provider-job"
+
+    def slow_submit(circuit, backend, shots):
+        started.set()
+        try:
+            time.sleep(1.5)  # stands in for a slow SamplerV2.run round trip
+            return job
+        finally:
+            finished.set()
+
+    executor = _stub_executor(monkeypatch, job)
+    monkeypatch.setattr(executor, "_submit_sampler_sync", slow_submit)
+
+    async def main():
+        call = asyncio.create_task(executor.execute(Circuit().h(0), shots=8))
+        while not started.is_set():
+            await asyncio.sleep(0.005)
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError) as cancelled:
+            await call
+        return cancelled.value, time.perf_counter()
+
+    error, cancelled_at = asyncio.run(main())
+    assert time.perf_counter() - cancelled_at < 0.5
+    assert not finished.is_set()
+    assert error.remote_job["submission_status"] == "unknown"
+    assert error.remote_job["job_id"] is None
+    assert any("acceptance is unknown" in note for note in error.__notes__)
+    finished.wait(5)
+
+
+@pytest.mark.asyncio
+async def test_submission_error_keeps_type_and_marks_acceptance_unknown(monkeypatch):
+    executor = _stub_executor(monkeypatch, Mock())
+
+    def failing_submit(circuit, backend, shots):
+        raise RuntimeError("connection reset after POST")
+
+    monkeypatch.setattr(executor, "_submit_sampler_sync", failing_submit)
+    with pytest.raises(RuntimeError) as error:
+        await executor.execute(Circuit().h(0), shots=8)
+    assert not isinstance(error.value, IBMExecutionError)
+    assert error.value.remote_job["submission_status"] == "unknown"
+    assert error.value.remote_job["job_id"] is None
+    assert any("acceptance is unknown" in note for note in error.value.__notes__)
