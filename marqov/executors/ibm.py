@@ -302,10 +302,15 @@ class IBMExecutor(BaseExecutor):
                 registers; the message names the job ID.
             ValueError: The resolved result carries no measurement data, or its
                 shot total differs from ``shots``; the message names the job ID.
-            asyncio.CancelledError: Re-raised when the caller cancels the wait,
-                with ``remote_job`` naming this call's job ID; the provider
-                job is not cancelled.
+            asyncio.CancelledError: Re-raised when the caller cancels, with
+                ``remote_job`` attached. Cancelled while waiting, it names this
+                call's job ID (``submission_status`` "submitted") and the
+                provider job is not cancelled. Cancelled during submission,
+                ``job_id`` is None and ``submission_status`` is "unknown".
             Exception: Pre-submission provider/availability failures propagate.
+                A failure raised by the submission itself keeps its type and
+                carries ``remote_job`` (``job_id`` None, ``submission_status``
+                "unknown") with a do-not-replay note.
         """
         if kwargs:
             raise TypeError("Unsupported IBM execution options")
@@ -333,15 +338,29 @@ class IBMExecutor(BaseExecutor):
 
         # Capture this invocation's submitted job before waiting. A timeout does
         # not imply cancellation, and concurrent calls cannot overwrite its ID.
-        job = await loop.run_in_executor(
-            None,
-            partial(self._submit_sampler_sync, transpiled, backend, shots),
-        )
-        job_id = job.job_id()
+        identity: dict[str, Any] = {
+            "provider": "IBM Quantum",
+            "backend_name": self.config.backend_name,
+            "job_id": None,
+            "submission_status": "unknown",
+        }
         # A per-execution pool, not the default executor: asyncio.run() joins
         # the default executor on exit, which would hold the caller until the
-        # job finishes. No cancel callable: a timeout never cancels the job.
+        # submission or job finishes. No cancel callable: a timeout never
+        # cancels the job.
         with BlockingCalls() as calls:
+            try:
+                job = await calls.call(self._submit_sampler_sync, transpiled, backend, shots)
+            except (Exception, asyncio.CancelledError) as exc:
+                exc.remote_job = dict(identity)  # type: ignore[attr-defined]
+                exc.add_note(
+                    "IBM submission acceptance is unknown; the job may still be "
+                    "submitted. Do not replay automatically."
+                )
+                raise
+            job_id = job.job_id()
+            identity["job_id"] = job_id
+            identity["submission_status"] = "submitted"
             try:
                 result_call = calls.call(job.result)
                 result = (
@@ -350,11 +369,7 @@ class IBMExecutor(BaseExecutor):
                     else await result_call
                 )
             except asyncio.CancelledError as exc:
-                exc.remote_job = {  # type: ignore[attr-defined]
-                    "provider": "IBM Quantum",
-                    "backend_name": self.config.backend_name,
-                    "job_id": job_id,
-                }
+                exc.remote_job = dict(identity)  # type: ignore[attr-defined]
                 exc.add_note(
                     f"IBM job {job_id!r} was submitted; cancelling the wait does not "
                     "cancel the provider job, which may still be running."
