@@ -2,7 +2,7 @@
 
 This module provides a factory pattern for creating executors based on provider.
 Supports AWS Braket, Quantinuum, IBM Quantum, Azure Quantum, IonQ Direct API,
-Rigetti QCS, CUDA-Q, Quantum Brilliance, and the Local simulator.
+Rigetti QCS, CUDA-Q, Quantum Brilliance, Alice & Bob, and the Local simulator.
 
 Example:
     >>> backend_config = {
@@ -56,6 +56,9 @@ class ExecutorFactory:
           PyPI and has no ``marqov[...]`` extra. Build it from source or use
           the official Docker image; see https://qristal.readthedocs.io/.
         - Local: QuantumFlow simulator (no cloud required)
+        - Alice & Bob: local logical-qubit emulator (see docs/alice-bob.md).
+          Requires ``qiskit-alice-bob-provider`` installed in an isolated
+          environment.
         - IonQ Direct: Native IonQ REST API (no AWS/Braket intermediary)
         - Qilimanjaro: qilisdk local simulators (QiliSim or QutipBackend).
           Install qualified ``qilisdk==0.3.0`` separately; older 0.1.8–0.2.x
@@ -559,7 +562,7 @@ class ExecutorFactory:
 
         Example:
             >>> ExecutorFactory.get_supported_providers()
-            ['AWS Braket', 'IBM Quantum', 'Azure Quantum', 'IonQ Direct', 'Rigetti QCS', 'Quantum Brilliance', 'CUDA-Q', 'Local', 'Quantinuum']
+            ['AWS Braket', 'IBM Quantum', 'Azure Quantum', 'IonQ Direct', 'Rigetti QCS', 'Quantum Brilliance', 'CUDA-Q', 'Local', 'Quantinuum', 'Qilimanjaro', 'PennyLane Lightning', 'Alice & Bob']
         """
         return [
             "AWS Braket",
@@ -573,6 +576,7 @@ class ExecutorFactory:
             "Quantinuum",
             "Qilimanjaro",
             "PennyLane Lightning",
+            "Alice & Bob",
         ]
 
     @classmethod

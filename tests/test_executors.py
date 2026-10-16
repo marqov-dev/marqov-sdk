@@ -995,13 +995,21 @@ class TestExecutorFactory:
             f"duplicate provider(s) in get_supported_providers(): {providers}")
 
     def test_supported_providers_matches_the_registered_executors(self) -> None:
-        """The list must be exactly the providers create_executor() dispatches to — so a new
-        executor added without updating the list (or vice versa) trips this."""
-        assert set(ExecutorFactory.get_supported_providers()) == {
-            "Local", "AWS Braket", "IBM Quantum", "Quantinuum",
-            "Azure Quantum", "IonQ Direct", "Rigetti QCS", "Quantum Brilliance",
-            "CUDA-Q", "Qilimanjaro", "PennyLane Lightning",
-        }
+        """The list must be exactly the providers create_executor() dispatches to, so a new
+        executor added without updating the list (or vice versa) trips this. The expected
+        set is read from the factory's own ``provider == "<name>"`` branches."""
+        import inspect
+        import re
+
+        from marqov.executors import factory
+
+        dispatched = set(re.findall(r'provider == "([^"]+)"', inspect.getsource(factory)))
+        assert dispatched, "no provider dispatch branches found; update this test's pattern"
+        assert set(ExecutorFactory.get_supported_providers()) == dispatched
+
+    def test_alice_bob_is_a_supported_provider(self) -> None:
+        """Alice & Bob is dispatched by the factory, so the pre-check must accept it."""
+        assert ExecutorFactory.is_provider_supported("Alice & Bob")
 
     def test_unsupported_provider_error_lists_all_supported_providers(self) -> None:
         """Regression (#85): the error message is built from get_supported_providers() at

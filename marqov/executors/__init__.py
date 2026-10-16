@@ -14,6 +14,7 @@ Available executors:
 - RigettiExecutor: Rigetti QCS QPUs and the local QVM (via pyquil)
 - QiliSDKExecutor: Qilimanjaro qilisdk local simulators (QiliSim/QutipBackend)
 - LightningExecutor: Xanadu PennyLane Lightning CPU simulators (lightning.qubit/kokkos)
+- AliceBobExecutor: Alice & Bob local logical-qubit emulator (isolated install)
 
 Example:
     >>> from marqov.executors import LocalExecutor

@@ -7,7 +7,7 @@ Marqov provides:
 - Temporal-backed workflow durability and scheduling
 - Multi-vendor execution (AWS Braket, IBM Quantum, Azure Quantum, IonQ Direct,
   Rigetti QCS, Quantinuum, CUDA-Q, Quantum Brilliance, Qilimanjaro,
-  PennyLane Lightning, Local)
+  PennyLane Lightning, Alice & Bob, Local)
 
 Quick Start with @task/@workflow:
     >>> from marqov import task, workflow, Circuit
