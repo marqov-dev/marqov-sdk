@@ -205,6 +205,16 @@ def _run_simulation(
            or type(count) is not int or count < 0 for bits, count in counts.items()) or sum(counts.values()) != shots:
         raise RuntimeError("Qristal returned invalid counts or shot accounting")
 
+    noise_record = (
+        None if config.noise_model is None else [
+            {"channel": type(channel).__name__, **dataclasses.asdict(channel), "qubits": list(qubits)}
+            for channel, qubits in config.noise_model.entries()
+        ]
+    )
+    inputs_sha256 = hashlib.sha256(json.dumps(
+        {"program": qasm_str, "noise_model": noise_record}, sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+
     metadata = {
         "vendor": "Quantum Brilliance",
         "framework": "Qristal",
@@ -219,6 +229,8 @@ def _run_simulation(
             "seed": config.seed,
             "shots": shots,
             "program_sha256": hashlib.sha256(qasm_str.encode()).hexdigest(),
+            "noise_model": noise_record,
+            "inputs_sha256": inputs_sha256,
             "counts_sha256": hashlib.sha256(json.dumps(counts, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
             "bit_order": "qubit_0_first",
         },
