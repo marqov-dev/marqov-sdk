@@ -226,6 +226,22 @@ class TestFromQiskit:
         imported_amps = imported.simulate().tensor.flatten()
         assert np.allclose(np.abs(orig_amps), np.abs(imported_amps))
 
+    def test_to_qiskit_register_is_named_q(self) -> None:
+        """The exported register name does not depend on earlier exports."""
+        import numpy as np
+        from qiskit.quantum_info import Operator
+
+        circuit = Circuit().h(0).cnot(0, 2).rz(0.37, 1)
+        circuit.to_qiskit()
+        exported = circuit.to_qiskit()
+        assert [(reg.name, reg.size) for reg in exported.qregs] == [("q", 3)]
+        reference = circuit._qf.asgate().asoperator()
+        # Qiskit orders qubit 0 least significant; QuantumFlow most.
+        perm = [int(format(i, "03b")[::-1], 2) for i in range(8)]
+        np.testing.assert_allclose(
+            Operator(exported).data[np.ix_(perm, perm)], reference, atol=1e-12,
+        )
+
     def test_single_qubit_gates(self) -> None:
         """All single-qubit gates convert correctly."""
         original = Circuit().h(0).x(1).y(2).z(3).s(4).t(5)
@@ -1033,6 +1049,14 @@ class TestOpenQASM:
 
     def test_canonical_gate_set_has_twelve_gates(self) -> None:
         assert len(set(Circuit._QISKIT_GATE_MAP.values())) == 12
+
+    @pytest.mark.parametrize("version", [2, 3])
+    def test_export_is_deterministic(self, version) -> None:
+        """Repeated and equal-circuit exports are byte-identical."""
+        circuit = Circuit().h(0).cnot(0, 1).rx(0.37, 1)
+        first = circuit.to_openqasm(version=version)
+        assert circuit.to_openqasm(version=version) == first
+        assert Circuit().h(0).cnot(0, 1).rx(0.37, 1).to_openqasm(version=version) == first
 
     def test_roundtrip_bell_state(self) -> None:
         """Bell state survives QASM roundtrip."""

@@ -247,10 +247,20 @@ class Circuit:
     def to_qiskit(self):
         """Convert to IBM Qiskit circuit.
 
+        The circuit is built on one register named ``q``, as
+        ``qiskit.QuantumCircuit(n)`` would, so repeated exports are identical.
+
         Returns:
             Qiskit QuantumCircuit object.
         """
-        return qf.transpile(self._qf, output_format="qiskit")
+        from qiskit import QuantumCircuit, QuantumRegister
+
+        # The converter leaves the register unnamed, so Qiskit names it from a
+        # process-global counter (q0, q1, ...); move the gates onto "q".
+        exported = qf.transpile(self._qf, output_format="qiskit")
+        circuit = QuantumCircuit(QuantumRegister(exported.num_qubits, "q"))
+        circuit.compose(exported, qubits=range(exported.num_qubits), inplace=True)
+        return circuit
 
     def to_cirq(self):
         """Convert to Google Cirq circuit.
