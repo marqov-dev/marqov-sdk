@@ -79,9 +79,10 @@ responses. Minimal injected legacy transports without `content` retain the
 payload but explicitly report unavailable bytes/hash as `None`; the v0.4 route
 requires original bytes. Legacy counts and the probabilities property are unchanged.
 
-Known-ID v0.4 interruptions carry `remote_job` context. Validation/readback
-errors also retain `result_artifact`, including malformed JSON bytes when
-available. Submission keeps the existing per-call late-ID cancellation behavior,
-without replay. Cancellation remains best effort and does not establish terminal
+Known-ID interruptions and errors on both routes carry `remote_job` context
+(`provider`, `api_version`, `job_id`, `target`, `base_url`). On the v0.4
+route, validation/readback errors also retain `result_artifact`, including
+malformed JSON bytes when available. Submission keeps the existing per-call
+late-ID cancellation behavior, without replay. Cancellation remains best effort and does not establish terminal
 provider state, recovery authorization or settlement. This route is an offline-
 verified protocol candidate, not permission to submit a provider job.

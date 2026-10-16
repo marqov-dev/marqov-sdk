@@ -23,6 +23,8 @@ class Transport:
         self.response = {"id": "job-interrupted"}
         self.post_error = None
         self.put_error = None
+        self.job = {"status": "completed", "data": {"histogram": {"0": 1.0}}}
+        self.results_error = None
 
     def request(self, method, url, **kwargs):
         self.requests.append((method, url, kwargs))
@@ -45,8 +47,12 @@ class Transport:
             if self.put_error:
                 raise self.put_error
             data = {}
+        elif url.endswith("/results"):
+            if self.results_error:
+                raise self.results_error
+            data = {"0": 1.0}
         else:
-            data = {"status": "completed", "data": {"histogram": {"0": 1.0}}}
+            data = self.job
         response = Mock()
         response.raise_for_status.return_value = None
         response.json.return_value = data
@@ -297,3 +303,92 @@ async def test_cancellation_before_submission_worker_starts_never_posts(transpor
         with pytest.raises(asyncio.CancelledError):
             await task
     assert transport.requests == []
+
+
+LEGACY_IDENTITY = {
+    "provider": "ionq",
+    "api_version": "0.3",
+    "job_id": "job-interrupted",
+    "target": "simulator",
+    "base_url": "https://api.ionq.co/v0.3",
+}
+
+
+def legacy_executor(transport, **config):
+    transport.release_post.set()
+    return IonQExecutor(
+        IonQExecutorConfig(api_key="offline", poll_interval_seconds=0.001, **config),
+        session=transport,
+    )
+
+
+def cancel_puts(transport):
+    return [
+        url for url in transport.cancelled if url.endswith("/jobs/job-interrupted/status/cancel")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_legacy_poll_timeout_cancels_and_carries_job_identity(transport, caplog):
+    transport.job = {"status": "running"}
+    executor = legacy_executor(transport, timeout_seconds=0.05)
+    with patch.object(executor, "_circuit_to_qasm", return_value=("OPENQASM 2.0;", 1)):
+        with pytest.raises(TimeoutError) as error:
+            await execute(executor)
+    assert error.value.remote_job == LEGACY_IDENTITY
+    assert cancel_puts(transport)
+    assert "job-interrupted" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_legacy_poll_cancellation_cancels_and_carries_job_identity(transport, caplog):
+    transport.job = {"status": "running"}
+    executor = legacy_executor(transport)
+    with patch.object(executor, "_circuit_to_qasm", return_value=("OPENQASM 2.0;", 1)):
+        task = execute(executor)
+        async with asyncio.timeout(2):
+            while not any(m == "GET" for m, _, _ in transport.requests):
+                await asyncio.sleep(0.001)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError) as error:
+            await task
+    assert error.value.remote_job == LEGACY_IDENTITY
+    assert cancel_puts(transport)
+    assert "job-interrupted" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_legacy_results_fetch_error_carries_job_identity(transport):
+    transport.job = {"status": "completed"}
+    failure = RuntimeError("502 Bad Gateway")
+    transport.results_error = failure
+    executor = legacy_executor(transport)
+    with patch.object(executor, "_circuit_to_qasm", return_value=("OPENQASM 2.0;", 1)):
+        with pytest.raises(RuntimeError) as error:
+            await execute(executor)
+    assert error.value is failure
+    assert error.value.remote_job == LEGACY_IDENTITY
+    assert transport.cancelled == []
+
+
+@pytest.mark.asyncio
+async def test_legacy_null_failure_reports_status_and_identity(transport):
+    transport.job = {"status": "failed", "failure": None}
+    executor = legacy_executor(transport)
+    with patch.object(executor, "_circuit_to_qasm", return_value=("OPENQASM 2.0;", 1)):
+        with pytest.raises(
+            RuntimeError, match="IonQ job job-interrupted failed: job failed"
+        ) as error:
+            await execute(executor)
+    assert error.value.remote_job == LEGACY_IDENTITY
+
+
+@pytest.mark.asyncio
+async def test_legacy_unknown_status_attempts_cancel_and_carries_identity(transport):
+    transport.job = {"status": "deleted"}
+    executor = legacy_executor(transport)
+    with patch.object(executor, "_circuit_to_qasm", return_value=("OPENQASM 2.0;", 1)):
+        with pytest.raises(RuntimeError, match="unknown status 'deleted'") as error:
+            await execute(executor)
+    assert error.value.remote_job == LEGACY_IDENTITY
+    assert cancel_puts(transport)
