@@ -3,7 +3,10 @@
 Marqov reuses its IBMExecutor and the vendor's SamplerV2 execution path. A job ID
 is captured for each submission before waiting for results. Result retrieval
 errors and timeouts raise IBMExecutionError with that ID; they never trigger an
-automatic resubmission. A timeout does not cancel the provider's running job,
+automatic resubmission. A result that resolved but that the SDK refuses (multiple
+classical registers, or a shot total that differs from the request) raises
+NotImplementedError or ValueError naming the job ID instead, since re-polling the
+job would return the same result. A timeout does not cancel the provider's running job,
 and the caller is released at the timeout rather than when the job finishes.
 Cancelling the awaiting task re-raises CancelledError with a `remote_job` record
 naming that call's job ID; it does not cancel the provider job either.

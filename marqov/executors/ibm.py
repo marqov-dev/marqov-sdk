@@ -146,7 +146,14 @@ class IBMExecutorConfig:
 
 
 class IBMExecutionError(RuntimeError):
-    """Submitted job identity is retained; result failure never triggers resubmission."""
+    """Result retrieval failed or timed out for a submitted job; its ID is retained.
+
+    Never triggers resubmission. Refusals the SDK makes on a result that did
+    resolve (multiple classical registers, shot accounting) are not wrapped:
+    they raise ``NotImplementedError`` or ``ValueError`` naming the job ID.
+    Any other failure to decode a resolved result keeps its own type and gains
+    a note naming the job ID.
+    """
 
     def __init__(self, job_id: str) -> None:
         self.job_id = job_id
@@ -288,8 +295,13 @@ class IBMExecutor(BaseExecutor):
             ExecutionResult with measurement counts and metadata.
 
         Raises:
-            IBMExecutionError: Result retrieval failed after submission; includes
-                the job ID. A timeout does not cancel the provider job.
+            IBMExecutionError: Result retrieval failed or timed out after
+                submission; includes the job ID. A timeout does not cancel the
+                provider job.
+            NotImplementedError: The resolved result has multiple classical
+                registers; the message names the job ID.
+            ValueError: The resolved result carries no measurement data, or its
+                shot total differs from ``shots``; the message names the job ID.
             asyncio.CancelledError: Re-raised when the caller cancels the wait,
                 with ``remote_job`` naming this call's job ID; the provider
                 job is not cancelled.
@@ -337,9 +349,6 @@ class IBMExecutor(BaseExecutor):
                     if self.config.timeout_seconds is not None
                     else await result_call
                 )
-                counts = self._extract_counts(result)
-                if sum(counts.values()) != shots:
-                    raise ValueError("IBM result shot accounting differs from the submission")
             except asyncio.CancelledError as exc:
                 exc.remote_job = {  # type: ignore[attr-defined]
                     "provider": "IBM Quantum",
@@ -353,6 +362,23 @@ class IBMExecutor(BaseExecutor):
                 raise
             except Exception as exc:
                 raise IBMExecutionError(job_id) from exc
+
+        # The result resolved; a refusal here is the SDK's, not a retrieval
+        # failure, so it keeps its own type rather than IBMExecutionError.
+        try:
+            counts = self._extract_counts(result)
+        except (ValueError, NotImplementedError) as exc:
+            raise type(exc)(f"IBM job {job_id}: {exc}") from exc
+        except Exception as exc:
+            exc.add_note(
+                f"IBM job {job_id!r}: the resolved result could not be decoded; "
+                "the job is retained"
+            )
+            raise
+        if sum(counts.values()) != shots:
+            raise ValueError(
+                f"IBM job {job_id}: result shot accounting differs from the submission"
+            )
 
         wall_time = time.perf_counter() - start_time
 
