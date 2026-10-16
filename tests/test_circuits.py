@@ -159,6 +159,58 @@ class TestBackendConversion:
         assert imported.num_qubits == original.num_qubits
 
 
+class TestFromBraket:
+    """Tests for Circuit.from_braket() measurement and non-gate handling."""
+
+    @staticmethod
+    def _unitary(circuit: Circuit):
+        return circuit._qf.asgate().asoperator()
+
+    def test_terminal_measurement_skipped(self) -> None:
+        import numpy as np
+        from braket.circuits import Circuit as BK
+
+        source = BK().h(0).cnot(0, 1).rx(1, 0.37).measure(0).x(1).measure(1)
+        imported = Circuit.from_braket(source)
+        expected = Circuit().h(0).cnot(0, 1).rx(0.37, 1).x(1)
+        np.testing.assert_allclose(
+            self._unitary(imported), self._unitary(expected), atol=1e-12, rtol=1e-12,
+        )
+
+    def test_mid_circuit_measurement_raises(self) -> None:
+        # Braket's builder refuses a gate after a measure, but an instruction
+        # list built elsewhere can still carry one; from_braket reads only
+        # `.instructions`.
+        from types import SimpleNamespace
+
+        from braket.circuits import Gate, Instruction
+        from braket.circuits.measure import Measure
+
+        source = SimpleNamespace(instructions=[
+            Instruction(Gate.H(), 0),
+            Instruction(Measure(), 0),
+            Instruction(Gate.X(), 0),
+        ])
+        with pytest.raises(NotImplementedError, match=r"mid-circuit measurement \(qubits \[0\]\)"):
+            Circuit.from_braket(source)
+
+    @pytest.mark.parametrize("source, name, index", [
+        (lambda bk: bk.Circuit().h(0).depolarizing(0, 0.1), "Depolarizing", 1),
+        (lambda bk: bk.Circuit().h(0).add_verbatim_box(bk.Circuit().rx(0, 0.3)), "StartVerbatimBox", 1),
+    ])
+    def test_non_gate_operator_names_operator_and_index(self, source, name, index) -> None:
+        import braket.circuits as bk
+
+        with pytest.raises(NotImplementedError, match=f"'{name}' at index {index}"):
+            Circuit.from_braket(source(bk))
+
+    def test_result_types_are_dropped(self) -> None:
+        from braket.circuits import Circuit as BK
+
+        imported = Circuit.from_braket(BK().h(0).probability())
+        assert [gate["gate"] for gate in imported.to_dict()["gates"]] == ["H"]
+
+
 class TestFromQiskit:
     """Tests for Circuit.from_qiskit()."""
 

@@ -421,6 +421,9 @@ class Circuit:
         Instruction-level controls and non-default powers are unsupported.
         Use explicit gates such as ``cnot`` or decompose modified instructions
         before importing; their modifiers would be lost by the converter.
+        Terminal measurements (nothing after them touches the measured qubit)
+        are skipped. Result types (e.g. ``probability()``) are not imported:
+        the returned circuit carries gates only.
 
         Args:
             braket_circuit: Braket Circuit to import.
@@ -430,12 +433,40 @@ class Circuit:
 
         Raises:
             NotImplementedError: If an instruction has controls or a power
-                other than one. The message identifies its gate and index.
+                other than one, or is a non-gate operator other than a
+                terminal measurement (noise, compiler directives such as
+                verbatim boxes). The message identifies its operator and
+                index. A mid-circuit measurement raises with its qubits.
         """
         circuit = cls()
         require_braket()
+        from braket import circuits as braket_circuits
+        from braket.circuits.measure import Measure
+
+        instructions = list(braket_circuit.instructions)
+        gate_instructions = []
         # Validate the entire input before the converter can strip modifiers.
-        for index, instruction in enumerate(braket_circuit.instructions):
+        for index, instruction in enumerate(instructions):
+            if isinstance(instruction.operator, Measure):
+                measured_qubits = {int(q) for q in instruction.target}
+                if any(
+                    measured_qubits & {int(q) for q in later.target}
+                    for later in instructions[index + 1 :]
+                ):
+                    raise NotImplementedError(
+                        f"Circuit.from_braket() does not support mid-circuit measurement "
+                        f"(qubits {sorted(measured_qubits)}): a later instruction touches "
+                        "these qubits, so dropping the measurement would silently change "
+                        "what the circuit computes."
+                    )
+                continue
+            if not isinstance(instruction.operator, braket_circuits.Gate):
+                raise NotImplementedError(
+                    f"Circuit.from_braket(): unsupported operator "
+                    f"'{instruction.operator.name}' at index {index}. Only gates "
+                    "and terminal measurements are supported."
+                )
+            gate_instructions.append(instruction)
             if instruction.control or instruction.power != 1:
                 raise NotImplementedError(
                     f"Circuit.from_braket(): unsupported modifiers for gate "
@@ -445,7 +476,7 @@ class Circuit:
                     f"power={instruction.power}. Use explicit supported gates "
                     "or decompose modified instructions before importing."
                 )
-        circuit._qf = qf.braket_to_circuit(braket_circuit)
+        circuit._qf = qf.braket_to_circuit(braket_circuits.Circuit(gate_instructions))
         return circuit
 
     # Qiskit gate name -> Circuit fluent method mapping.
