@@ -2,6 +2,7 @@
 
 from unittest.mock import Mock
 
+import numpy as np
 import pytest
 
 pytest.importorskip("qiskit_ibm_runtime")
@@ -44,3 +45,20 @@ async def test_unresolved_result_retains_submitted_job(monkeypatch):
 
 def test_token_not_in_config_repr():
     assert "private-test" not in repr(IBMExecutorConfig(backend_name="test", token="private-test"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "shots,accepted",
+    [(np.int64(16), True), (np.uint8(16), True), (True, False), (3.0, False), (0, False)],
+)
+async def test_shots_accept_numpy_integers_only(shots, accepted):
+    executor = IBMExecutor(IBMExecutorConfig(backend_name="aer_simulator"))
+    executor._backend = AerSimulator(seed_simulator=7)
+    if not accepted:
+        with pytest.raises(ValueError, match="positive integer"):
+            await executor.execute(Circuit().x(0), shots=shots)
+        return
+    result = await executor.execute(Circuit().x(0), shots=shots)
+    assert result.counts == {"1": 16}
+    assert type(result.shots) is int

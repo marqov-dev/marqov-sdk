@@ -24,6 +24,7 @@ from importlib.metadata import version
 import io
 import json
 import math
+import numbers
 import re
 import time
 import warnings
@@ -287,8 +288,9 @@ class IBMExecutor(BaseExecutor):
         """
         if kwargs:
             raise TypeError("Unsupported IBM execution options")
-        if type(shots) is not int or shots <= 0:
+        if isinstance(shots, bool) or not isinstance(shots, numbers.Integral) or shots <= 0:
             raise ValueError("shots must be a positive integer")
+        shots = int(shots)
         circuit = self._validate_circuit(circuit)
 
         loop = asyncio.get_running_loop()

@@ -38,6 +38,7 @@ Observable API contract notes:
 from __future__ import annotations
 
 import hashlib
+import numbers
 import uuid
 from typing import Any, Mapping, Sequence
 from uuid import UUID
@@ -430,7 +431,7 @@ class MarqovClient:
         admission at submission. No script or job is created by this method.
         """
         identifier = _script_uuid(script_id, "script_id")
-        _positive_integer(shots, "shots")
+        shots = _positive_integer(shots, "shots")
         return self._transport.request(
             "GET",
             f"/api/scripts/{identifier}/execution-options",
@@ -457,7 +458,7 @@ class MarqovClient:
         identifier = _script_uuid(script_id, "script_id")
         _nonempty(content, "content")
         _nonempty(backend, "backend")
-        _positive_integer(shots, "shots")
+        shots = _positive_integer(shots, "shots")
         _operation_key(idempotency_key)
         body = {
             "backend": backend,
@@ -466,7 +467,7 @@ class MarqovClient:
             "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
         }
         if circuit_count is not None:
-            _positive_integer(circuit_count, "circuit_count")
+            circuit_count = _positive_integer(circuit_count, "circuit_count")
             body["circuit_count"] = circuit_count
         return self._transport.request(
             "POST",
@@ -497,11 +498,11 @@ class MarqovClient:
         identifier = _script_uuid(script_id, "script_id")
         analysis = _script_uuid(analysis_id, "analysis_id")
         _nonempty(backend, "backend")
-        _positive_integer(shots, "shots")
+        shots = _positive_integer(shots, "shots")
         _operation_key(idempotency_key)
         params = {"shots": shots}
         if circuit_count is not None:
-            _positive_integer(circuit_count, "circuit_count")
+            circuit_count = _positive_integer(circuit_count, "circuit_count")
             params["circuit_count"] = circuit_count
         if warn_check_ids is not None and not isinstance(warn_check_ids, list):
             raise ValueError("warn_check_ids must be a list of strings")
@@ -645,9 +646,10 @@ def _nonempty(value: str, name: str) -> None:
         raise ValueError(f"{name} must be a nonempty string")
 
 
-def _positive_integer(value: int, name: str) -> None:
-    if type(value) is not int or value < 1:
+def _positive_integer(value: int, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral) or value < 1:
         raise ValueError(f"{name} must be a positive integer")
+    return int(value)
 
 
 def _script_uuid(value: str, name: str) -> str:

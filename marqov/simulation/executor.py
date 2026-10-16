@@ -6,6 +6,7 @@ import asyncio
 import dataclasses
 import hashlib
 import json
+import numbers
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -52,8 +53,9 @@ class SimulationExecutor(BaseExecutor):
     ) -> ExecutionResult:
         if kwargs:
             raise TypeError("Simulation execution options belong in SimulationConfig")
-        if type(shots) is not int or shots <= 0:
+        if isinstance(shots, bool) or not isinstance(shots, numbers.Integral) or shots <= 0:
             raise ValueError("shots must be a positive integer")
+        shots = int(shots)
         circuit = self._validate_circuit(circuit)
         qasm_str = circuit.to_openqasm()
         qasm_str = ensure_measurements(qasm_str)

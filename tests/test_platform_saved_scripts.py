@@ -4,6 +4,7 @@ import hashlib
 from unittest.mock import MagicMock
 from uuid import UUID
 
+import numpy as np
 import pytest
 import requests
 
@@ -148,3 +149,19 @@ def test_unreadable_submit_receipt_holds_with_effective_operation_key(response):
     assert failure.value.code == "submission_outcome_unknown"
     assert failure.value.idempotency_key == calls[0][2]["headers"]["Idempotency-Key"]
     UUID(failure.value.idempotency_key)
+
+
+@pytest.mark.parametrize(
+    "shots,accepted",
+    [(np.int64(16), True), (np.uint8(16), True), (True, False), (3.0, False), (0, False)],
+)
+def test_platform_shots_accept_numpy_integers_only(shots, accepted):
+    client, calls = client_with_responses({"destinations": []})
+    if not accepted:
+        with pytest.raises(ValueError, match="positive integer"):
+            client.script_execution_options(SCRIPT, shots=shots)
+        assert not calls
+        return
+    client.script_execution_options(SCRIPT, shots=shots)
+    sent = calls[0][2]["params"]["shots"]
+    assert sent == 16 and type(sent) is int

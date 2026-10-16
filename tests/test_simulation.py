@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
 from marqov.circuits import Circuit, bell_state
@@ -646,3 +647,27 @@ class TestQBRemote:
     def test_local_hardware_catalogue_path_cannot_bypass_remote(self):
         with pytest.raises(ValueError, match="remote"):
             SimulationExecutor(SimulationConfig(backend_id="example_hardware_device", backend_type="statevector", remote_backend_database_path="fixture.yaml"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "shots,accepted",
+    [(np.int64(16), True), (np.uint8(16), True), (True, False), (3.0, False), (0, False)],
+)
+async def test_qristal_shots_accept_numpy_integers_only(shots, accepted):
+    config = SimulationConfig(
+        backend_id="cudaq:custatevec_fp32", backend_type="gpu-statevector"
+    )
+    executor = SimulationExecutor(config)
+    if not accepted:
+        with pytest.raises(ValueError, match="positive integer"):
+            await executor.execute(Circuit().x(0), shots=shots)
+        return
+    session = MagicMock()
+    session.results = [[{(False,): 16}]]
+    qristal = MagicMock()
+    qristal.session.return_value = session
+    with patch("marqov.simulation.executor._import_qristal_core", return_value=qristal):
+        result = await executor.execute(Circuit().x(0), shots=shots)
+    assert result.counts == {"0": 16}
+    assert type(session.sn) is int
