@@ -69,6 +69,9 @@ The separate `SpeQtrumExecutor` requires pinned `qilisdk==0.3.0`, an explicit
 `device_code`, `username`, and API key. Factory configuration uses
 `provider="Qilimanjaro", access_path="speqtrum"`; omitting `access_path` retains
 local simulator routing. Unknown paths and incomplete remote configuration fail.
+Construction raises `ImportError` with the `pip install qilisdk==0.3.0` line when
+that version is not installed. `get_status()` reports `maintenance` with no queue
+data when the API is unreachable or returns an unrecognised device status.
 No credentials are read from the environment or shared keyring.
 
 The client authenticates before sending, disables redirects/retries, and never

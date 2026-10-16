@@ -393,3 +393,35 @@ class TestSpeQtrumDirect:
             await task
         await asyncio.sleep(0.3)
         assert '/execute' not in calls and executor.last_job is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('failure', ['login', 'devices', 'status'])
+    async def test_get_status_failure_returns_maintenance(self, failure):
+        from marqov.executors.base import DeviceStatus
+        from marqov.executors.speqtrum import SpeQtrumExecutor
+
+        class Client:
+            def login(self, deadline):
+                if failure == 'login':
+                    raise RuntimeError('SpeQtrum HTTP request unsuccessful or unresolved')
+                return 'fixture-token'
+
+            def request(self, method, path, deadline, **kwargs):
+                if failure == 'devices':
+                    raise RuntimeError('SpeQtrum HTTP request unsuccessful or unresolved')
+                return {'items': [{'code': 'fixture-device', 'status': 'unknown'}]}
+
+        executor = SpeQtrumExecutor(self.config())
+        executor._client = Client()
+        assert await executor.get_status() == DeviceStatus('maintenance', None, None)
+
+    def test_missing_qilisdk_fails_at_factory_construction_with_install_line(self, monkeypatch):
+        from importlib.metadata import PackageNotFoundError
+
+        def missing(name):
+            raise PackageNotFoundError(name)
+        monkeypatch.setattr('marqov.executors.speqtrum.version', missing)
+        config = {'provider': 'Qilimanjaro', 'access_path': 'speqtrum', 'device_code': 'fixture-device',
+                  'username': 'fixture-account', 'api_key': 'fixture-secret'}
+        with pytest.raises(ImportError, match=r'pip install qilisdk==0\.3\.0'):
+            ExecutorFactory.create_executor('explicit-speqtrum', config)

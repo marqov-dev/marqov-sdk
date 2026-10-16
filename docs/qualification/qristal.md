@@ -117,7 +117,7 @@ Known IDs remain in immutable `last_job` for GET-only `readback(job)` across
 restarts. Null data/HTTP 425 means pending; exact binary per-shot rows are required
 for success. Errors/timeouts retain the known ID. No cancellation/status endpoint
 or provider idempotency guarantee is claimed: cancel returns False and device
-status raises NotImplementedError. Poll/request/byte limits are finite; DNS and
+status reports `maintenance` with no queue data. Poll/request/byte limits are finite; DNS and
 OS blocking may leave a daemon one-send request in flight after the caller
 deadline; the watchdog bounds caller wait without claiming request cancellation.
 An uncertain write must still be reconciled and never replayed. Local simulation

@@ -23,7 +23,7 @@ import requests
 from requests.adapters import HTTPAdapter
 
 from marqov.executors._blocking import _CANCEL_WAIT_SECONDS, BlockingCalls
-from marqov.executors.base import BaseExecutor, ExecutionResult
+from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 
 
 @dataclass(frozen=True)
@@ -413,8 +413,9 @@ class QBRemoteExecutor(BaseExecutor):
         except Exception:  # noqa: BLE001 — retain known identity without replay
             raise QBRemoteExecutionError(job.job_id) from None
 
-    async def get_status(self) -> Any:
-        raise NotImplementedError("Pinned QB circuit API exposes no device status contract")
+    async def get_status(self) -> DeviceStatus:
+        # Pinned QB circuit API exposes no device status contract.
+        return DeviceStatus(status="maintenance", queue_depth=None, queue_time_seconds=None)
 
     async def cancel(self, job_id: str) -> bool:
         return False

@@ -15,7 +15,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -280,11 +280,17 @@ class SpeQtrumExecutor(BaseExecutor):
         self.config = config
         self._client = SpeQtrumHTTPClient(config)
         self.last_job: SpeQtrumJob | None = None
+        self._require_qilisdk()
 
     @staticmethod
     def _require_qilisdk() -> None:
-        if version("qilisdk") != "0.3.0":
-            raise ImportError("SpeQtrum adapter requires qilisdk==0.3.0")
+        message = "SpeQtrum adapter requires qilisdk==0.3.0. Install with: pip install qilisdk==0.3.0"
+        try:
+            installed = version("qilisdk")
+        except PackageNotFoundError as exc:
+            raise ImportError(message) from exc
+        if installed != "0.3.0":
+            raise ImportError(message)
 
     async def execute(self, circuit: Any, shots: int = 1000, **kwargs: Any) -> ExecutionResult:
         if kwargs:
@@ -548,7 +554,10 @@ class SpeQtrumExecutor(BaseExecutor):
             raise SpeQtrumExecutionError(job.job_id) from None
 
     async def get_status(self) -> DeviceStatus:
-        return await asyncio.to_thread(self._status)
+        try:
+            return await asyncio.to_thread(self._status)
+        except Exception:  # noqa: BLE001 - unreachable or invalid status reads as maintenance
+            return DeviceStatus(status="maintenance", queue_depth=None, queue_time_seconds=None)
 
     def _status(self) -> DeviceStatus:
         deadline = time.monotonic() + self.config.timeout_seconds

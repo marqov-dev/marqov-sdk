@@ -554,8 +554,8 @@ class TestQBRemote:
             with pytest.raises(ValueError, match="mismatch"):
                 await other.readback(replace(e.last_job, **{field: "different"}))
         assert not await e.cancel("7")
-        with pytest.raises(NotImplementedError):
-            await e.get_status()
+        from marqov.executors.base import DeviceStatus
+        assert await e.get_status() == DeviceStatus("maintenance", None, None)
 
     @pytest.mark.asyncio
     async def test_uncertain_post_never_replays(self, monkeypatch):
