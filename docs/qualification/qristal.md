@@ -109,6 +109,10 @@ One authenticated POST uses verified HTTPS, no redirects/retries/ambient proxy
 or credentials. The caller supplies an already valid reservation token;
 this adapter does not reserve hardware or send reservation writes. Any uncertain
 POST raises acceptance_unknown and must not be resubmitted automatically.
+Cancelling `execute()` while the POST is in flight waits up to 1 s for its
+reply: a returned ID is stored in `last_job` and named in a note on the re-raised
+`CancelledError` (the `__cause__` of an `asyncio.wait_for` `TimeoutError`);
+otherwise `QBRemoteExecutionError` with `acceptance_unknown=True` is raised instead.
 Known IDs remain in immutable `last_job` for GET-only `readback(job)` across
 restarts. Null data/HTTP 425 means pending; exact binary per-shot rows are required
 for success. Errors/timeouts retain the known ID. No cancellation/status endpoint

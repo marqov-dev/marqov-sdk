@@ -319,3 +319,77 @@ class TestSpeQtrumDirect:
         assert result.counts == {'10': 32}
         assert executor.last_job.execute_type == 'analog_evolution'
         assert calls.count(('POST', '/execute')) == 1
+
+    @staticmethod
+    async def _cancel_during(executor, block_path, hold):
+        import asyncio
+        import threading
+        reached, calls = threading.Event(), []
+
+        class Client:
+            def login(self, deadline):
+                calls.append('login')
+                if block_path == 'login':
+                    reached.set()
+                    hold()
+                return 'fixture-token'
+
+            def request(self, method, path, deadline, **kwargs):
+                calls.append(path)
+                if path == '/devices':
+                    return {'items': [{'code': 'fixture-device', 'nqubits': 2,
+                                       'type': 'simulator', 'status': 'online'}]}
+                assert path == '/execute'
+                reached.set()
+                hold()
+                return {'id': 42}
+
+        executor._client = Client()
+        task = asyncio.ensure_future(executor.execute(Circuit().x(0).x(1).x(1), shots=32))
+        await asyncio.to_thread(reached.wait, 5)
+        task.cancel()
+        return task, calls
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_post_keeps_answered_job_identity(self):
+        import asyncio
+        import time
+
+        from marqov.executors.speqtrum import SpeQtrumExecutor
+        executor = SpeQtrumExecutor(self.config())
+        task, calls = await self._cancel_during(executor, '/execute', lambda: time.sleep(0.2))
+        with pytest.raises(asyncio.CancelledError) as error:
+            await task
+        assert executor.last_job is not None and executor.last_job.job_id == 42
+        assert any('SpeQtrum job 42' in note for note in error.value.__notes__)
+        assert calls == ['login', '/devices', '/execute']
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_unanswered_post_is_acceptance_unknown(self, monkeypatch):
+        import threading
+
+        from marqov.executors.speqtrum import SpeQtrumExecutionError, SpeQtrumExecutor
+        monkeypatch.setattr('marqov.executors.speqtrum._CANCEL_WAIT_SECONDS', 0.05)
+        executor = SpeQtrumExecutor(self.config())
+        release = threading.Event()
+        try:
+            task, calls = await self._cancel_during(executor, '/execute', lambda: release.wait(5))
+            with pytest.raises(SpeQtrumExecutionError) as error:
+                await task
+            assert error.value.acceptance_unknown and error.value.job_id is None
+            assert calls.count('/execute') == 1
+        finally:
+            release.set()
+
+    @pytest.mark.asyncio
+    async def test_cancel_before_post_sends_nothing(self):
+        import asyncio
+        import time
+
+        from marqov.executors.speqtrum import SpeQtrumExecutor
+        executor = SpeQtrumExecutor(self.config())
+        task, calls = await self._cancel_during(executor, 'login', lambda: time.sleep(0.1))
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.3)
+        assert '/execute' not in calls and executor.last_job is None

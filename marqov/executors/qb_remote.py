@@ -14,13 +14,15 @@ import queue
 import re
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import requests
 from requests.adapters import HTTPAdapter
 
+from marqov.executors._blocking import _CANCEL_WAIT_SECONDS, BlockingCalls
 from marqov.executors.base import BaseExecutor, ExecutionResult
 
 
@@ -280,11 +282,53 @@ class QBRemoteExecutor(BaseExecutor):
         if kwargs:
             raise TypeError("QB remote supports no extra execution options")
         body = _payload(self._validate_circuit(circuit), shots)
-        return await asyncio.to_thread(self._submit, body)
-
-    def _submit(self, body: dict[str, Any]) -> ExecutionResult:
         deadline = time.monotonic() + self.config.timeout_seconds
         self.last_job = None
+        with BlockingCalls() as calls:
+            job = await self._submit_owned(calls, body, deadline)
+            return cast(ExecutionResult, await calls.call(self._poll, job, deadline))
+
+    async def _submit_owned(
+        self, calls: BlockingCalls, body: dict[str, Any], deadline: float
+    ) -> QBRemoteJob:
+        """Keep the POST's job identity across cancellation of the awaiting task.
+
+        Cancellation before the POST starts sends nothing. Once it has started, wait
+        a bounded interval for its reply: a known ID is kept in last_job and noted on
+        the re-raised interruption; otherwise acceptance is unknown. No POST is replayed.
+        """
+        lock = threading.Lock()
+        state = {"interrupted": False, "sending": False}
+
+        def claim() -> None:
+            with lock:
+                if state["interrupted"]:
+                    raise RuntimeError("QB submission interrupted before POST")
+                state["sending"] = True
+
+        post = asyncio.ensure_future(calls.call(self._submit, body, deadline, claim))
+        try:
+            return cast(QBRemoteJob, await asyncio.shield(post))
+        except (TimeoutError, asyncio.CancelledError) as interruption:
+            with lock:
+                state["interrupted"] = True
+                sending = state["sending"]
+            if not sending:
+                raise
+            try:
+                job = await asyncio.wait_for(asyncio.shield(post), _CANCEL_WAIT_SECONDS)
+            except (Exception, asyncio.CancelledError):  # noqa: BLE001 - reply still unknown
+                raise QBRemoteExecutionError(None, acceptance_unknown=True) from None
+            interruption.add_note(
+                f"QB circuit {job.job_id} was accepted before the interruption; "
+                "it is retained in last_job for readback and must not be resubmitted."
+            )
+            raise
+
+    def _submit(
+        self, body: dict[str, Any], deadline: float, claim: Callable[[], None]
+    ) -> QBRemoteJob:
+        claim()
         try:
             reply = self._request("POST", "api/v1/circuits", deadline, body)
             job_id = reply["id"]
@@ -301,7 +345,7 @@ class QBRemoteExecutor(BaseExecutor):
             json.dumps(body, sort_keys=True, separators=(",", ":")),
         )
         self.last_job = job
-        return self._poll(job, deadline)
+        return job
 
     async def readback(self, job: QBRemoteJob) -> ExecutionResult:
         if type(job) is not QBRemoteJob or (job.endpoint, job.target, job.account, job.model) != (

@@ -79,6 +79,11 @@ bit order and require exact shot accounting. Results are decoded only through an
 `executor.last_job` is an immutable `SpeQtrumJob` record for `readback(record)`
 without another submission. Retain it when a known job has an unresolved result.
 An acceptance-unknown exception without a job ID must not trigger a new submit.
+Cancelling `execute()` before the POST starts sends nothing. Once the POST has
+started, the executor waits up to 1 s for its reply: a returned job ID is stored
+in `last_job` and named in a note on the re-raised `CancelledError` (the
+`__cause__` of an `asyncio.wait_for` `TimeoutError`); otherwise
+`SpeQtrumExecutionError` with `acceptance_unknown=True` is raised instead.
 The pinned API exposes no cancellation or idempotency guarantee: `cancel()`
 returns False. Terminal timeout/error/cancellation never produces success.
 

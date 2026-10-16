@@ -572,6 +572,51 @@ class TestQBRemote:
         assert len(calls) == 1 and error.value.acceptance_unknown and e.last_job is None
         assert "secret" not in str(error.value)
 
+    @staticmethod
+    async def _cancel_during_post(e, monkeypatch, hold):
+        import asyncio
+        import threading
+        sent, calls = threading.Event(), []
+        def request(method, path, deadline, body=None):
+            calls.append(method)
+            sent.set()
+            hold()
+            return {"id": 7}
+        monkeypatch.setattr(e, "_request", request)
+        task = asyncio.ensure_future(e.execute(Circuit().rx(1.0, 0), shots=1))
+        await asyncio.to_thread(sent.wait, 5)
+        task.cancel()
+        return task, calls
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_post_keeps_answered_job_identity(self, monkeypatch):
+        import asyncio
+        import time
+        from marqov.executors.qb_remote import QBRemoteExecutor
+        e = QBRemoteExecutor(self.config())
+        task, calls = await self._cancel_during_post(e, monkeypatch, lambda: time.sleep(0.2))
+        with pytest.raises(asyncio.CancelledError) as error:
+            await task
+        assert e.last_job is not None and e.last_job.job_id == 7
+        assert any("QB circuit 7" in note for note in error.value.__notes__)
+        assert calls == ["POST"]
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_unanswered_post_is_acceptance_unknown(self, monkeypatch):
+        import threading
+        from marqov.executors.qb_remote import QBRemoteExecutor, QBRemoteExecutionError
+        monkeypatch.setattr("marqov.executors.qb_remote._CANCEL_WAIT_SECONDS", 0.05)
+        e = QBRemoteExecutor(self.config())
+        release = threading.Event()
+        try:
+            task, calls = await self._cancel_during_post(e, monkeypatch, lambda: release.wait(5))
+            with pytest.raises(QBRemoteExecutionError) as error:
+                await task
+            assert error.value.acceptance_unknown and error.value.job_id is None
+            assert calls == ["POST"]
+        finally:
+            release.set()
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("data", [[], [[True]], [[2]], [[0, 1]], "bad"])
     async def test_invalid_results_keep_known_identity(self, monkeypatch, data):
