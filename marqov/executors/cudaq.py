@@ -33,6 +33,9 @@ Note:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import importlib.metadata as md
+import json
 import os
 import threading
 import time
@@ -215,7 +218,17 @@ class CudaqExecutor(BaseExecutor):
             **kwargs: Ignored; present for interface compatibility.
 
         Returns:
-            ExecutionResult with normalized measurement counts.
+            ExecutionResult with normalized measurement counts. ``metadata``
+            carries ``vendor``, ``framework``, ``engine``, ``access_path``
+            (``"direct"`` for the ``iqm`` target, else ``"local"``) and a
+            ``reproducibility`` record (``record_version``, ``packages``,
+            ``seed``, observed ``shots``, ``counts_sha256``). The record has no
+            ``bit_order`` key: the key order is CUDA-Q's own and is not pinned
+            by this SDK's tests.
+
+        Raises:
+            RuntimeError: If the sampler returned a different total than
+                ``shots``.
         """
         circuit = self._validate_circuit(circuit)
         cudaq = _import_cudaq()
@@ -228,6 +241,20 @@ class CudaqExecutor(BaseExecutor):
         )
         execution_time_ms = (time.perf_counter() - start_time) * 1000
 
+        observed = sum(counts.values())
+        if observed != shots:
+            raise RuntimeError(
+                f"CUDA-Q returned {observed} of {shots} requested shots on target "
+                f"'{resolved_target}'"
+            )
+        digest = hashlib.sha256(
+            json.dumps(counts, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        try:
+            cudaq_version: str | None = md.version("cudaq")
+        except md.PackageNotFoundError:
+            cudaq_version = None
+
         return ExecutionResult(
             counts=counts,
             backend=f"cudaq:{resolved_target}",
@@ -235,9 +262,19 @@ class CudaqExecutor(BaseExecutor):
             shots=shots,
             raw_result=sample_result,
             metadata={
+                "vendor": "NVIDIA",
                 "framework": "cudaq",
+                "engine": resolved_target,
+                "access_path": "direct" if resolved_target == "iqm" else "local",
                 "target": resolved_target,
                 "requested_target": self.config.target,
+                "reproducibility": {
+                    "record_version": 1,
+                    "packages": {"cudaq": cudaq_version},
+                    "seed": self.config.seed,
+                    "shots": observed,
+                    "counts_sha256": digest,
+                },
             },
         )
 

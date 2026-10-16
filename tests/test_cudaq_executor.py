@@ -7,6 +7,8 @@ real CUDA-Q run and is skipped unless ``cudaq`` is importable (Linux-only).
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 import pytest
@@ -193,6 +195,45 @@ class TestExecute:
         assert result.metadata["target"] == "qpp-cpu"
         assert fake_cudaq.target == "qpp-cpu"
         assert fake_cudaq.sampled_shots == 1000
+
+    @pytest.mark.asyncio
+    async def test_under_delivered_samples_raise(
+        self, fake_cudaq: FakeCudaq, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            fake_cudaq, "sample", lambda kernel, shots_count: _FakeSampleResult({"0": 3, "1": 2})
+        )
+        executor = CudaqExecutor(CudaqExecutorConfig(target="qpp-cpu"))
+        with pytest.raises(RuntimeError, match="5 of 1000"):
+            await executor.execute(Circuit().h(0), shots=1000)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("config", "access_path"),
+        [
+            (CudaqExecutorConfig(target="qpp-cpu", seed=7), "local"),
+            (CudaqExecutorConfig(target="iqm", iqm_url="https://iqm.example"), "direct"),
+        ],
+    )
+    async def test_result_carries_provenance_record(
+        self, fake_cudaq: FakeCudaq, config: CudaqExecutorConfig, access_path: str
+    ) -> None:
+        result = await CudaqExecutor(config).execute(bell_state(), shots=100)
+
+        md = result.metadata
+        assert md["vendor"] == "NVIDIA"
+        assert md["framework"] == "cudaq"
+        assert md["engine"] == config.target
+        assert md["access_path"] == access_path
+        repro = md["reproducibility"]
+        assert repro["record_version"] == 1
+        assert repro["shots"] == 100 == sum(result.counts.values())
+        assert repro["seed"] == config.seed
+        assert set(repro["packages"]) == {"cudaq"}
+        expected = hashlib.sha256(
+            json.dumps(result.counts, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        assert repro["counts_sha256"] == expected
 
     @pytest.mark.asyncio
     async def test_gpu_falls_back_to_cpu_when_no_gpu(self, fake_cudaq: FakeCudaq) -> None:
