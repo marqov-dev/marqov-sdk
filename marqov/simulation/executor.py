@@ -207,7 +207,14 @@ def _run_simulation(
 
     noise_record = (
         None if config.noise_model is None else [
-            {"channel": type(channel).__name__, **dataclasses.asdict(channel), "qubits": list(qubits)}
+            {
+                "channel": type(channel).__name__,
+                **{
+                    name: value if isinstance(value, (bool, str)) else float(value)
+                    for name, value in dataclasses.asdict(channel).items()
+                },
+                "qubits": [int(qubit) for qubit in qubits],
+            }
             for channel, qubits in config.noise_model.entries()
         ]
     )
