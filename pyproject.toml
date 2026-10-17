@@ -67,11 +67,16 @@ qutip = [
     "qutip>=5.3.0,<6.0.0",
 ]
 qiskit = [
-    "qiskit>=1.0.0",
+    # <2.6: qiskit 2.6.0's native extension exhausts glibc's static TLS block on
+    # Linux, so pennylane-lightning's bundled libgomp then fails to load
+    # ("cannot allocate memory in static TLS block") whenever qiskit is imported
+    # first. Confirmed 2026-10-17 with lightning 0.45.0; lift when lightning or
+    # qiskit ships a fix. The same ceiling is repeated in every extra below.
+    "qiskit>=1.0.0,<2.6",
     "qiskit-qasm3-import>=0.5.0",
 ]
 ibm = [
-    "qiskit>=1.0.0",
+    "qiskit>=1.0.0,<2.6",
     "qiskit-ibm-runtime>=0.21.0",
 ]
 cirq = [
@@ -81,7 +86,7 @@ cudaq = [
     # cudaq ships Linux-only wheels; the marker keeps macOS/Windows installs from
     # failing (they get the transpile deps but not the runtime).
     "cudaq>=0.14.2 ; platform_system == 'Linux'",
-    "qiskit>=1.0.0",  # transpile path: Marqov Circuit -> Qiskit -> CUDA-Q kernel
+    "qiskit>=1.0.0,<2.6",  # transpile path: Marqov Circuit -> Qiskit -> CUDA-Q kernel
 ]
 pennylane = [
     # Circuit.from_pennylane / to_pennylane and the LightningExecutor
@@ -102,31 +107,31 @@ lightning-kokkos = [
 pytket = [
     "pytket>=2.0.0",
     "pytket-qiskit>=0.50.0",
-    "qiskit>=1.0.0",
+    "qiskit>=1.0.0,<2.6",
 ]
 quantinuum = [
     "pytket>=2.0.0",
     "pytket-quantinuum>=0.40.0",
     "pytket-qiskit>=0.50.0",
-    "qiskit>=1.0.0",
+    "qiskit>=1.0.0,<2.6",
 ]
 pyquil = [
     "pyquil>=4.0.0",
 ]
 openqasm = [
-    "qiskit>=1.0.0",
+    "qiskit>=1.0.0,<2.6",
     "qiskit-qasm3-import>=0.5.0",
 ]
 azure = [
     # Select the vendor's adapter dependencies, including Q# for Qiskit and
     # its supported Cirq range. Installing frameworks alone is insufficient.
     "azure-quantum[qiskit,cirq]>=3.13.0,<4.0.0",
-    "qiskit>=1.0.0",
+    "qiskit>=1.0.0,<2.6",
     "cirq>=1.0.0",
 ]
 ionq = [
     "requests>=2.31.0",
-    "qiskit>=1.0.0",
+    "qiskit>=1.0.0,<2.6",
 ]
 rigetti = [
     "pyquil>=4.0.0",
@@ -135,7 +140,7 @@ all = [
     "azure-quantum[qiskit,cirq]>=3.13.0,<4.0.0",
     "amazon-braket-sdk>=1.117.0",
     "qutip>=5.3.0,<6.0.0",
-    "qiskit>=1.0.0",
+    "qiskit>=1.0.0,<2.6",
     "qiskit-ibm-runtime>=0.21.0",
     "qiskit-qasm3-import>=0.5.0",
     "cirq-core>=1.0.0",
