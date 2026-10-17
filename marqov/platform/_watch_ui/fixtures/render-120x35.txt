@@ -1,0 +1,35 @@
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Marqov · replay · FRESH AT CAPTURE · observed 2026-10-09T12:00:00Z                                                    │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌Workflow jobs───────────────────────────────────────┐┌Details / provenance────────────────────────────────────────────┐
+│> workflow-1 · Queued                               ││Workflow: workflow-1                                            │
+│  workflow-2 · Running                              ││Provider: p-001                                                 │
+│  workflow-3 · Needs review                         ││Slurm: 421                                                      │
+│  workflow-4 · Checking execution                   ││State: Queued                                                   │
+│  workflow-5 · Cancellation requested               ││Workflow cancellation: none                                     │
+│  workflow-6 · Cancelled                            ││                                                                │
+│  workflow-7 · Completed                            ││Resources unavailable                                           │
+│  workflow-8 · Failed                               ││                                                                │
+│                                                    ││Provenance: Synthetic sanitized presentation fixture; NOT live  │
+│                                                    ││scheduler evidence. Journeys J3-J8.                             │
+│                                                    ││                                                                │
+│                                                    ││Read-only. Workflow state does not prove resources freed.       │
+│                                                    ││Freshness describes snapshot fetch only. Results remain         │
+│                                                    ││server-owned.                                                   │
+│                                                    ││                                                                │
+│                                                    ││                                                                │
+│                                                    ││                                                                │
+│                                                    ││                                                                │
+│                                                    ││                                                                │
+│                                                    ││                                                                │
+│                                                    ││                                                                │
+│                                                    ││                                                                │
+│                                                    ││                                                                │
+│                                                    ││                                                                │
+│                                                    ││                                                                │
+│                                                    ││                                                                │
+│                                                    ││                                                                │
+│                                                    ││                                                                │
+└────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────┘
+↑↓ select · d details · r refresh · q exit
+

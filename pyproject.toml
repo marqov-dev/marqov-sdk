@@ -155,7 +155,7 @@ Issues = "https://github.com/marqov-dev/marqov-sdk/issues"
 Changelog = "https://github.com/marqov-dev/marqov-sdk/blob/main/CHANGELOG.md"
 
 [project.scripts]
-marqov = "marqov.cli:main"
+marqov = "marqov.platform.cli:main"
 
 [build-system]
 requires = ["hatchling"]
