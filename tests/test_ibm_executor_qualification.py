@@ -1,5 +1,9 @@
 """Real IBM Runtime SamplerV2 local execution and submitted-job identity."""
 
+import asyncio
+import threading
+import time
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
@@ -7,6 +11,7 @@ import pytest
 
 pytest.importorskip("qiskit_ibm_runtime")
 pytest.importorskip("qiskit_aer")
+import qiskit_ibm_runtime
 from qiskit_aer import AerSimulator
 from marqov.circuits import Circuit
 from marqov.executors import IBMExecutor, IBMExecutorConfig
@@ -62,3 +67,189 @@ async def test_shots_accept_numpy_integers_only(shots, accepted):
     result = await executor.execute(Circuit().x(0), shots=shots)
     assert result.counts == {"1": 16}
     assert type(result.shots) is int
+
+
+def _stub_executor(monkeypatch, job, timeout_seconds=None):
+    executor = IBMExecutor(
+        IBMExecutorConfig(backend_name="configured-provider-device", timeout_seconds=timeout_seconds)
+    )
+    executor._backend = Mock()
+    monkeypatch.setattr(executor, "_transpile_sync", lambda circuit, backend: circuit)
+    monkeypatch.setattr(executor, "_submit_sampler_sync", lambda circuit, backend, shots: job)
+    return executor
+
+
+def test_timeout_returns_from_asyncio_run_without_joining_result_thread(monkeypatch):
+    finished = threading.Event()
+
+    def slow_result():
+        try:
+            time.sleep(1.5)  # stands in for a queued IBM job
+        finally:
+            finished.set()
+
+    job = Mock()
+    job.job_id.return_value = "queued-provider-job"
+    job.result.side_effect = slow_result
+    executor = _stub_executor(monkeypatch, job, timeout_seconds=0.05)
+
+    async def main():
+        with pytest.raises(IBMExecutionError) as error:
+            await executor.execute(Circuit().h(0), shots=32)
+        assert error.value.job_id == "queued-provider-job"
+        return time.perf_counter()
+
+    raised_at = asyncio.run(main())
+    assert time.perf_counter() - raised_at < 0.5
+    assert not finished.is_set()
+    job.cancel.assert_not_called()
+    finished.wait(5)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_call_retains_its_own_job_under_concurrency(monkeypatch):
+    release = threading.Event()
+    started = {"job-A": threading.Event(), "job-B": threading.Event()}
+
+    def make_job(job_id):
+        job = Mock()
+        job.job_id.return_value = job_id
+
+        def result():
+            started[job_id].set()
+            release.wait(10)
+            return Mock()
+
+        job.result.side_effect = result
+        return job
+
+    jobs = iter([make_job("job-A"), make_job("job-B")])
+
+    class FakeSampler:
+        def __init__(self, mode):
+            pass
+
+        def run(self, circuits, shots):
+            return next(jobs)
+
+    monkeypatch.setattr(qiskit_ibm_runtime, "SamplerV2", FakeSampler)
+    executor = IBMExecutor(IBMExecutorConfig(backend_name="configured-provider-device"))
+    executor._backend = Mock()
+    monkeypatch.setattr(executor, "_transpile_sync", lambda circuit, backend: circuit)
+
+    async def wait_started(job_id):
+        while not started[job_id].is_set():
+            await asyncio.sleep(0.005)
+
+    call_a = asyncio.create_task(executor.execute(Circuit().h(0), shots=8))
+    call_b = None
+    try:
+        await asyncio.wait_for(wait_started("job-A"), 5)
+        call_b = asyncio.create_task(executor.execute(Circuit().h(0), shots=8))
+        await asyncio.wait_for(wait_started("job-B"), 5)
+        assert executor._current_job_id == "job-B"
+        call_a.cancel()
+        with pytest.raises(asyncio.CancelledError) as cancelled:
+            await call_a
+        assert cancelled.value.remote_job["job_id"] == "job-A"
+        assert cancelled.value.remote_job["submission_status"] == "submitted"
+        assert any("job-A" in note for note in cancelled.value.__notes__)
+        assert not call_b.done()
+    finally:
+        release.set()
+        if call_b is not None:
+            call_b.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await call_b
+
+
+def _sampler_result(**registers):
+    data = SimpleNamespace(keys=lambda: list(registers), **{
+        name: SimpleNamespace(get_counts=lambda counts=counts: counts)
+        for name, counts in registers.items()
+    })
+    return [SimpleNamespace(data=data)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result,expected",
+    [
+        (_sampler_result(c0={"0": 8}, c1={"1": 8}), NotImplementedError),
+        (_sampler_result(meas={"0": 7}), ValueError),
+    ],
+    ids=["multi-register", "shot-mismatch"],
+)
+async def test_sdk_refusal_of_resolved_result_is_not_execution_error(
+    monkeypatch, result, expected
+):
+    job = Mock()
+    job.job_id.return_value = "resolved-provider-job"
+    job.result.return_value = result
+    executor = _stub_executor(monkeypatch, job)
+    with pytest.raises(expected) as error:
+        await executor.execute(Circuit().h(0), shots=8)
+    assert not isinstance(error.value, IBMExecutionError)
+    assert "resolved-provider-job" in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_undecodable_resolved_result_keeps_type_and_notes_job(monkeypatch):
+    job = Mock()
+    job.job_id.return_value = "resolved-provider-job"
+    job.result.return_value = []  # result[0] raises IndexError in extraction
+    executor = _stub_executor(monkeypatch, job)
+    with pytest.raises(IndexError) as error:
+        await executor.execute(Circuit().h(0), shots=8)
+    assert any("resolved-provider-job" in note for note in error.value.__notes__)
+
+
+def test_cancel_during_submission_marks_acceptance_unknown(monkeypatch):
+    started = threading.Event()
+    finished = threading.Event()
+    job = Mock()
+    job.job_id.return_value = "late-provider-job"
+
+    def slow_submit(circuit, backend, shots):
+        started.set()
+        try:
+            time.sleep(1.5)  # stands in for a slow SamplerV2.run round trip
+            return job
+        finally:
+            finished.set()
+
+    executor = _stub_executor(monkeypatch, job)
+    monkeypatch.setattr(executor, "_submit_sampler_sync", slow_submit)
+
+    async def main():
+        call = asyncio.create_task(executor.execute(Circuit().h(0), shots=8))
+        while not started.is_set():
+            await asyncio.sleep(0.005)
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError) as cancelled:
+            await call
+        return cancelled.value, time.perf_counter()
+
+    error, cancelled_at = asyncio.run(main())
+    assert time.perf_counter() - cancelled_at < 0.5
+    assert not finished.is_set()
+    assert error.remote_job["submission_status"] == "unknown"
+    assert error.remote_job["job_id"] is None
+    assert any("acceptance is unknown" in note for note in error.__notes__)
+    finished.wait(5)
+
+
+@pytest.mark.asyncio
+async def test_submission_error_keeps_type_and_marks_acceptance_unknown(monkeypatch):
+    executor = _stub_executor(monkeypatch, Mock())
+
+    def failing_submit(circuit, backend, shots):
+        raise RuntimeError("connection reset after POST")
+
+    monkeypatch.setattr(executor, "_submit_sampler_sync", failing_submit)
+    with pytest.raises(RuntimeError) as error:
+        await executor.execute(Circuit().h(0), shots=8)
+    assert not isinstance(error.value, IBMExecutionError)
+    assert error.value.remote_job["submission_status"] == "unknown"
+    assert error.value.remote_job["job_id"] is None
+    assert any("acceptance is unknown" in note for note in error.value.__notes__)
