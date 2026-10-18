@@ -1,6 +1,7 @@
 name: release
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     branches: [main]
     paths:
       - .github/workflows/release.yml
@@ -17,10 +18,37 @@ on:
         description: Fail verification deliberately; neither publisher should run
         type: boolean
         default: false
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  ci-scope:
+    # Drafts allocate no runner. Marking ready emits ready_for_review below.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_code: ${{ steps.scope.outputs.run_code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: scope
+        name: Classify documentation-only changes
+        run: python3 .github/scripts/ci_scope.py
+
   build:
+    needs: ci-scope
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft != true) && (needs.ci-scope.result != 'success' || needs.ci-scope.outputs.run_code != 'false') }}
     runs-on: ubuntu-latest
     steps:
+      - name: Require a successful scope decision
+        env:
+          SCOPE_RESULT: ${{ needs.ci-scope.result }}
+          RUN_CODE: ${{ needs.ci-scope.outputs.run_code }}
+        run: test "$SCOPE_RESULT" = success && test "$RUN_CODE" = true
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
