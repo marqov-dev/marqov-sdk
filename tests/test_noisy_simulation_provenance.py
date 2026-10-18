@@ -132,11 +132,6 @@ async def test_actual_backend_boundary_preserves_allowed_requests(monkeypatch, n
 
 async def _aer_record(monkeypatch, noise):
     install_native_fake(monkeypatch, 2, 100)
-    # to_openqasm() numbers its register per call, so pin the program text.
-    monkeypatch.setattr(
-        Circuit, "to_openqasm",
-        lambda self: 'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[2];\nh q[0];\ncx q[0],q[1];',
-    )
     config = SimulationConfig(backend_id="aer", backend_type="noisy", noise_model=noise, seed=7)
     result = await SimulationExecutor(config).execute(Circuit().h(0).cnot(0, 1), shots=100)
     return result.metadata["reproducibility"]
@@ -166,6 +161,7 @@ async def test_record_inputs_are_deterministic(monkeypatch):
     first = await _aer_record(monkeypatch, NoiseModel.depolarizing_uniform(p=0.01, num_qubits=2))
     second = await _aer_record(monkeypatch, NoiseModel.depolarizing_uniform(p=0.01, num_qubits=2))
     assert first["noise_model"] == second["noise_model"]
+    assert first["program_sha256"] == second["program_sha256"]
     assert first["inputs_sha256"] == second["inputs_sha256"]
 
 

@@ -15,6 +15,89 @@ release.
   independent of insertion order, combines equivalent padded outcomes and
   reports matrix-width mismatches clearly. (marqov-sdk#159)
 
+- IBM execution releases the caller at `timeout_seconds` instead of holding the
+  script until the queued job finishes, and attaches `remote_job` identity with
+  a note to every error after submission, including cancellation. Multi-register
+  circuits and shot-accounting mismatches raise their own error types naming
+  the job instead of `IBMExecutionError`. A timeout still never cancels the IBM
+  job. (marqov-sdk#260)
+
+- Quantum Brilliance remote and SpeQtrum execution keep the job identity when
+  the awaiting task is cancelled during submission, so callers know whether a
+  job was accepted and avoid double submission. `get_status()` on both returns
+  a `maintenance` status on transport failure, as the other executors do, and
+  SpeQtrum raises a clear `ImportError` at construction when `qilisdk` is
+  missing. (marqov-sdk#258)
+
+- Circuit export and import: QASM 2 `swap` round-trips through
+  `from_openqasm`, `from_braket` accepts terminal measurements as the other
+  importers do, `to_pyquil` works for Braket-imported gates and raises
+  `NotImplementedError` for gates with no Quil equivalent, and `to_openqasm`
+  always names the register `q`, so repeated exports are byte-identical and
+  reproducibility hashes are stable across calls. (marqov-sdk#259)
+
+- Qristal simulation records the noise model and an `inputs_sha256` hash in the
+  reproducibility record, so noiseless and noisy runs, and runs with different
+  noise models, no longer produce identical records. NumPy-typed noise inputs
+  are accepted. (marqov-sdk#255)
+
+- QiliSDK validates sampler counts against the requested shots and the circuit
+  width, raising `RuntimeError` on mismatch, and records the observed shot total
+  and `bit_order` in the reproducibility record. (marqov-sdk#256)
+
+- Azure Qiskit runs report `cost_estimate` and provider execution time from the
+  job details; previously both were silently lost. Unknown provider timing is
+  `metadata["quantum_time_ms"] = None` with wall time in `execution_time_ms`.
+  The Cirq error mapping that could never match was removed. (marqov-sdk#257)
+
+- Braket retains the task identity (`remote_job` with the task ARN and a note)
+  on provider errors, result-processing errors and cancellation during
+  submission, matching the Azure and Rigetti executors. (marqov-sdk#252)
+
+- IonQ on the legacy v0.3 route attaches `remote_job` to errors, logs the job id
+  and sends a best-effort cancel when a wait is interrupted or the job reports
+  an unrecognised status, and raises the intended `RuntimeError` for a failed
+  job with `"failure": null`. (marqov-sdk#254)
+
+- Azure, Braket and Rigetti log a warning naming the job as soon as a blocking
+  result wait is interrupted, so the job id is recorded even when
+  `asyncio.run()` turns the cancellation into a bare `KeyboardInterrupt`.
+  (marqov-sdk#251)
+
+- `WorkflowDispatch.run()` and `run_with_ids()` return decoded task outputs
+  instead of the base64 cloudpickle envelope, and NumPy scalar outputs are
+  converted to Python values before serialisation. (marqov-sdk#253)
+
+- `IBMExecutor`, the Qristal `SimulationExecutor` and the platform client accept
+  NumPy integer shot counts. `LightningExecutor` now raises `NotImplementedError`
+  for an unsupported device name before constructing it. (marqov-sdk#250)
+
+- CUDA-Q execution raises `RuntimeError` when the sampled shot total differs
+  from the request, and its result carries `vendor`, `engine`, `access_path`
+  and a `reproducibility` record. (marqov-sdk#248)
+
+- `ExecutorFactory.get_supported_providers()` and `is_provider_supported()` now
+  include Alice & Bob, and the README provider table lists it. (marqov-sdk#249)
+
+### Changed
+
+- The `[ibm]` and `[all]` extras require `qiskit-ibm-runtime>=0.21.0`, the first
+  release that ships `SamplerV2`, which `IBMExecutor` imports. (marqov-sdk#247)
+
+- Every extra that declares `qiskit` now caps it below 2.6. qiskit 2.6.0 breaks
+  `pennylane-lightning` 0.45.0 on Linux x86_64 (every `lightning.qubit`
+  construction fails with a static TLS allocation error once qiskit is loaded
+  first). Lift the cap when pennylane-lightning or qiskit ships a fix for the
+  TLS allocation. (marqov-sdk#262)
+
+### Documentation
+
+- Corrected 0.9.x documentation drift: the marqov-quantumflow pin in
+  `docs/braket-native-labels.md`, the versions the IBM qualification receipt
+  records, the Rigetti `cancel` docstring, and the squash-merge note in
+  `RELEASING.md`. The four timeouts docs now say where the job id is logged
+  when a wait is interrupted. (marqov-sdk#250, marqov-sdk#251)
+
 ## [0.9.1] — 2026-10-10
 
 ### Changed
