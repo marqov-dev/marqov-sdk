@@ -127,40 +127,102 @@ def azure(framework):
     )
 
 
-EXECUTORS = {
-    "LocalExecutor": lambda transport: LocalExecutor(),
-    "CudaqExecutor": lambda transport: CudaqExecutor(CudaqExecutorConfig(target="qpp-cpu")),
-    "RigettiExecutor": lambda transport: RigettiExecutor(
-        RigettiExecutorConfig(quantum_processor_id="9q-square-qvm")
-    ),
-    "IonQExecutor": lambda transport: IonQExecutor(
-        IonQExecutorConfig(api_key="offline"), session=transport
-    ),
-    "AzureQuantumExecutor-qiskit": lambda transport: azure("qiskit"),
-    "AzureQuantumExecutor-cirq": lambda transport: azure("cirq"),
-    "CUNQAExecutor": lambda transport: CUNQAExecutor(
-        CUNQAExecutorConfig(n_qpus=1, walltime="00:05:00"), client=transport
-    ),
-    "QuantinuumExecutor": lambda transport: QuantinuumExecutor(
+def quantinuum():
+    return QuantinuumExecutor(
         QuantinuumExecutorConfig(device_name="H2-1", simulator="state-vector")
-    ),
+    )
+
+
+def guard(monkeypatch, target, name):
+    """Replace a provider touchpoint with a recorder that fails if reached."""
+    stub = Mock(side_effect=AssertionError(f"provider reached: {name}"))
+    monkeypatch.setattr(target, name, stub)
+    return stub
+
+
+def local_setup(monkeypatch):
+    executor = LocalExecutor()
+    return executor, [
+        guard(monkeypatch, Circuit, "simulate"),
+        guard(monkeypatch, executor, "_sample_measurements"),
+    ]
+
+
+def cudaq_setup(monkeypatch):
+    import marqov.executors.cudaq as cudaq_module
+
+    return CudaqExecutor(CudaqExecutorConfig(target="qpp-cpu")), [
+        guard(monkeypatch, cudaq_module, "_import_cudaq"),
+    ]
+
+
+def rigetti_setup(monkeypatch):
+    executor = RigettiExecutor(RigettiExecutorConfig(quantum_processor_id="9q-square-qvm"))
+    return executor, [guard(monkeypatch, executor, "_get_qc_sync")]
+
+
+def ionq_setup(monkeypatch):
+    session = Mock()
+    executor = IonQExecutor(IonQExecutorConfig(api_key="offline"), session=session)
+    return executor, [
+        guard(monkeypatch, session, "request"),
+        guard(monkeypatch, executor, "_request"),
+        guard(monkeypatch, executor, "_request_sync"),
+    ]
+
+
+def azure_setup(framework):
+    def setup(monkeypatch):
+        executor = azure(framework)
+        return executor, [
+            guard(monkeypatch, executor, "_get_workspace"),
+            guard(monkeypatch, executor, "_create_workspace_sync"),
+        ]
+
+    return setup
+
+
+def cunqa_setup(monkeypatch):
+    client = Mock()
+    executor = CUNQAExecutor(CUNQAExecutorConfig(n_qpus=1, walltime="00:05:00"), client=client)
+    return executor, [
+        guard(monkeypatch, client, name) for name in ("qraise", "get_QPUs", "run", "gather", "qdrop")
+    ]
+
+
+def quantinuum_setup(monkeypatch):
+    executor = quantinuum()
+    return executor, [guard(monkeypatch, executor, "_get_backend_sync")]
+
+
+EXECUTORS = {
+    "LocalExecutor": local_setup,
+    "CudaqExecutor": cudaq_setup,
+    "RigettiExecutor": rigetti_setup,
+    "IonQExecutor": ionq_setup,
+    "AzureQuantumExecutor-qiskit": azure_setup("qiskit"),
+    "AzureQuantumExecutor-cirq": azure_setup("cirq"),
+    "CUNQAExecutor": cunqa_setup,
+    "QuantinuumExecutor": quantinuum_setup,
 }
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("key", sorted(EXECUTORS))
 @pytest.mark.parametrize("option", ["verbatum", "verbatim", "max_costs"])
-async def test_every_executor_refuses_options_it_does_not_apply(key, option):
-    """Executors that used to accept and drop options now name and refuse them."""
-    transport = Mock()
-    executor = EXECUTORS[key](transport)
+async def test_every_executor_refuses_options_it_does_not_apply(key, option, monkeypatch):
+    """Executors that used to accept and drop options now name and refuse them.
+
+    Each executor's first provider touchpoint is replaced with a recorder that
+    raises, so a missing guard fails here deterministically and never reaches
+    a simulator, QVM, socket or vendor SDK.
+    """
+    executor, guards = EXECUTORS[key](monkeypatch)
     owner = key.split("-")[0]
-    for name in ("_get_device", "_get_backend", "_get_qiskit_backend"):
-        if hasattr(executor, name):
-            setattr(executor, name, AsyncMock(side_effect=AssertionError("provider reached")))
     with pytest.raises(TypeError, match=rf"{owner}\.execute\(\).*{option}"):
         await executor.execute(Circuit().x(0).z(1), shots=4, **{option: True})
-    assert transport.mock_calls == []
+    for stub in guards:
+        stub.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -170,7 +232,7 @@ async def test_quantinuum_forwards_documented_pytket_options():
     backend.process_circuit.return_value = ("job",)
     backend.get_jobid.return_value = "job"
     backend.get_result.return_value.get_counts.return_value = {(1, 0): 4}
-    executor = EXECUTORS["QuantinuumExecutor"](None)
+    executor = quantinuum()
     executor._get_backend = AsyncMock(return_value=backend)
     await executor.execute(Circuit().x(0).z(1), shots=4, postprocess=True, seed=7)
     assert backend.process_circuit.call_args.kwargs == {
@@ -190,9 +252,12 @@ async def test_quantinuum_forwards_documented_pytket_options():
         ("api_handler", object()),
     ],
 )
-async def test_quantinuum_refuses_options_pytket_process_circuit_never_reads(option, value):
+async def test_quantinuum_refuses_options_pytket_process_circuit_never_reads(
+    option, value, monkeypatch
+):
     """pytket-quantinuum 0.59.1 documents these but drops them in process_circuits."""
-    executor = EXECUTORS["QuantinuumExecutor"](None)
-    executor._get_backend = AsyncMock(side_effect=AssertionError("provider reached"))
+    executor, guards = quantinuum_setup(monkeypatch)
     with pytest.raises(TypeError, match=rf"QuantinuumExecutor\.execute\(\).*{option}"):
         await executor.execute(Circuit().x(0).z(1), shots=4, **{option: value})
+    for stub in guards:
+        stub.assert_not_called()
