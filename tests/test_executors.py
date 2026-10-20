@@ -865,7 +865,7 @@ class TestAzureExecutorGetStatus:
             workspace_name="ws", location="eastus", target="ionq.simulator",
         )
         executor = AzureQuantumExecutor(config)
-        with patch.object(executor, 'get_device_status', new_callable=AsyncMock, return_value="Available"):
+        with patch.object(executor, '_read_device_status', new_callable=AsyncMock, return_value="Available"):
             status = await executor.get_status()
             assert status.status == "online"
             assert status.queue_depth is None
@@ -877,7 +877,7 @@ class TestAzureExecutorGetStatus:
             workspace_name="ws", location="eastus", target="ionq.simulator",
         )
         executor = AzureQuantumExecutor(config)
-        with patch.object(executor, 'get_device_status', new_callable=AsyncMock, return_value="Degraded"):
+        with patch.object(executor, '_read_device_status', new_callable=AsyncMock, return_value="Degraded"):
             status = await executor.get_status()
             assert status.status == "maintenance"
 
@@ -888,7 +888,7 @@ class TestAzureExecutorGetStatus:
             workspace_name="ws", location="eastus", target="ionq.simulator",
         )
         executor = AzureQuantumExecutor(config)
-        with patch.object(executor, 'get_device_status', new_callable=AsyncMock, return_value="Unavailable"):
+        with patch.object(executor, '_read_device_status', new_callable=AsyncMock, return_value="Unavailable"):
             status = await executor.get_status()
             assert status.status == "offline"
 
@@ -899,7 +899,7 @@ class TestAzureExecutorGetStatus:
             workspace_name="ws", location="eastus", target="ionq.simulator",
         )
         executor = AzureQuantumExecutor(config)
-        with patch.object(executor, 'get_device_status', new_callable=AsyncMock, side_effect=Exception("API error")):
+        with patch.object(executor, '_read_device_status', new_callable=AsyncMock, side_effect=Exception("API error")):
             status = await executor.get_status()
             assert status.status == "maintenance"
             assert status.queue_depth is None
