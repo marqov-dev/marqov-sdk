@@ -515,7 +515,9 @@ class ExecutorFactory:
         """Create a CUNQA executor from configuration.
 
         No field is required: each key mirrors a ``CUNQAExecutorConfig`` field
-        and falls back to the dataclass default when absent. The ``cunqa``
+        and falls back to the dataclass default when absent. ``seed`` is
+        inert (the executor does not apply it yet), so passing it raises
+        ``ValueError`` rather than being silently ignored. The ``cunqa``
         package itself is imported only when the executor is constructed.
 
         Args:
@@ -540,6 +542,11 @@ class ExecutorFactory:
             "startup_timeout_s": (int, float),
             "poll_interval_s": (int, float),
         }
+        if "seed" in backend_config:
+            raise ValueError(
+                "CUNQA config key 'seed' is not applied yet (CUNQAExecutorConfig.seed "
+                "is reserved and never reaches run()); omit the key"
+            )
         kwargs: dict[str, Any] = {}
         for key, expected in field_types.items():
             if key not in backend_config:

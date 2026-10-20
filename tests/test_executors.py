@@ -1172,3 +1172,9 @@ class TestCUNQAFactoryConfigValidation:
             )
         assert executor._config.startup_timeout_s == 30
         assert executor._config.poll_interval_s == 2
+
+    def test_seed_key_is_rejected_because_it_is_not_applied(self) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            ExecutorFactory.create_executor("cunqa", {"provider": "CUNQA", "seed": 7})
+        assert "'seed'" in str(exc_info.value)
+        assert "omit" in str(exc_info.value)
