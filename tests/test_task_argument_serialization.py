@@ -364,3 +364,39 @@ async def test_headline_example_dispatches_end_to_end_with_no_worker_loads():
     assert value == pytest.approx(expected)
     assert _deserialize_value(json.loads(raw)["result"]) == pytest.approx(expected)
     assert loads_calls == []
+
+
+@pytest.mark.asyncio
+async def test_argument_over_the_size_cap_names_task_and_argument_and_is_never_submitted():
+    from marqov.workflows.activity import MAX_RESULT_BYTES
+
+    @task
+    def takes_blob(value, blob=None):
+        return 1
+
+    # A str encodes to its length plus two quote bytes.
+    at_limit = "x" * (MAX_RESULT_BYTES - 2)
+    just_over = "x" * (MAX_RESULT_BYTES - 1)
+
+    @workflow
+    def fits():
+        return takes_blob(1, blob=at_limit)
+
+    @workflow
+    def too_big_positional():
+        return takes_blob(just_over)
+
+    @workflow
+    def too_big_keyword():
+        return takes_blob(1, blob=just_over)
+
+    fits()._prepare_workflow_input()
+
+    with pytest.raises(ValueError, match=r"takes_blob.*keyword argument 'blob'.*over the"):
+        too_big_keyword()._prepare_workflow_input()
+
+    client = MagicMock()
+    client.start_workflow = AsyncMock()
+    with pytest.raises(ValueError, match=r"takes_blob.*positional argument 0.*over the"):
+        await too_big_positional().run(client)
+    client.start_workflow.assert_not_called()

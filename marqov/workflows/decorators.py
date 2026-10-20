@@ -124,28 +124,44 @@ def _transport_arg(value: Any) -> Any:
         ) from exc
 
 
+def _transport_input(func_name: str, label: str, value: Any) -> Any:
+    """Encode one argument, naming the task and argument on failure.
+
+    The encoded argument's JSON is capped at ``activity.MAX_RESULT_BYTES``, the
+    same limit the result side applies to a task's ``result.json``.
+    """
+    import json
+
+    from marqov.workflows.activity import MAX_RESULT_BYTES
+
+    try:
+        encoded = _transport_arg(value)
+    except TypeError as exc:
+        raise TypeError(
+            f"Task {func_name!r}: {label} cannot be sent to the task: {exc}"
+        ) from exc
+    size = len(json.dumps(encoded).encode("utf-8"))
+    if size > MAX_RESULT_BYTES:
+        raise ValueError(
+            f"Task {func_name!r}: {label} encodes to {size} bytes, over the "
+            f"{MAX_RESULT_BYTES}-byte limit (the task result limit, aligned with "
+            f"Temporal's ~4 MiB gRPC payload limit). Pass large data by reference."
+        )
+    return encoded
+
+
 def _transport_inputs(
     func_name: str, args: list[Any], kwargs: dict[str, Any]
 ) -> tuple[list[Any], dict[str, Any]]:
     """Encode one node's arguments, naming the task and argument on failure."""
-    encoded_args: list[Any] = []
-    for position, arg in enumerate(args):
-        try:
-            encoded_args.append(_transport_arg(arg))
-        except TypeError as exc:
-            raise TypeError(
-                f"Task {func_name!r}: positional argument {position} cannot be sent "
-                f"to the task: {exc}"
-            ) from exc
-    encoded_kwargs: dict[str, Any] = {}
-    for key, value in kwargs.items():
-        try:
-            encoded_kwargs[key] = _transport_arg(value)
-        except TypeError as exc:
-            raise TypeError(
-                f"Task {func_name!r}: keyword argument {key!r} cannot be sent "
-                f"to the task: {exc}"
-            ) from exc
+    encoded_args = [
+        _transport_input(func_name, f"positional argument {position}", arg)
+        for position, arg in enumerate(args)
+    ]
+    encoded_kwargs = {
+        key: _transport_input(func_name, f"keyword argument {key!r}", value)
+        for key, value in kwargs.items()
+    }
     return encoded_args, encoded_kwargs
 
 
@@ -367,6 +383,9 @@ class WorkflowDispatch:
         Raises:
             TypeError: If a task argument cannot be cloudpickled; the message
                 names the task and the argument position or keyword.
+            ValueError: If an encoded task argument's JSON exceeds
+                ``activity.MAX_RESULT_BYTES`` (3 MiB); the message names the
+                task and the argument position or keyword.
         """
         # Get execution levels (parallel groups)
         execution_levels = self.graph.get_execution_order()
