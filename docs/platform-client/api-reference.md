@@ -217,7 +217,9 @@ backends: list[Backend] = client.backends()
 
 Fetch the list of available quantum backends from the platform.
 
-Returns `Backend` instances ordered by the server's display order.
+Returns `Backend` instances in the order of the server's response; the client does
+not sort. Fields it does not map (including any server display-order field) are
+available in `Backend.extra`.
 
 **Raises:** `MarqovPlatformError` on any non-2xx response.
 
@@ -428,7 +430,7 @@ All inherit from `MarqovPlatformError`. Import any from `marqov.platform`:
 | `MarqovPlatformError` | Base for all platform errors; `.message`, `.code`, `.status` |
 | `AuthenticationError` | Missing/invalid/revoked API key |
 | `PermissionTierError` | Plan tier does not permit the resource |
-| `PaidBackendNotSupportedYet` | Paid backend requested in v1.0 (free-path only) |
+| `PaidBackendNotSupportedYet` | Server rejected the backend with `analysis_required` (it needs a pre-run cost analysis, i.e. paid backends) |
 | `BackendUnavailable` | Backend offline or unrecognised |
 | `InvalidProgram` | Server rejected the program (bad gates, syntax, etc.) |
 | `JobFailed` | Job reached a failure terminal state |

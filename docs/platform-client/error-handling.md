@@ -20,7 +20,7 @@ message.
 |-----------|-------------------|--------|
 | `AuthenticationError` | API key is missing, invalid, or has been revoked — raised at construction if no key is found, or on HTTP 401 | No — fix the key first |
 | `PermissionTierError` | Your plan does not permit access to the requested resource (HTTP 403) | No — upgrade plan or contact support |
-| `PaidBackendNotSupportedYet` | The backend requires a pre-run cost analysis (paid backends); v1.0 only routes free backends | No — choose a free backend (e.g. `dwave-sim`) |
+| `PaidBackendNotSupportedYet` | The server rejected the backend with `analysis_required` because it requires a pre-run cost analysis (paid backends); the client does not check the slug itself | No — choose a free backend (e.g. `dwave-sim`) |
 | `BackendUnavailable` | The requested backend is known but currently offline or unrecognised | Maybe — retry with back-off or choose another backend |
 | `InvalidProgram` | The submitted program was rejected by the server (bad QASM, unsupported gates, too many qubits, malformed body) | No — fix the program |
 | `JobFailed` | The job reached the `failed` or `dispatch_failed` terminal state | Depends — inspect `message`, but see caveat below |

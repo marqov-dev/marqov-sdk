@@ -568,8 +568,10 @@ class MarqovClient:
         the snake_case names used by :class:`~marqov.platform._models.Backend`.
 
         Returns:
-            List of :class:`~marqov.platform._models.Backend` instances, ordered
-            by the server's ``displayOrder`` field.
+            List of :class:`~marqov.platform._models.Backend` instances, in the
+            order of the server's response (no client-side sort).  Fields the
+            client does not map, including any server display-order field,
+            are available in :attr:`~marqov.platform._models.Backend.extra`.
 
         Raises:
             :class:`~marqov.platform.errors.MarqovPlatformError`: Any non-2xx
