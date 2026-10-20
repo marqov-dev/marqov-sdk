@@ -28,6 +28,8 @@ rather than a failure, but the first upload of a version is still one-way.
       a dated entry with no tag never shipped; fold it in.
 - [ ] Credit contributors: `git shortlog -sne vLAST..main`.
 - [ ] Bump `__version__` in `marqov/__init__.py` (single source; pyproject is `dynamic`).
+      In the same commit, move the supported row in `SECURITY.md` to the new
+      minor: `tests/test_version.py` pins the table to the current minor.
 - [ ] No stale version strings: `git grep '<previous-version>'`.
 
 ## 2. Pre-flight

@@ -5,7 +5,67 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
-## [Unreleased]
+## [0.10.0] — 2026-10-20
+
+A correctness release. A review of the 0.8.1 to 0.9.1 changes found
+twenty-one defects, and a second pass closed nine more open issues in the
+same vein. The common threads: remote executors keep the provider job
+identity on every exit after submission; provenance records report what was
+observed rather than what was requested; options and settings an executor
+cannot apply now fail loudly instead of being ignored; and workflow task
+arguments travel intact. A dependency ceiling on `qiskit` works around an
+upstream break on Linux.
+
+### Upgrading
+
+These changes can alter the behaviour of existing code; the entries below
+give the detail.
+
+- Options an entry point does not apply now raise `TypeError` instead of
+  being ignored: `MarqovDevice.run()` accepts `verbatim` and
+  `disable_qubit_rewiring` on the cloud Braket path and nothing on the
+  local, `marqov-sim`, IBM and Azure paths; `BraketExecutor.execute()`
+  accepts the same two; `LocalExecutor`, `CudaqExecutor`, `RigettiExecutor`,
+  `IonQExecutor`, `AzureQuantumExecutor` and `CUNQAExecutor` accept none;
+  `QuantinuumExecutor` accepts only the options pytket's `process_circuits`
+  reads (`max_cost`, `group`, `pytketpass`, `request_options` and per-call
+  `options` now raise; use the matching `QuantinuumExecutorConfig` fields).
+- `IBMExecutorConfig` raises `ValueError` at construction, including through
+  `ExecutorFactory`, for `resilience_level` other than 1 or
+  `poll_interval_seconds` other than 2.0; SamplerV2 cannot apply either.
+  Stored backend configs carrying other values must be edited.
+- `IBMExecutor.execute()` no longer wraps every post-submission failure in
+  `IBMExecutionError`. A result the SDK refuses after retrieving it raises
+  `ValueError` (shot accounting) or `NotImplementedError` (several classical
+  registers), each naming the job id. Code that re-polls on
+  `IBMExecutionError` should treat those two types as final.
+- `AzureQuantumExecutor.is_device_available()` returns False for Azure's
+  `Unavailable` (it was True); `get_status()` reports `maintenance` instead
+  of `offline` for an unreadable status, a missing target or an unknown
+  vocabulary value, and logs a warning naming a target the workspace does
+  not have.
+- `PreflightResult.dry_run_passed` is `bool | None` and `preflight()` returns
+  `None`, meaning no dry run was attempted; `if result.dry_run_passed:` is
+  now falsy by default. The no-cost warning text changed.
+- Workflow task arguments that are not JSON (a `Circuit`, an array, a
+  dataclass, a namedtuple, a dict with non-string keys, a set, a `datetime`)
+  now reach the task as the original objects instead of JSON-coerced forms;
+  a task result dict with non-string keys comes back from `run()` with its
+  keys intact. A task result hidden inside a set, frozenset, object attribute
+  or non-string-keyed dict, and any argument or node input over 3 MiB, now
+  fail at dispatch with `TypeError` or `ValueError` naming the task.
+  `WorkflowDispatch.run()` and `run_with_ids()` return decoded objects, not
+  the `{"__cloudpickle__": ...}` envelope.
+- `ExecutorFactory.get_supported_providers()` and `is_provider_supported()`
+  now include `"CUNQA"` and `create_executor` routes it; a CUNQA config with
+  a wrongly typed value or a `seed` key raises `ValueError`.
+- `QBRemoteExecutor.get_status()` and `SpeQtrumExecutor.get_status()` return a
+  `DeviceStatus` with status `maintenance` instead of raising;
+  `SpeQtrumExecutor` raises `ImportError` at construction without `qilisdk`.
+- Every extra that declares `qiskit` caps it below 2.6; the `[ibm]` and `[all]`
+  extras require `qiskit-ibm-runtime>=0.21.0`. Environments that pin
+  `qiskit>=2.6` cannot resolve this release until the cap is lifted.
+- `Circuit.to_openqasm()` and `to_qiskit()` always name the register `q`.
 
 ### Fixed
 
@@ -79,7 +139,41 @@ release.
 - `ExecutorFactory.get_supported_providers()` and `is_provider_supported()` now
   include Alice & Bob, and the README provider table lists it. (marqov-sdk#249)
 
+- `MarqovDevice.run()` and every executor's `execute()` raise `TypeError`
+  for options they do not apply, naming the entry point, the option and the
+  supported set; `verbatim=True` can no longer vanish on a path that does not
+  implement it. (marqov-sdk#271, closes marqov-sdk#77)
+
+- `IBMExecutorConfig` rejects `resilience_level` and `poll_interval_seconds`
+  values the SamplerV2 path cannot apply instead of silently ignoring them.
+  (marqov-sdk#268, closes marqov-sdk#79)
+
+- Azure `is_device_available()` no longer reports an `Unavailable` target as
+  available, `get_status()` reports an unreadable status as `maintenance`
+  rather than `offline`, and a target missing from the workspace is logged.
+  (marqov-sdk#267, closes marqov-sdk#132)
+
+- `preflight()` no longer reports a dry run it never attempted or implies a
+  budget check; `experiment_config` key names are logged at debug level,
+  never values. (marqov-sdk#270, closes marqov-sdk#163)
+
+- Workflow task arguments that are not JSON travel in the same cloudpickle
+  envelope as results, with NumPy scalars unboxed, so the documented
+  `Circuit`-argument example dispatches; each argument and each node's input
+  are capped at 3 MiB before submission; a task result the worker cannot
+  resolve is refused at dispatch; non-string dict keys survive in both
+  directions. (marqov-sdk#272, closes marqov-sdk#142)
+
+- `ExecutorFactory` routes the `"CUNQA"` provider and validates its config
+  values. (marqov-sdk#269, closes marqov-sdk#139)
+
 ### Changed
+
+- The lockfile (`uv.lock`, dev and CI only) upgrades urllib3, pyjwt, pillow,
+  oauthlib, anyio and pyasn1 past their advisories; the cryptography and
+  setuptools advisories remain open, pinned by azure-quantum and
+  amazon-braket. Nothing a PyPI user installs changes. (marqov-sdk#266,
+  marqov-sdk#186)
 
 - The `[ibm]` and `[all]` extras require `qiskit-ibm-runtime>=0.21.0`, the first
   release that ships `SamplerV2`, which `IBMExecutor` imports. (marqov-sdk#247)
@@ -97,6 +191,19 @@ release.
   records, the Rigetti `cancel` docstring, and the squash-merge note in
   `RELEASING.md`. The four timeouts docs now say where the job id is logged
   when a wait is interrupted. (marqov-sdk#250, marqov-sdk#251)
+
+- The Python 3.13 qualification record is regenerated from a `main` commit
+  (the previous Linux record cited a pull-request merge ref that no branch
+  reaches), and the per-profile test counts in `docs/python-compatibility.md`
+  match it again. (marqov-sdk#263)
+
+- `SECURITY.md` lists the supported minor (pinned by a test), CONTRIBUTING
+  documents `DeviceStatus.execution_windows` and the current quilc/qvm flags,
+  the platform-client docs describe the paid-backend error and `backends()`
+  ordering as the code behaves, and `@task(executor=...)` is documented as
+  reserved with `provider_env` not wired for dispatched tasks.
+  (marqov-sdk#269, marqov-sdk#272, closes marqov-sdk#167, marqov-sdk#151,
+  marqov-sdk#145)
 
 ## [0.9.1] — 2026-10-10
 
