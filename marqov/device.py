@@ -7,13 +7,9 @@ from typing import Any
 
 from marqov.backends import is_azure, is_braket, is_ibm, is_simulator
 from marqov.circuits import Circuit
-from marqov._braket_native import prepare_braket, validate_options
+from marqov._braket_native import SUPPORTED_EXECUTE_OPTIONS, prepare_braket, validate_options
 from marqov._optional import require_braket
 from marqov.executors.base import reject_unsupported_options
-
-# run() options each dispatch path applies. Paths not listed read no options,
-# so any option there would be dropped; reject_unsupported_options raises instead.
-_CLOUD_BRAKET_RUN_OPTIONS = frozenset({"verbatim", "disable_qubit_rewiring"})
 
 
 def _run_loop_safe(fn):
@@ -405,7 +401,8 @@ class MarqovDevice:
                              self._params.get("device_arn") if cloud_braket else None)
         reject_unsupported_options(
             f"MarqovDevice.run() on backend {self._backend!r}", kwargs,
-            _CLOUD_BRAKET_RUN_OPTIONS if cloud_braket else (),
+            # Only the cloud Braket path applies options; elsewhere any option would be dropped.
+            SUPPORTED_EXECUTE_OPTIONS if cloud_braket else (),
         )
         native_circuit = (
             prepare_braket(marqov_circuit, preserve_qubit_labels=preserve_qubit_labels,

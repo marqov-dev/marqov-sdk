@@ -176,3 +176,23 @@ async def test_quantinuum_forwards_documented_pytket_options():
     assert backend.process_circuit.call_args.kwargs == {
         "n_shots": 4, "postprocess": True, "seed": 7,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "option,value",
+    [
+        ("max_cost", 5),
+        ("group", "usage"),
+        ("pytketpass", object()),
+        ("request_options", {}),
+        ("options", {"tket-opt-level": 0}),
+        ("api_handler", object()),
+    ],
+)
+async def test_quantinuum_refuses_options_pytket_process_circuit_never_reads(option, value):
+    """pytket-quantinuum 0.59.1 documents these but drops them in process_circuits."""
+    executor = EXECUTORS["QuantinuumExecutor"](None)
+    executor._get_backend = AsyncMock(side_effect=AssertionError("provider reached"))
+    with pytest.raises(TypeError, match=rf"QuantinuumExecutor\.execute\(\).*{option}"):
+        await executor.execute(Circuit().x(0).z(1), shots=4, **{option: value})

@@ -63,13 +63,16 @@ class QuantinuumExecutorConfig:
     timeout_seconds: float | None = 300.0
     optimisation_level: int = 2
 
-# Options forwarded to pytket's process_circuit, which reads the ones it knows
-# and ignores the rest; anything outside this documented set raises instead.
+# Options forwarded to pytket's process_circuit, which ignores keys it does not
+# read, so anything outside this set raises instead. Derived from what
+# pytket-quantinuum 0.59.1 QuantinuumBackend.process_circuits actually reads
+# (valid_check plus its kwargs.get calls), not from its docstring, which also
+# lists group, pytketpass, options, request_options and max_cost; that version
+# never reads them per call. Re-derive this set on any pytket-quantinuum floor bump.
 FORWARDED_EXECUTE_OPTIONS = frozenset({
-    "valid_check", "postprocess", "simplify_initial", "noisy_simulation", "group",
-    "wasm_file_handler", "pytketpass", "options", "request_options", "language",
-    "leakage_detection", "n_leakage_detection_qubits", "seed", "multithreading",
-    "max_cost",
+    "valid_check", "postprocess", "simplify_initial", "noisy_simulation",
+    "wasm_file_handler", "language", "leakage_detection", "n_leakage_detection_qubits",
+    "seed", "multithreading",
 })
 
 
@@ -179,10 +182,14 @@ class QuantinuumExecutor(BaseExecutor):
             circuit: The circuit to execute.
             shots: Number of measurement shots.
             **kwargs: Forwarded to pytket's ``process_circuit``. Only the
-                options in ``FORWARDED_EXECUTE_OPTIONS`` (the kwargs
-                pytket-quantinuum documents for ``process_circuits``) are
-                accepted; pytket ignores unknown keys, so any other option
-                raises TypeError before the backend is initialized.
+                options in ``FORWARDED_EXECUTE_OPTIONS`` (the ones
+                pytket-quantinuum 0.59.1 ``process_circuits`` actually reads)
+                are accepted; pytket ignores unknown keys, so any other option
+                raises TypeError before the backend is initialized. That
+                includes ``api_handler``, ``group`` and ``options``, which
+                pytket reads only when the backend is constructed: use
+                ``QuantinuumExecutorConfig.api_handler``, ``.group`` and
+                ``.options`` (passed as backend constructor keywords) instead.
 
         Returns:
             ExecutionResult with measurement counts and metadata.

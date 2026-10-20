@@ -10,6 +10,9 @@ import quantumflow as qf
 
 from marqov._optional import require_braket
 
+# The only extra run options either Braket entry point applies; anything else raises.
+SUPPORTED_EXECUTE_OPTIONS = frozenset({"verbatim", "disable_qubit_rewiring"})
+
 
 def native_braket(circuit):
     """Export native gates without translating or compacting source labels."""

@@ -36,7 +36,7 @@ except ModuleNotFoundError as error:
         raise
     boto3 = AwsDevice = AwsSession = BraketCircuit = None
 
-from marqov._braket_native import prepare_braket, validate_options
+from marqov._braket_native import SUPPORTED_EXECUTE_OPTIONS, prepare_braket, validate_options
 from marqov.executors._blocking import BlockingCalls
 from marqov.executors._braket_provenance import measurement_provenance
 from marqov.executors._counts import allocate_counts
@@ -52,9 +52,6 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
-
-# The only execute() options this executor applies; anything else raises.
-SUPPORTED_EXECUTE_OPTIONS = frozenset({"verbatim", "disable_qubit_rewiring"})
 
 
 def _simulator_execution_duration_ms(result: Any) -> int | None:
