@@ -65,8 +65,16 @@ This does not implement dynamic graph execution or all Python operations on
 unresolved results.
 
 The existing `run()`, `start()` and private legacy Temporal input builder retain
-their transport/result behavior. They do not consume the new return template;
-the shape-preserving contract is opt-in through `capture()`. A manually constructed
+their result behavior. They do not consume the new return template; the
+shape-preserving contract is opt-in through `capture()`. The legacy builder
+encodes task arguments with the same rule as task results: JSON values pass
+through (NumPy bool/integer/float scalars unboxed, tuples as lists), task
+references stay `__proxy__` placeholders, and any other object, such as a
+`Circuit`, an array or a namedtuple holding no task reference, travels as a
+`__cloudpickle__` envelope that only the task child unpickles. An argument that
+cannot be cloudpickled raises `TypeError` naming the task and argument before
+anything is submitted. The graph and the capture keep the original argument
+objects. A manually constructed
 `WorkflowDispatch` without a retained result refuses capture. SDK core remains
 independent of the optional hosted API client and requires no platform account to
 construct a capture.

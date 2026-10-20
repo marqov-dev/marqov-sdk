@@ -49,18 +49,104 @@ _NO_CAPTURE_RESULT = object()
 
 
 def _serialize_arg(arg: Any) -> Any:
-    """Serialize an argument for transport.
+    """Serialize an argument for the transport graph.
 
-    Converts TaskProxy objects to placeholder dicts.
+    Converts TaskProxy objects to placeholder dicts inside lists, tuples
+    (namedtuples keep their type) and dict values. Other objects are kept
+    as-is in the graph; ``_transport_arg`` encodes them for Temporal.
     """
     if isinstance(arg, TaskProxy):
         return {"__proxy__": True, "node_id": arg.node_id}
-    elif isinstance(arg, (list, tuple)):
-        return type(arg)(_serialize_arg(item) for item in arg)
+    elif isinstance(arg, list):
+        return [_serialize_arg(item) for item in arg]
+    elif isinstance(arg, tuple):
+        items = [_serialize_arg(item) for item in arg]
+        if type(arg) is not tuple and hasattr(type(arg), "_make"):
+            return type(arg)._make(items)
+        return tuple(items)
     elif isinstance(arg, dict):
         return {k: _serialize_arg(v) for k, v in arg.items()}
     else:
         return arg
+
+
+def _is_marker(value: Any) -> bool:
+    """Return True for a ``__proxy__`` placeholder or a ``__cloudpickle__`` envelope."""
+    return isinstance(value, dict) and bool(value.get("__proxy__") or value.get("__cloudpickle__"))
+
+
+def _contains_placeholder(value: Any) -> bool:
+    """Return True if a ``__proxy__`` placeholder sits anywhere inside ``value``."""
+    if isinstance(value, dict):
+        return bool(value.get("__proxy__")) or any(
+            _contains_placeholder(item) for item in value.values()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_contains_placeholder(item) for item in value)
+    return False
+
+
+def _transport_arg(value: Any) -> Any:
+    """Encode a graph argument as JSON data for the Temporal workflow input.
+
+    The same rule as task results (``activity._serialize_value``): JSON values
+    pass through, NumPy bool/integer/float scalars are unboxed, lists and
+    tuples become lists, and any other object travels in the
+    ``__cloudpickle__`` envelope, which only the task child decodes. A
+    ``__proxy__`` placeholder or an existing envelope passes through unchanged
+    and is never pickled, because ``prepare_node_inputs`` resolves placeholders
+    by that marker. A namedtuple (or other tuple subclass) is pickled whole, so
+    it arrives as the same type, unless it holds a placeholder, in which case
+    it arrives as a list like a plain tuple.
+
+    Raises:
+        TypeError: If a value cannot be cloudpickled.
+    """
+    from marqov.workflows.activity import _cloudpickle_envelope, _unbox_numpy_scalar
+
+    value = _unbox_numpy_scalar(value)
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    elif isinstance(value, list) or (
+        isinstance(value, tuple) and (type(value) is tuple or _contains_placeholder(value))
+    ):
+        return [_transport_arg(item) for item in value]
+    elif isinstance(value, dict):
+        if _is_marker(value):
+            return value
+        return {k: _transport_arg(v) for k, v in value.items()}
+    try:
+        return _cloudpickle_envelope(value)
+    except Exception as exc:
+        raise TypeError(
+            f"value of type {type(value).__module__}.{type(value).__qualname__} cannot "
+            f"be serialized with cloudpickle: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
+def _transport_inputs(
+    func_name: str, args: list[Any], kwargs: dict[str, Any]
+) -> tuple[list[Any], dict[str, Any]]:
+    """Encode one node's arguments, naming the task and argument on failure."""
+    encoded_args: list[Any] = []
+    for position, arg in enumerate(args):
+        try:
+            encoded_args.append(_transport_arg(arg))
+        except TypeError as exc:
+            raise TypeError(
+                f"Task {func_name!r}: positional argument {position} cannot be sent "
+                f"to the task: {exc}"
+            ) from exc
+    encoded_kwargs: dict[str, Any] = {}
+    for key, value in kwargs.items():
+        try:
+            encoded_kwargs[key] = _transport_arg(value)
+        except TypeError as exc:
+            raise TypeError(
+                f"Task {func_name!r}: keyword argument {key!r} cannot be sent "
+                f"to the task: {exc}"
+            ) from exc
+    return encoded_args, encoded_kwargs
 
 
 @overload
@@ -264,24 +350,30 @@ class WorkflowDispatch:
 
         This pre-computes execution levels and serializes all node data
         so the workflow only receives primitive types (no marqov imports needed).
+        Task arguments are encoded by ``_transport_arg``: non-JSON values (a
+        ``Circuit``, an array) travel as ``__cloudpickle__`` envelopes that
+        only the task child unpickles.
 
         Returns:
             Dictionary with nodes, execution_levels, and output_nodes.
-        """
-        import json
 
+        Raises:
+            TypeError: If a task argument cannot be cloudpickled; the message
+                names the task and the argument position or keyword.
+        """
         # Get execution levels (parallel groups)
         execution_levels = self.graph.get_execution_order()
 
         # Serialize all nodes as dicts
         nodes: dict[str, dict[str, Any]] = {}
         for node_id, node in self.graph.nodes.items():
+            args, kwargs = _transport_inputs(node.func_name, node.args, node.kwargs)
             nodes[node_id] = {
                 "node_id": node.id,
                 "func_name": node.func_name,
                 "func_ref": node.func_ref,
-                "args": node.args,
-                "kwargs": node.kwargs,
+                "args": args,
+                "kwargs": kwargs,
                 "retries": node.config.retries,
                 "timeout_seconds": node.config.timeout_seconds,
                 "dependencies": node.dependencies,

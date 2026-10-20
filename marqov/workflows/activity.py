@@ -167,14 +167,26 @@ def _unbox_numpy_scalar(value: Any) -> Any:
     return value
 
 
+def _cloudpickle_envelope(value: Any) -> dict[str, Any]:
+    """Wrap a non-JSON-native value in the ``__cloudpickle__`` transport envelope.
+
+    Shared by task results (here and in _task_child) and task arguments
+    (decorators._serialize_arg), so both directions use one envelope shape.
+    """
+    import cloudpickle
+
+    return {
+        "__cloudpickle__": True,
+        "data": base64.b64encode(cloudpickle.dumps(value)).decode("utf-8"),
+    }
+
+
 def _serialize_value(value: Any) -> Any:
     """Serialize a value for JSON transport.
 
     Uses cloudpickle for complex objects, JSON-compatible types pass through.
     NumPy bool/integer/float scalars are unboxed to Python bool/int/float.
     """
-    import cloudpickle
-
     value = _unbox_numpy_scalar(value)
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
@@ -187,10 +199,7 @@ def _serialize_value(value: Any) -> Any:
         return {k: _serialize_value(v) for k, v in value.items()}
     else:
         # Complex object - use cloudpickle
-        return {
-            "__cloudpickle__": True,
-            "data": base64.b64encode(cloudpickle.dumps(value)).decode("utf-8"),
-        }
+        return _cloudpickle_envelope(value)
 
 
 def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
