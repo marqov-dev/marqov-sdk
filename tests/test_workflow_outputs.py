@@ -225,3 +225,34 @@ async def test_run_returns_decoded_task_outputs():
     assert "_workflow_metadata" in enriched
     assert dataclasses.is_dataclass(enriched["result"])
     assert enriched["result"].shots == 100
+
+
+@task
+def produce_int_key_dict():
+    return {0: 0.3, 1: 0.7}
+
+
+@workflow
+def int_key_dict_workflow():
+    return produce_int_key_dict()
+
+
+@pytest.mark.asyncio
+async def test_run_returns_non_str_key_dict_with_its_keys():
+    from temporalio.testing import WorkflowEnvironment
+    from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+
+    from marqov.workflows.activity import execute_task, prepare_node_inputs
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="marqov-workflows",
+            workflows=[JobWorkflow],
+            activities=[execute_task, prepare_node_inputs],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            result = await int_key_dict_workflow().run(env.client)
+
+    assert result == {0: 0.3, 1: 0.7}
+    assert all(type(k) is int for k in result)

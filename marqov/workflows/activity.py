@@ -187,13 +187,17 @@ def _serialize_value(value: Any) -> Any:
 
     Uses cloudpickle for complex objects, JSON-compatible types pass through.
     NumPy bool/integer/float scalars are unboxed to Python bool/int/float.
+    A dict with any non-str key is pickled whole so it keeps its keys (JSON
+    would turn them into strings).
+
+    Mirrored in _task_child._serialize_value; keep the two in sync.
     """
     value = _unbox_numpy_scalar(value)
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     elif isinstance(value, (list, tuple)):
         return [_serialize_value(item) for item in value]
-    elif isinstance(value, dict):
+    elif isinstance(value, dict) and all(isinstance(k, str) for k in value):
         # Check for our special marker types
         if value.get("__cloudpickle__"):
             return value

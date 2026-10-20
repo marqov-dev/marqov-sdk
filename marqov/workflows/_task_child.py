@@ -56,7 +56,10 @@ def _unbox_numpy_scalar(value: Any) -> Any:
 
 
 def _serialize_value(value: Any) -> Any:
-    """Serialize a value for JSON transport (mirrors activity._serialize_value)."""
+    """Serialize a value for JSON transport (mirrors activity._serialize_value).
+
+    A dict with any non-str key is pickled whole so it keeps its keys.
+    """
     import cloudpickle
 
     value = _unbox_numpy_scalar(value)
@@ -64,7 +67,7 @@ def _serialize_value(value: Any) -> Any:
         return value
     elif isinstance(value, (list, tuple)):
         return [_serialize_value(item) for item in value]
-    elif isinstance(value, dict):
+    elif isinstance(value, dict) and all(isinstance(k, str) for k in value):
         if value.get("__cloudpickle__"):
             return value
         return {k: _serialize_value(v) for k, v in value.items()}

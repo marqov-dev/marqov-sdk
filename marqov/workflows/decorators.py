@@ -519,11 +519,12 @@ class WorkflowDispatch:
             node yields that task's return value, several output nodes yield a
             dict keyed by node ID, and a workflow with no output nodes yields
             a dict of every node's result. JSON values (None, bool, int,
-            float, str, list, dict) come back as-is, with tuples as lists and
-            NumPy bool/integer/float scalars as Python bool/int/float. Any
-            other return value (a dataclass, an ``ExecutionResult``, an
-            array) travels as cloudpickle bytes and is unpickled here, so the
-            classes it needs must be importable by the caller.
+            float, str, list, dict with str keys) come back as-is, with tuples
+            (namedtuples included) as lists and NumPy bool/integer/float
+            scalars as Python bool/int/float. Any other return value (a
+            dataclass, an ``ExecutionResult``, an array, a dict with a
+            non-str key) travels as cloudpickle bytes and is unpickled here,
+            so the classes it needs must be importable by the caller.
         """
         import json
         import uuid
