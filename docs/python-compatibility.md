@@ -24,6 +24,11 @@ package versions. Linux used CPython 3.13.16; macOS used CPython 3.13.13.
 OS and Python patch versions differ, so these are measured combinations rather
 than an experiment isolating operating-system effects.
 
+The frozen requirements files under `docs/qualification/` are evidence of what
+was installed during qualification, not dependency manifests. Dependabot alerts
+against the pinned versions in them are expected and are not acted on by
+editing the files.
+
 ## Python 3.13 matrix
 
 “Checks pass” means installation, dependency consistency, site-packages imports
