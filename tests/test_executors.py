@@ -1137,3 +1137,38 @@ class TestCUNQAFactoryDispatch:
             "sys.exit(1 if 'cunqa' in sys.modules else 0)"
         )
         assert subprocess.run([sys.executable, "-c", code]).returncode == 0
+
+
+class TestCUNQAFactoryConfigValidation:
+    """CUNQA config values are type-checked in the factory, naming the bad key."""
+
+    @pytest.mark.parametrize(
+        ("key", "value", "received"),
+        [
+            ("n_qpus", "4", "str"),
+            ("n_qpus", True, "bool"),
+            ("n_qpus", 4.0, "float"),
+            ("mem_per_qpu_gb", "4", "str"),
+            ("startup_timeout_s", "60", "str"),
+            ("poll_interval_s", None, "NoneType"),
+            ("poll_interval_s", True, "bool"),
+            ("co_located", "true", "str"),
+            ("classical_comm", 1, "int"),
+            ("simulator", 3, "int"),
+            ("walltime", 600, "int"),
+        ],
+    )
+    def test_bad_value_raises_naming_key_and_type(self, key: str, value: Any, received: str) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            ExecutorFactory.create_executor("cunqa", {"provider": "CUNQA", key: value})
+        message = str(exc_info.value)
+        assert repr(key) in message
+        assert received in message
+
+    def test_int_accepted_for_float_fields(self) -> None:
+        with patch("marqov.executors.cunqa._CunqaModuleClient", MagicMock()):
+            executor = ExecutorFactory.create_executor(
+                "cunqa", {"provider": "CUNQA", "startup_timeout_s": 30, "poll_interval_s": 2}
+            )
+        assert executor._config.startup_timeout_s == 30
+        assert executor._config.poll_interval_s == 2

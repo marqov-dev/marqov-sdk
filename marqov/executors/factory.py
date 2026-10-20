@@ -527,11 +527,32 @@ class ExecutorFactory:
         Returns:
             Configured CUNQAExecutor instance.
         """
-        keys = (
-            "n_qpus", "walltime", "simulator", "co_located", "classical_comm",
-            "quantum_comm", "mem_per_qpu_gb", "startup_timeout_s", "poll_interval_s",
-        )
-        return CUNQAExecutor(CUNQAExecutorConfig(**{k: backend_config[k] for k in keys if k in backend_config}))
+        # Expected type per CUNQAExecutorConfig field; the dataclass does not
+        # validate, so a wrong type would otherwise surface inside execute().
+        field_types: dict[str, type | tuple[type, ...]] = {
+            "n_qpus": int,
+            "walltime": str,
+            "simulator": str,
+            "co_located": bool,
+            "classical_comm": bool,
+            "quantum_comm": bool,
+            "mem_per_qpu_gb": int,
+            "startup_timeout_s": (int, float),
+            "poll_interval_s": (int, float),
+        }
+        kwargs: dict[str, Any] = {}
+        for key, expected in field_types.items():
+            if key not in backend_config:
+                continue
+            value = backend_config[key]
+            # bool is an int subclass; it is only valid where bool is expected.
+            if isinstance(value, bool) != (expected is bool) or not isinstance(value, expected):
+                names = expected.__name__ if isinstance(expected, type) else "number"
+                raise ValueError(
+                    f"CUNQA config key {key!r} must be {names}, got {type(value).__name__}"
+                )
+            kwargs[key] = value
+        return CUNQAExecutor(CUNQAExecutorConfig(**kwargs))
 
     # Backend slug -> PennyLane device name, for configs that give no ``device``.
     _LIGHTNING_SLUG_TO_DEVICE: dict[str, str] = {
