@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 
 from marqov.circuits import Circuit
-from marqov.executors.base import BaseExecutor, ExecutionResult
+from marqov.executors.base import BaseExecutor, ExecutionResult, reject_unsupported_options
 
 
 @dataclass
@@ -61,11 +61,15 @@ class LocalExecutor(BaseExecutor):
         Args:
             circuit: The circuit to execute.
             shots: Number of measurement shots.
-            **kwargs: Additional options (ignored for local).
+            **kwargs: Unsupported; any option raises TypeError.
 
         Returns:
             ExecutionResult with measurement counts.
+
+        Raises:
+            TypeError: If any keyword option is supplied.
         """
+        reject_unsupported_options("LocalExecutor.execute()", kwargs)
         circuit = self._validate_circuit(circuit)
 
         start_time = time.perf_counter()

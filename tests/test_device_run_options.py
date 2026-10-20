@@ -14,7 +14,14 @@ from braket.circuits import Circuit as BraketCircuit
 
 from marqov.circuits import Circuit
 from marqov.device import MarqovDevice
+from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorConfig
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
+from marqov.executors.cudaq import CudaqExecutor, CudaqExecutorConfig
+from marqov.executors.cunqa import CUNQAExecutor, CUNQAExecutorConfig
+from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
+from marqov.executors.local import LocalExecutor
+from marqov.executors.quantinuum import QuantinuumExecutor, QuantinuumExecutorConfig
+from marqov.executors.rigetti import RigettiExecutor, RigettiExecutorConfig
 
 ARN = "arn:aws:braket:us-west-1::device/qpu/rigetti/Cepheus-1-108Q"
 
@@ -109,3 +116,63 @@ async def test_verbatim_reaches_the_braket_submission_on_both_entry_points():
         names = instruction_names(submitted)
         assert names[0] == "StartVerbatimBox"
         assert names[-1] == "EndVerbatimBox"
+
+
+def azure(framework):
+    return AzureQuantumExecutor(
+        AzureQuantumExecutorConfig(
+            subscription_id="sub", resource_group="rg", workspace_name="ws",
+            location="eastus", target="ionq.simulator", framework=framework,
+        )
+    )
+
+
+EXECUTORS = {
+    "LocalExecutor": lambda transport: LocalExecutor(),
+    "CudaqExecutor": lambda transport: CudaqExecutor(CudaqExecutorConfig(target="qpp-cpu")),
+    "RigettiExecutor": lambda transport: RigettiExecutor(
+        RigettiExecutorConfig(quantum_processor_id="9q-square-qvm")
+    ),
+    "IonQExecutor": lambda transport: IonQExecutor(
+        IonQExecutorConfig(api_key="offline"), session=transport
+    ),
+    "AzureQuantumExecutor-qiskit": lambda transport: azure("qiskit"),
+    "AzureQuantumExecutor-cirq": lambda transport: azure("cirq"),
+    "CUNQAExecutor": lambda transport: CUNQAExecutor(
+        CUNQAExecutorConfig(n_qpus=1, walltime="00:05:00"), client=transport
+    ),
+    "QuantinuumExecutor": lambda transport: QuantinuumExecutor(
+        QuantinuumExecutorConfig(device_name="H2-1", simulator="state-vector")
+    ),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", sorted(EXECUTORS))
+@pytest.mark.parametrize("option", ["verbatum", "verbatim", "max_costs"])
+async def test_every_executor_refuses_options_it_does_not_apply(key, option):
+    """Executors that used to accept and drop options now name and refuse them."""
+    transport = Mock()
+    executor = EXECUTORS[key](transport)
+    owner = key.split("-")[0]
+    for name in ("_get_device", "_get_backend", "_get_qiskit_backend"):
+        if hasattr(executor, name):
+            setattr(executor, name, AsyncMock(side_effect=AssertionError("provider reached")))
+    with pytest.raises(TypeError, match=rf"{owner}\.execute\(\).*{option}"):
+        await executor.execute(Circuit().x(0).z(1), shots=4, **{option: True})
+    assert transport.mock_calls == []
+
+
+@pytest.mark.asyncio
+async def test_quantinuum_forwards_documented_pytket_options():
+    backend = Mock()
+    backend.get_compiled_circuit.side_effect = lambda circuit, **_: circuit
+    backend.process_circuit.return_value = ("job",)
+    backend.get_jobid.return_value = "job"
+    backend.get_result.return_value.get_counts.return_value = {(1, 0): 4}
+    executor = EXECUTORS["QuantinuumExecutor"](None)
+    executor._get_backend = AsyncMock(return_value=backend)
+    await executor.execute(Circuit().x(0).z(1), shots=4, postprocess=True, seed=7)
+    assert backend.process_circuit.call_args.kwargs == {
+        "n_shots": 4, "postprocess": True, "seed": 7,
+    }

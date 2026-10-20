@@ -45,7 +45,12 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from marqov.executors._blocking import BlockingCalls
-from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
+from marqov.executors.base import (
+    BaseExecutor,
+    DeviceStatus,
+    ExecutionResult,
+    reject_unsupported_options,
+)
 
 if TYPE_CHECKING:
     from marqov.circuits import Circuit
@@ -228,7 +233,7 @@ class AzureQuantumExecutor(BaseExecutor):
         Args:
             circuit: The quantum circuit to execute.
             shots: Number of measurement shots.
-            **kwargs: Additional backend-specific options.
+            **kwargs: Unsupported; any option raises TypeError.
 
         Returns:
             ExecutionResult with measurement counts and metadata.
@@ -236,7 +241,9 @@ class AzureQuantumExecutor(BaseExecutor):
         Raises:
             RuntimeError: If job fails or device is unavailable.
             NotImplementedError: If framework is not supported.
+            TypeError: If any keyword option is supplied.
         """
+        reject_unsupported_options("AzureQuantumExecutor.execute()", kwargs)
         circuit = self._validate_circuit(circuit)
 
         loop = asyncio.get_running_loop()

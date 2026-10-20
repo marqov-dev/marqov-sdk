@@ -44,7 +44,12 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from marqov.executors._counts import allocate_counts
-from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
+from marqov.executors.base import (
+    BaseExecutor,
+    DeviceStatus,
+    ExecutionResult,
+    reject_unsupported_options,
+)
 
 if TYPE_CHECKING:
     from marqov.circuits import Circuit
@@ -307,12 +312,13 @@ class IonQExecutor(BaseExecutor):
         Args:
             circuit: The quantum circuit to execute.
             shots: Number of measurement shots.
-            **kwargs: Additional backend-specific options (currently unused).
+            **kwargs: Unsupported; any option raises TypeError.
 
         Returns:
             ExecutionResult with measurement counts and metadata.
 
         Raises:
+            TypeError: If any keyword option is supplied.
             RuntimeError: If the job fails, is canceled by IonQ, or reports a
                 status the executor does not recognize. An unrecognized status
                 sends the remote job a best-effort cancel first.
@@ -330,6 +336,7 @@ class IonQExecutor(BaseExecutor):
         timeouts, but DNS, a continuing response or worker shutdown can take
         longer; this is not a hard process deadline or guaranteed provider cancel.
         """
+        reject_unsupported_options("IonQExecutor.execute()", kwargs)
         circuit = self._validate_circuit(circuit)
 
         if self.config.api_version == "0.4":

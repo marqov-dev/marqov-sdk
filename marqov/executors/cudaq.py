@@ -43,7 +43,12 @@ import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
-from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
+from marqov.executors.base import (
+    BaseExecutor,
+    DeviceStatus,
+    ExecutionResult,
+    reject_unsupported_options,
+)
 
 if TYPE_CHECKING:
     from marqov.circuits import Circuit
@@ -215,7 +220,7 @@ class CudaqExecutor(BaseExecutor):
         Args:
             circuit: The circuit to execute.
             shots: Number of measurement shots.
-            **kwargs: Ignored; present for interface compatibility.
+            **kwargs: Unsupported; any option raises TypeError.
 
         Returns:
             ExecutionResult with normalized measurement counts. ``metadata``
@@ -229,7 +234,9 @@ class CudaqExecutor(BaseExecutor):
         Raises:
             RuntimeError: If the sampler returned a different total than
                 ``shots``.
+            TypeError: If any keyword option is supplied.
         """
+        reject_unsupported_options("CudaqExecutor.execute()", kwargs)
         circuit = self._validate_circuit(circuit)
         cudaq = _import_cudaq()
 

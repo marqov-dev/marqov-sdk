@@ -70,7 +70,12 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
+from marqov.executors.base import (
+    BaseExecutor,
+    DeviceStatus,
+    ExecutionResult,
+    reject_unsupported_options,
+)
 
 if TYPE_CHECKING:
     from marqov.circuits import Circuit
@@ -212,6 +217,7 @@ class CUNQAExecutor(BaseExecutor):
         self._client = client if client is not None else _CunqaModuleClient()
 
     async def execute(self, circuit: "Circuit", shots: int = 1000, **kwargs: Any) -> ExecutionResult:
+        reject_unsupported_options("CUNQAExecutor.execute()", kwargs)
         circuit = self._validate_circuit(circuit)
         cfg = self._config
 
