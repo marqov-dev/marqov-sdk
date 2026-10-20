@@ -8,10 +8,11 @@ Protocol (file-based, never stdout):
 - Reads:  ``$WORKDIR/func_ref``   — raw bytes, base64-decoded cloudpickle of the fn
           ``$WORKDIR/args.json``  — JSON list of args (may contain __cloudpickle__ blobs)
           ``$WORKDIR/kwargs.json`` — JSON dict of kwargs
-- Writes: ``$WORKDIR/result.json`` — JSON: {"node_id": ..., "result": <serialized>}
-                                     or  {"node_id": ..., "error": <str>}
+- Writes: on success, ``$WORKDIR/result.json``: {"node_id": ..., "result": <serialized>}
+          on failure, ``$WORKDIR/error.json``:  {"node_id": ..., "error": <str>}
+          (``result.json`` is never written on failure)
 
-Exit codes: 0 = success, 1 = error (error written to result.json).
+Exit codes: 0 = success, 1 = error (error written to error.json).
 """
 
 from __future__ import annotations

@@ -187,8 +187,15 @@ def task(
 
     Args:
         func: The function to decorate.
-        name: Display name for the task. Defaults to function name.
-        executor: Which executor to use ("local", "braket").
+        name: Display name for the task. Defaults to function name. Recorded
+            on the graph's ``TaskConfig`` only; it is not sent to Temporal,
+            which sees the function name.
+        executor: Reserved. Recorded on the graph's ``TaskConfig`` for
+            introspection but not consulted when dispatching: the Temporal
+            workflow input carries no executor and ``execute_task`` has no
+            executor parameter, so every task runs the same way whatever
+            this says. It does not select a backend or supply credentials;
+            see ``marqov.workflows`` for how provider credentials reach a task.
         retries: Number of retry attempts on failure.
         timeout: Maximum execution time in seconds.
 
@@ -203,7 +210,7 @@ def task(
         >>> # Outside workflow: executes normally
         >>> result = add(1, 2)  # Returns 3
         >>>
-        >>> @task(executor="braket", timeout=600)
+        >>> @task(timeout=600)
         ... async def measure(circuit):
         ...     return await executor.run(circuit)
         >>>

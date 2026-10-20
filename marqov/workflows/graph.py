@@ -48,8 +48,9 @@ class TaskConfig:
     """Configuration for a task.
 
     Attributes:
-        name: Display name for the task.
-        executor: Which executor to use ("local", "braket").
+        name: Display name for the task. Graph-local: not sent to Temporal.
+        executor: Reserved. Recorded for introspection; not consulted when
+            dispatching (see ``marqov.workflows.task``).
         retries: Number of retry attempts on failure.
         timeout_seconds: Maximum execution time.
     """

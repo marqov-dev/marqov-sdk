@@ -242,6 +242,9 @@ async def execute_task(
         provider_env: Optional provider credentials to inject into the child env
             (e.g. AWS keys for a Braket task).  Never inherited from the parent
             process env — only what is explicitly passed here enters the child.
+            ``JobWorkflow`` never passes it, so a task dispatched through
+            ``WorkflowDispatch`` runs with no provider credentials. A host
+            runner that invokes this activity itself must supply them.
 
     Returns:
         JSON-encoded result with node_id and opaque result blob.

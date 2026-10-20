@@ -46,6 +46,16 @@ the workflow again is a new capture, not recovery of an accepted task attempt.
 Graph/function/argument/result data must not be assumed safe to deserialize in a
 trusted process. Neither requested configuration nor a capture grants authority.
 
+Of the requested configuration, the legacy Temporal path (`run()`,
+`run_with_ids()`, `start_with_ids()`, `dispatch()`) uses only `retries` and
+`timeout`. `@task(executor=...)` is reserved: it is
+recorded on `TaskConfig` and never sent to Temporal, and `execute_task` has no
+executor parameter. The display `name` is also graph-local. Task bodies run in a
+child process with an allowlisted environment; the only way a provider
+credential enters it is `execute_task`'s `provider_env` argument, which
+`JobWorkflow` never passes, so a task dispatched through `WorkflowDispatch` has
+no provider credentials.
+
 Argument dependency extraction now traverses list/tuple/dictionary values as
 recursively as SDK argument serialization. Repeated predecessors appear once,
 in first-occurrence order. Cyclic argument containers raise `ValueError`.
