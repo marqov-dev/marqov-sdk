@@ -9,6 +9,11 @@ from marqov.backends import is_azure, is_braket, is_ibm, is_simulator
 from marqov.circuits import Circuit
 from marqov._braket_native import prepare_braket, validate_options
 from marqov._optional import require_braket
+from marqov.executors.base import reject_unsupported_options
+
+# run() options each dispatch path applies. Paths not listed read no options,
+# so any option there would be dropped; reject_unsupported_options raises instead.
+_CLOUD_BRAKET_RUN_OPTIONS = frozenset({"verbatim", "disable_qubit_rewiring"})
 
 
 def _run_loop_safe(fn):
@@ -373,10 +378,11 @@ class MarqovDevice:
                       Requires cloud Braket Rigetti QPU, verbatim=True and
                       disable_qubit_rewiring=True. Rejects other backends.
                       No physical placement or capability qualification is implied.
-            **kwargs: Backend-specific options, honored only on the cloud
-                      AWS Braket path (`is_braket(self._params)` below) — the
-                      local/`marqov-sim` path (a Braket `LocalSimulator`) does
-                      not read `**kwargs` at all and silently ignores it:
+            **kwargs: Backend-specific options, accepted only on the cloud
+                      AWS Braket path (`is_braket(self._params)` below). Any
+                      other option, or any option at all on the local,
+                      `marqov-sim`, IBM or Azure paths, raises TypeError before
+                      the provider device is initialized:
                       - disable_qubit_rewiring (bool): prevent qubit remapping.
                       - verbatim (bool): submit under a verbatim box so the
                         compiler runs the gates exactly as given (required for
@@ -386,6 +392,9 @@ class MarqovDevice:
 
         Returns:
             Dictionary mapping bitstring outcomes to their counts.
+
+        Raises:
+            TypeError: If an option this backend's path does not apply is supplied.
         """
         marqov_circuit = self._normalize_circuit(circuit)
         cloud_braket = (self._backend not in ("local", "marqov-sim")
@@ -394,6 +403,10 @@ class MarqovDevice:
         if cloud_braket or preserve_qubit_labels is not False:
             validate_options(preserve_qubit_labels, kwargs,
                              self._params.get("device_arn") if cloud_braket else None)
+        reject_unsupported_options(
+            f"MarqovDevice.run() on backend {self._backend!r}", kwargs,
+            _CLOUD_BRAKET_RUN_OPTIONS if cloud_braket else (),
+        )
         native_circuit = (
             prepare_braket(marqov_circuit, preserve_qubit_labels=preserve_qubit_labels,
                            options=kwargs, device_arn=self._params["device_arn"],

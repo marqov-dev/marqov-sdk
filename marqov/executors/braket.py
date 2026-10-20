@@ -40,13 +40,21 @@ from marqov._braket_native import prepare_braket, validate_options
 from marqov.executors._blocking import BlockingCalls
 from marqov.executors._braket_provenance import measurement_provenance
 from marqov.executors._counts import allocate_counts
-from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
+from marqov.executors.base import (
+    BaseExecutor,
+    DeviceStatus,
+    ExecutionResult,
+    reject_unsupported_options,
+)
 
 if TYPE_CHECKING:
     from marqov.circuits import Circuit
 
 
 logger = logging.getLogger(__name__)
+
+# The only execute() options this executor applies; anything else raises.
+SUPPORTED_EXECUTE_OPTIONS = frozenset({"verbatim", "disable_qubit_rewiring"})
 
 
 def _simulator_execution_duration_ms(result: Any) -> int | None:
@@ -222,18 +230,21 @@ class BraketExecutor(BaseExecutor):
             **kwargs: Braket options verbatim and disable_qubit_rewiring must be
                 bools. Explicit rewiring is forwarded; omission preserves the
                 provider default. Physical placement/capability is unqualified.
+                Any other option raises TypeError before device initialization.
 
         Returns:
             ExecutionResult with measurement counts and metadata.
 
         Raises:
             RuntimeError: If task fails or device is unavailable.
+            TypeError: If an option other than verbatim or disable_qubit_rewiring is supplied.
         """
         circuit = self._validate_circuit(circuit)
 
         start_time = time.perf_counter()
 
         validate_options(preserve_qubit_labels, kwargs, self.config.device_arn)
+        reject_unsupported_options("BraketExecutor.execute()", kwargs, SUPPORTED_EXECUTE_OPTIONS)
         braket_circuit = prepare_braket(
             circuit, preserve_qubit_labels=preserve_qubit_labels, options=kwargs,
             device_arn=self.config.device_arn, circuit_factory=BraketCircuit,
