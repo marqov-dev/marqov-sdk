@@ -5,6 +5,7 @@ The fake mirrors ``azure.quantum.Workspace.get_targets()``: objects carrying
 ``Available``, ``Degraded`` and ``Unavailable``.
 """
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -82,6 +83,17 @@ class TestAzureStatusCannotTell:
         assert await executor.get_device_status() == "Unknown"
         assert (await executor.get_status()).status == "maintenance"
         assert await executor.is_device_available() is False
+
+    @pytest.mark.asyncio
+    async def test_missing_target_logs_warning_naming_configured_target(self, caplog) -> None:
+        workspace = SimpleNamespace(
+            get_targets=lambda: [SimpleNamespace(name="ionq.qpu", current_availability="Available")]
+        )
+        executor = _executor(workspace)
+        with caplog.at_level(logging.WARNING, logger="marqov.executors.azure"):
+            assert (await executor.get_status()).status == "maintenance"
+        messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("ionq.simulator" in m and "ionq.qpu" in m for m in messages)
 
     @pytest.mark.asyncio
     async def test_availability_is_case_and_whitespace_insensitive(self) -> None:

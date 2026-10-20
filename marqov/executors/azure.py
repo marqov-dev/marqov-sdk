@@ -533,6 +533,8 @@ class AzureQuantumExecutor(BaseExecutor):
 
         A failed lookup (credentials, network, target not found) reports
         ``maintenance`` rather than ``offline``: the state could not be read.
+        When the workspace is reachable but has no target with the configured
+        name, a warning logs the configured name and the names it returned.
         """
         try:
             raw_status = await self._read_device_status()
@@ -547,10 +549,17 @@ class AzureQuantumExecutor(BaseExecutor):
         loop = asyncio.get_running_loop()
 
         def get_status_sync():
-            targets = workspace.get_targets()
+            targets = list(workspace.get_targets())
             for target in targets:
                 if target.name == self.config.target:
                     return target.current_availability
+            logger.warning(
+                "Azure target %r not found in workspace %r; available targets: %s",
+                self.config.target,
+                self.config.workspace_name,
+                sorted(str(target.name) for target in targets),
+            )
+            return None
 
         status = await loop.run_in_executor(None, get_status_sync)
         return status or "Unknown"
