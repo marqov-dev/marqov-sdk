@@ -307,12 +307,13 @@ class IBMExecutor(BaseExecutor):
         Args:
             circuit: The quantum circuit to execute.
             shots: Number of measurement shots.
-            **kwargs: Additional backend-specific options (currently unused).
+            **kwargs: Unsupported; any option raises TypeError.
 
         Returns:
             ExecutionResult with measurement counts and metadata.
 
         Raises:
+            TypeError: If any keyword option is supplied.
             IBMExecutionError: Result retrieval failed or timed out after
                 submission; includes the job ID. A timeout does not cancel the
                 provider job.
