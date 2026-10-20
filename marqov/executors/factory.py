@@ -2,7 +2,8 @@
 
 This module provides a factory pattern for creating executors based on provider.
 Supports AWS Braket, Quantinuum, IBM Quantum, Azure Quantum, IonQ Direct API,
-Rigetti QCS, CUDA-Q, Quantum Brilliance, Alice & Bob, and the Local simulator.
+Rigetti QCS, CUDA-Q, Quantum Brilliance, Alice & Bob, Qilimanjaro,
+PennyLane Lightning, CUNQA, and the Local simulator.
 
 Example:
     >>> backend_config = {
@@ -24,6 +25,7 @@ from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorCon
 from marqov.executors.base import BaseExecutor
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
 from marqov.executors.cudaq import _SLUG_TO_TARGET, CudaqExecutor, CudaqExecutorConfig
+from marqov.executors.cunqa import CUNQAExecutor, CUNQAExecutorConfig
 from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig, normalize_ibm_connection
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
 from marqov.executors.lightning import LightningExecutor, LightningExecutorConfig
@@ -55,6 +57,9 @@ class ExecutorFactory:
           Requires ``qristal`` to be installed separately — it is not on
           PyPI and has no ``marqov[...]`` extra. Build it from source or use
           the official Docker image; see https://qristal.readthedocs.io/.
+        - CUNQA: CESGA's distributed-QC emulator on a Slurm cluster. Requires
+          ``cunqa`` built from source on the cluster; it is only imported when
+          an executor is constructed without an injected client.
         - Local: QuantumFlow simulator (no cloud required)
         - Alice & Bob: local logical-qubit emulator (see docs/alice-bob.md).
           Requires ``qiskit-alice-bob-provider`` installed in an isolated
@@ -144,6 +149,10 @@ class ExecutorFactory:
             if backend_config.get("access_path") not in (None, "local"):
                 raise ValueError("Unknown Qilimanjaro access_path")
             return cls._create_qilisdk_executor(backend_slug, backend_config)
+
+        # CESGA CUNQA (Slurm-based distributed-QC emulator)
+        if provider == "CUNQA":
+            return cls._create_cunqa_executor(backend_slug, backend_config)
 
         # Xanadu PennyLane Lightning (local CPU simulators). Dispatched on the
         # provider only, never on slug, so no existing slug changes route.
@@ -497,6 +506,33 @@ class ExecutorFactory:
             simulator=simulator, compute_provider=backend_config.get("compute_provider", "local")
         ))
 
+    @classmethod
+    def _create_cunqa_executor(
+        cls,
+        backend_slug: str,
+        backend_config: dict[str, Any],
+    ) -> CUNQAExecutor:
+        """Create a CUNQA executor from configuration.
+
+        No field is required: each key mirrors a ``CUNQAExecutorConfig`` field
+        and falls back to the dataclass default when absent. The ``cunqa``
+        package itself is imported only when the executor is constructed.
+
+        Args:
+            backend_slug: Backend slug (unused for routing).
+            backend_config: Optional ``n_qpus``, ``walltime``, ``simulator``,
+                ``co_located``, ``classical_comm``, ``quantum_comm``,
+                ``mem_per_qpu_gb``, ``startup_timeout_s``, ``poll_interval_s``.
+
+        Returns:
+            Configured CUNQAExecutor instance.
+        """
+        keys = (
+            "n_qpus", "walltime", "simulator", "co_located", "classical_comm",
+            "quantum_comm", "mem_per_qpu_gb", "startup_timeout_s", "poll_interval_s",
+        )
+        return CUNQAExecutor(CUNQAExecutorConfig(**{k: backend_config[k] for k in keys if k in backend_config}))
+
     # Backend slug -> PennyLane device name, for configs that give no ``device``.
     _LIGHTNING_SLUG_TO_DEVICE: dict[str, str] = {
         "lightning-qubit": "lightning.qubit",
@@ -562,7 +598,7 @@ class ExecutorFactory:
 
         Example:
             >>> ExecutorFactory.get_supported_providers()
-            ['AWS Braket', 'IBM Quantum', 'Azure Quantum', 'IonQ Direct', 'Rigetti QCS', 'Quantum Brilliance', 'CUDA-Q', 'Local', 'Quantinuum', 'Qilimanjaro', 'PennyLane Lightning', 'Alice & Bob']
+            ['AWS Braket', 'IBM Quantum', 'Azure Quantum', 'IonQ Direct', 'Rigetti QCS', 'Quantum Brilliance', 'CUDA-Q', 'Local', 'Quantinuum', 'Qilimanjaro', 'PennyLane Lightning', 'Alice & Bob', 'CUNQA']
         """
         return [
             "AWS Braket",
@@ -577,6 +613,7 @@ class ExecutorFactory:
             "Qilimanjaro",
             "PennyLane Lightning",
             "Alice & Bob",
+            "CUNQA",
         ]
 
     @classmethod

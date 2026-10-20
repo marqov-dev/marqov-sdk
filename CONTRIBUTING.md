@@ -98,10 +98,11 @@ way `Circuit` is portable across digital ones. `execute_analog()` still returns
 the same `ExecutionResult` as `execute()`, so only the input side is special.
 
 **`CUNQAExecutor`** (`marqov/executors/cunqa.py`) — implements `execute()`
-exactly like every other executor, but as of this writing is not wired into
-`ExecutorFactory.create_executor()`'s provider dispatch. Construct it directly
-until that's done; check `factory.py` for whether this note is still accurate
-before relying on it.
+exactly like every other executor and is reachable through
+`ExecutorFactory.create_executor()` as provider `"CUNQA"`
+(`_create_cunqa_executor` in `marqov/executors/factory.py`). The `cunqa`
+package itself is imported only when an executor is built without an injected
+client, so the factory stays importable where `cunqa` is not installed.
 
 **`qilisdk` and `qristal` aren't `marqov[...]` extras.** Both are installed
 separately (`pip install qilisdk`, or build `qristal` from source/Docker for
