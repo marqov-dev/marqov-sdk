@@ -86,6 +86,36 @@ def _contains_placeholder(value: Any) -> bool:
     return False
 
 
+def _hides_task_proxy(value: Any) -> bool:
+    """Return True if a TaskProxy is reachable inside a value about to be pickled.
+
+    Walks lists, tuples, sets, frozensets and dict keys and values, plus the
+    attributes (``vars()``) of objects one level deep. Graph building does not
+    record a proxy in those places as a dependency, so pickling it would hand
+    the task a TaskProxy instead of the upstream result.
+    """
+    seen: set[int] = set()
+
+    def visit(item: Any, look_inside_objects: bool) -> bool:
+        if isinstance(item, TaskProxy):
+            return True
+        if isinstance(item, (list, tuple, set, frozenset, dict)):
+            if id(item) in seen:
+                return False
+            seen.add(id(item))
+            items = [*item.keys(), *item.values()] if isinstance(item, dict) else item
+            return any(visit(i, look_inside_objects) for i in items)
+        if look_inside_objects:
+            try:
+                attributes = vars(item)
+            except TypeError:
+                return False
+            return any(visit(i, False) for i in list(attributes.values()))
+        return False
+
+    return visit(value, True)
+
+
 def _transport_arg(value: Any) -> Any:
     """Encode a graph argument as JSON data for the Temporal workflow input.
 
@@ -100,7 +130,9 @@ def _transport_arg(value: Any) -> Any:
     it arrives as a list like a plain tuple.
 
     Raises:
-        TypeError: If a value cannot be cloudpickled.
+        TypeError: If a value cannot be cloudpickled, or if a TaskProxy is
+            reachable inside a value that would be pickled (a set, a
+            frozenset, an object attribute).
     """
     from marqov.workflows.activity import _cloudpickle_envelope, _unbox_numpy_scalar
 
@@ -115,6 +147,12 @@ def _transport_arg(value: Any) -> Any:
         if _is_marker(value):
             return value
         return {k: _transport_arg(v) for k, v in value.items()}
+    if _hides_task_proxy(value):
+        raise TypeError(
+            f"a task result is nested inside a {type(value).__qualname__}, where it "
+            f"is not resolved before the task runs; pass it directly or inside a "
+            f"list, tuple or dict value"
+        )
     try:
         return _cloudpickle_envelope(value)
     except Exception as exc:
@@ -124,44 +162,90 @@ def _transport_arg(value: Any) -> Any:
         ) from exc
 
 
-def _transport_input(func_name: str, label: str, value: Any) -> Any:
+def _encoded_size(encoded: Any) -> int:
+    """Return the JSON byte size of an encoded argument.
+
+    ``__cloudpickle__`` payloads are base64 (ASCII, never escaped), so they are
+    counted by length rather than dumped a second time.
+    """
+    import json
+
+    payload_bytes = 0
+
+    def strip(item: Any) -> Any:
+        nonlocal payload_bytes
+        if isinstance(item, list):
+            return [strip(i) for i in item]
+        if isinstance(item, dict):
+            data = item.get("data")
+            is_envelope = set(item) == {"__cloudpickle__", "data"} and item["__cloudpickle__"] is True
+            if is_envelope and isinstance(data, str):
+                payload_bytes += len(data)
+                return {"__cloudpickle__": True, "data": ""}
+            return {k: strip(i) for k, i in item.items()}
+        return item
+
+    return len(json.dumps(strip(encoded)).encode("utf-8")) + payload_bytes
+
+
+def _transport_input(func_name: str, label: str, value: Any) -> tuple[Any, int]:
     """Encode one argument, naming the task and argument on failure.
 
     The encoded argument's JSON is capped at ``activity.MAX_RESULT_BYTES``, the
     same limit the result side applies to a task's ``result.json``.
-    """
-    import json
 
+    Returns:
+        The encoded argument and its JSON size in bytes.
+    """
     from marqov.workflows.activity import MAX_RESULT_BYTES
 
     try:
         encoded = _transport_arg(value)
+        size = _encoded_size(encoded)
     except TypeError as exc:
         raise TypeError(
             f"Task {func_name!r}: {label} cannot be sent to the task: {exc}"
         ) from exc
-    size = len(json.dumps(encoded).encode("utf-8"))
     if size > MAX_RESULT_BYTES:
         raise ValueError(
             f"Task {func_name!r}: {label} encodes to {size} bytes, over the "
             f"{MAX_RESULT_BYTES}-byte limit (the task result limit, aligned with "
             f"Temporal's ~4 MiB gRPC payload limit). Pass large data by reference."
         )
-    return encoded
+    return encoded, size
 
 
 def _transport_inputs(
     func_name: str, args: list[Any], kwargs: dict[str, Any]
 ) -> tuple[list[Any], dict[str, Any]]:
-    """Encode one node's arguments, naming the task and argument on failure."""
-    encoded_args = [
-        _transport_input(func_name, f"positional argument {position}", arg)
-        for position, arg in enumerate(args)
-    ]
-    encoded_kwargs = {
-        key: _transport_input(func_name, f"keyword argument {key!r}", value)
-        for key, value in kwargs.items()
-    }
+    """Encode one node's arguments, naming the task and argument on failure.
+
+    Each argument, and the node's args and kwargs together, are capped at
+    ``activity.MAX_RESULT_BYTES``.
+    """
+    import json
+
+    from marqov.workflows.activity import MAX_RESULT_BYTES
+
+    encoded_args: list[Any] = []
+    # Byte counts follow json.dumps' default separators: "[", "]", "{", "}"
+    # and ", " between items, ": " after each key.
+    total = 2 + 2 + 2 * max(len(args) - 1, 0) + 2 * max(len(kwargs) - 1, 0)
+    for position, arg in enumerate(args):
+        encoded, size = _transport_input(func_name, f"positional argument {position}", arg)
+        encoded_args.append(encoded)
+        total += size
+    encoded_kwargs: dict[str, Any] = {}
+    for key, value in kwargs.items():
+        encoded, size = _transport_input(func_name, f"keyword argument {key!r}", value)
+        encoded_kwargs[key] = encoded
+        total += len(json.dumps(key).encode("utf-8")) + 2 + size
+    if total > MAX_RESULT_BYTES:
+        raise ValueError(
+            f"Task {func_name!r}: its arguments together encode to {total} bytes, "
+            f"over the {MAX_RESULT_BYTES}-byte limit (the task result limit, aligned "
+            f"with Temporal's ~4 MiB gRPC payload limit). Pass large data by reference."
+        )
     return encoded_args, encoded_kwargs
 
 
@@ -381,11 +465,13 @@ class WorkflowDispatch:
             Dictionary with nodes, execution_levels, and output_nodes.
 
         Raises:
-            TypeError: If a task argument cannot be cloudpickled; the message
-                names the task and the argument position or keyword.
-            ValueError: If an encoded task argument's JSON exceeds
-                ``activity.MAX_RESULT_BYTES`` (3 MiB); the message names the
-                task and the argument position or keyword.
+            TypeError: If a task argument cannot be cloudpickled, or hides a
+                task result inside a set, frozenset or object attribute; the
+                message names the task and the argument position or keyword.
+            ValueError: If an encoded task argument's JSON, or a node's args
+                and kwargs together, exceed ``activity.MAX_RESULT_BYTES``
+                (3 MiB); the message names the task, and the argument position
+                or keyword or the total.
         """
         # Get execution levels (parallel groups)
         execution_levels = self.graph.get_execution_order()

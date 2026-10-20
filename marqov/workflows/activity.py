@@ -170,8 +170,9 @@ def _unbox_numpy_scalar(value: Any) -> Any:
 def _cloudpickle_envelope(value: Any) -> dict[str, Any]:
     """Wrap a non-JSON-native value in the ``__cloudpickle__`` transport envelope.
 
-    Shared by task results (here and in _task_child) and task arguments
-    (decorators._serialize_arg), so both directions use one envelope shape.
+    Used for task results (``_serialize_value``; ``_task_child`` keeps its own
+    copy of the same shape) and for task arguments (``decorators._transport_arg``),
+    so both directions use one envelope shape.
     """
     import cloudpickle
 

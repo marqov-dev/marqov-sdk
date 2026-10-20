@@ -374,13 +374,14 @@ async def test_argument_over_the_size_cap_names_task_and_argument_and_is_never_s
     def takes_blob(value, blob=None):
         return 1
 
-    # A str encodes to its length plus two quote bytes.
-    at_limit = "x" * (MAX_RESULT_BYTES - 2)
+    # A str encodes to its length plus two quote bytes; the node's input adds
+    # "[]" for args and "{}" for kwargs, so this one fills the limit exactly.
+    at_limit = "x" * (MAX_RESULT_BYTES - 6)
     just_over = "x" * (MAX_RESULT_BYTES - 1)
 
     @workflow
     def fits():
-        return takes_blob(1, blob=at_limit)
+        return takes_blob(at_limit)
 
     @workflow
     def too_big_positional():
@@ -400,3 +401,63 @@ async def test_argument_over_the_size_cap_names_task_and_argument_and_is_never_s
     with pytest.raises(ValueError, match=r"takes_blob.*positional argument 0.*over the"):
         await too_big_positional().run(client)
     client.start_workflow.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_arguments_over_the_cap_together_name_task_and_total_and_are_never_submitted():
+    from marqov.workflows.activity import MAX_RESULT_BYTES
+
+    @task
+    def takes_two(first, second=None):
+        return 1
+
+    under = "x" * (MAX_RESULT_BYTES // 2 + 1024)  # each under the cap, together over
+
+    @workflow
+    def program():
+        return takes_two(under, second=under)
+
+    client = MagicMock()
+    client.start_workflow = AsyncMock()
+    with pytest.raises(ValueError, match=r"takes_two.*together encode to \d+ bytes, over the") as exc:
+        await program().run(client)
+    client.start_workflow.assert_not_called()
+
+    # The reported total is the JSON size of the node's args and kwargs.
+    node = next(iter(program().graph.nodes.values()))
+    expected = len(json.dumps(node.args)) + len(json.dumps(node.kwargs))
+    assert f"encode to {expected} bytes" in str(exc.value)
+
+
+def test_encoded_size_counts_envelope_payloads_exactly():
+    from marqov.workflows.decorators import _encoded_size
+
+    encoded = _transport_arg({"array": np.arange(1000), "items": [Point(1, 2), "s", 1.5]})
+    assert _encoded_size(encoded) == len(json.dumps(encoded).encode("utf-8"))
+
+
+class _Holder:
+    def __init__(self, value):
+        self.value = value
+
+
+@pytest.mark.parametrize(
+    "wrap",
+    [lambda p: {p}, lambda p: frozenset([p]), _Holder],
+    ids=["set", "frozenset", "object-attribute"],
+)
+def test_task_result_hidden_in_an_unwalked_container_is_refused(wrap):
+    @task
+    def producer():
+        return 1
+
+    @task
+    def consumer(value):
+        return value
+
+    @workflow
+    def program():
+        return consumer(wrap(producer()))
+
+    with pytest.raises(TypeError, match=r"consumer.*positional argument 0.*task result is nested"):
+        program()._prepare_workflow_input()

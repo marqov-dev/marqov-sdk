@@ -83,10 +83,13 @@ through (NumPy bool/integer/float scalars unboxed, tuples as lists), task
 references stay `__proxy__` placeholders, and any other object, such as a
 `Circuit`, an array or a namedtuple holding no task reference, travels as a
 `__cloudpickle__` envelope that only the task child unpickles. An argument that
-cannot be cloudpickled raises `TypeError`, and one whose encoded JSON exceeds
-3 MiB (the same limit as a task result) raises `ValueError`, each naming the
-task and argument before anything is submitted. The graph and the capture keep the original argument
-objects. A manually constructed
-`WorkflowDispatch` without a retained result refuses capture. SDK core remains
-independent of the optional hosted API client and requires no platform account to
-construct a capture.
+cannot be cloudpickled, or that hides a task reference inside a set, a
+frozenset or an object attribute (where it would never be resolved), raises
+`TypeError` naming the task and argument. An argument whose encoded JSON
+exceeds 3 MiB (the same limit as a task result) raises `ValueError` naming the
+task and argument, and so does a task whose arguments together exceed it,
+naming the total. All of these are raised before anything is submitted. The
+graph and the capture keep the original argument objects. A manually
+constructed `WorkflowDispatch` without a retained result refuses capture. SDK
+core remains independent of the optional hosted API client and requires no
+platform account to construct a capture.
