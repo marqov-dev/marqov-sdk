@@ -461,3 +461,56 @@ def test_task_result_hidden_in_an_unwalked_container_is_refused(wrap):
 
     with pytest.raises(TypeError, match=r"consumer.*positional argument 0.*task result is nested"):
         program()._prepare_workflow_input()
+
+
+@pytest.mark.asyncio
+async def test_int_key_dict_reaches_the_task_with_int_keys_through_the_real_worker():
+    from temporalio.testing import WorkflowEnvironment
+    from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+
+    from marqov.workflows.activity import execute_task, prepare_node_inputs
+    from marqov.workflows.temporal_workflow import JobWorkflow
+
+    @task
+    def first_angle(angles):
+        return [sorted(type(k).__name__ for k in angles), angles[0]]
+
+    @workflow
+    def program():
+        return first_angle({0: 0.3, 1: 0.7})
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="marqov-workflows",
+            workflows=[JobWorkflow],
+            activities=[execute_task, prepare_node_inputs],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            result = await program().run(env.client)
+
+    assert result == [["int", "int"], 0.3]
+
+
+@pytest.mark.parametrize("key", [0, (0, 1)], ids=["int-key", "tuple-key"])
+def test_non_str_key_dict_holding_a_task_result_is_refused_with_attribution(key):
+    @task
+    def producer():
+        return 1
+
+    @task
+    def consumer(mapping):
+        return mapping
+
+    @workflow
+    def program():
+        return consumer({key: producer()})
+
+    with pytest.raises(TypeError, match=r"consumer.*positional argument 0.*non-str keys"):
+        program()._prepare_workflow_input()
+
+
+def test_tuple_key_dict_without_task_results_is_pickled_with_its_keys():
+    encoded = _transport_arg({(0, 1): 0.5})
+    assert set(encoded) == {"__cloudpickle__", "data"}
+    assert _decode_leaf(encoded) == {(0, 1): 0.5}

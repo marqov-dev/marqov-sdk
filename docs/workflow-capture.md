@@ -78,16 +78,17 @@ The existing `run()`, `run_with_ids()`, `start_with_ids()` and `dispatch()`
 methods and the private legacy Temporal input builder retain their result
 behavior. They do not consume the new return template; the
 shape-preserving contract is opt-in through `capture()`. The legacy builder
-encodes task arguments with the same rule as task results: JSON values pass
+encodes task arguments with the same envelope as task results: JSON values pass
 through (NumPy bool/integer/float scalars unboxed, tuples as lists), task
 references stay `__proxy__` placeholders, and any other object, such as a
-`Circuit`, an array or a namedtuple holding no task reference, travels as a
-`__cloudpickle__` envelope that only the task child unpickles. An argument that
-cannot be cloudpickled, or that hides a task reference inside a set, a
-frozenset or an object attribute (where it would never be resolved), raises
-`TypeError` naming the task and argument. An argument whose encoded JSON
-exceeds 3 MiB (the same limit as a task result) raises `ValueError` naming the
-task and argument, and so does a task whose arguments together exceed it,
+`Circuit`, an array, or a namedtuple or a dict with non-string keys holding no
+task reference, travels as a `__cloudpickle__` envelope that only the task
+child unpickles, so it arrives as the same type (a dict keeps its keys). An
+argument that cannot be cloudpickled, or that hides a task reference inside a
+set, a frozenset, an object attribute or a dict with non-string keys (where it
+would never be resolved), raises `TypeError` naming the task and argument. An
+argument whose encoded JSON exceeds 3 MiB (the same limit as a task result)
+raises `ValueError` naming the task and argument, and so does a task whose arguments together exceed it,
 naming the total. All of these are raised before anything is submitted. The
 graph and the capture keep the original argument objects. A manually
 constructed `WorkflowDispatch` without a retained result refuses capture. SDK

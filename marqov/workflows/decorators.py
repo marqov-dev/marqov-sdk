@@ -119,7 +119,7 @@ def _hides_task_proxy(value: Any) -> bool:
 def _transport_arg(value: Any) -> Any:
     """Encode a graph argument as JSON data for the Temporal workflow input.
 
-    The same rule as task results (``activity._serialize_value``): JSON values
+    The same envelope as task results (``activity._serialize_value``): JSON values
     pass through, NumPy bool/integer/float scalars are unboxed, lists and
     tuples become lists, and any other object travels in the
     ``__cloudpickle__`` envelope, which only the task child decodes. A
@@ -127,12 +127,15 @@ def _transport_arg(value: Any) -> Any:
     and is never pickled, because ``prepare_node_inputs`` resolves placeholders
     by that marker. A namedtuple (or other tuple subclass) is pickled whole, so
     it arrives as the same type, unless it holds a placeholder, in which case
-    it arrives as a list like a plain tuple.
+    it arrives as a list like a plain tuple. A dict with any non-str key is
+    pickled whole too, so it arrives with its original keys rather than the
+    strings JSON would turn them into; such a dict may not hold a placeholder.
 
     Raises:
-        TypeError: If a value cannot be cloudpickled, or if a TaskProxy is
+        TypeError: If a value cannot be cloudpickled, if a TaskProxy is
             reachable inside a value that would be pickled (a set, a
-            frozenset, an object attribute).
+            frozenset, an object attribute), or if a dict with a non-str key
+            holds a placeholder.
     """
     from marqov.workflows.activity import _cloudpickle_envelope, _unbox_numpy_scalar
 
@@ -146,7 +149,14 @@ def _transport_arg(value: Any) -> Any:
     elif isinstance(value, dict):
         if _is_marker(value):
             return value
-        return {k: _transport_arg(v) for k, v in value.items()}
+        if all(isinstance(k, str) for k in value):
+            return {k: _transport_arg(v) for k, v in value.items()}
+        if _contains_placeholder(value):
+            raise TypeError(
+                "a task result is a value in a dict with non-str keys; such a dict "
+                "is pickled whole to keep its keys, so the result could not be "
+                "resolved; use str keys or pass the result separately"
+            )
     if _hides_task_proxy(value):
         raise TypeError(
             f"a task result is nested inside a {type(value).__qualname__}, where it "
