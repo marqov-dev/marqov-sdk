@@ -112,12 +112,16 @@ class IBMExecutorConfig:
         token: IBM Quantum API token. If None, uses saved credentials
                from QiskitRuntimeService.save_account().
         optimization_level: Transpiler optimization level (0-3).
-        resilience_level: Recorded in the execution result's metadata for
-                           traceability, but NOT currently passed to
-                           SamplerV2 — it has no effect on error mitigation.
-        poll_interval_seconds: Currently unused. `execute()` blocks
-                                synchronously on `job.result()` rather than
-                                polling.
+        resilience_level: Must be 1 (the default); any other value raises
+                           ValueError. SamplerV2's options have no
+                           resilience level (it is an EstimatorV2 option),
+                           so the executor cannot apply one. The value is
+                           still recorded in the result metadata.
+        poll_interval_seconds: Must be 2.0 (the default); any other value
+                                raises ValueError. `execute()` waits on
+                                `job.result()` rather than polling, so there
+                                is no interval to apply; `timeout_seconds`
+                                bounds the wait.
         timeout_seconds: Maximum time to wait for job completion. On timeout
                          the provider job is not cancelled, and the thread
                          blocked on `job.result()` outlives the timeout; the
@@ -143,6 +147,20 @@ class IBMExecutorConfig:
             or self.timeout_seconds <= 0
         ):
             raise ValueError("timeout_seconds must be finite and positive")
+        # Neither field changes execution; reject anything but the default
+        # rather than silently ignore a setting the caller expects to apply.
+        if self.resilience_level != 1:
+            raise ValueError(
+                f"resilience_level={self.resilience_level!r} is not supported: "
+                "SamplerV2 has no resilience level option (it is an EstimatorV2 "
+                "option), so IBMExecutor cannot apply one. Omit the field."
+            )
+        if self.poll_interval_seconds != 2.0:
+            raise ValueError(
+                f"poll_interval_seconds={self.poll_interval_seconds!r} is not supported: "
+                "IBMExecutor waits on job.result() rather than polling. Omit the "
+                "field; use timeout_seconds to bound the wait."
+            )
 
 
 class IBMExecutionError(RuntimeError):

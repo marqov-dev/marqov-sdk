@@ -253,3 +253,46 @@ async def test_submission_error_keeps_type_and_marks_acceptance_unknown(monkeypa
     assert error.value.remote_job["submission_status"] == "unknown"
     assert error.value.remote_job["job_id"] is None
     assert any("acceptance is unknown" in note for note in error.value.__notes__)
+
+
+def test_sampler_v2_options_have_no_resilience_level():
+    """Pins the reason resilience_level cannot be wired: SamplerV2 rejects it."""
+    from qiskit_ibm_runtime.options import SamplerOptions
+
+    with pytest.raises(Exception, match="resilience_level"):
+        SamplerOptions(resilience_level=1)
+
+
+@pytest.mark.parametrize("level", [0, 2])
+def test_non_default_resilience_level_is_rejected(level):
+    """#79: a resilience level SamplerV2 cannot apply must not be silently ignored."""
+    with pytest.raises(ValueError, match="resilience_level.*SamplerV2"):
+        IBMExecutorConfig(backend_name="ibm_kingston", resilience_level=level)
+
+
+@pytest.mark.parametrize("interval", [0.5, 10.0])
+def test_non_default_poll_interval_is_rejected(interval):
+    """#79: there is no polling loop, so a custom interval must not be silently ignored."""
+    with pytest.raises(ValueError, match=r"poll_interval_seconds.*job\.result\(\)"):
+        IBMExecutorConfig(backend_name="ibm_kingston", poll_interval_seconds=interval)
+
+
+def test_default_resilience_and_poll_values_still_build():
+    config = IBMExecutorConfig(
+        backend_name="ibm_kingston", resilience_level=1, poll_interval_seconds=2.0
+    )
+    assert config.resilience_level == 1
+    assert config.poll_interval_seconds == 2.0
+
+
+@pytest.mark.parametrize(
+    "key,value", [("resilience_level", 2), ("poll_interval_seconds", 5.0)]
+)
+def test_factory_rejects_stored_inert_ibm_settings(key, value):
+    from marqov.executors.factory import ExecutorFactory
+
+    with pytest.raises(ValueError, match=key):
+        ExecutorFactory.create_executor(
+            "ibm-kingston",
+            {"provider": "IBM Quantum", "backend_name": "ibm_kingston", key: value},
+        )

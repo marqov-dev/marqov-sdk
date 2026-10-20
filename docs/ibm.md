@@ -19,6 +19,14 @@ SamplerV2, local versus direct access, submitted job ID, exact package versions,
 shots and transpiled-circuit/count hashes. The token is excluded from configuration
 repr. No provider credential is added to a hosted runner or result record.
 
+`IBMExecutorConfig` keeps two fields that the SamplerV2 path cannot apply, and
+rejects any non-default value for them with ValueError at construction (through
+ExecutorFactory too) instead of silently ignoring it. `resilience_level` must be
+1: SamplerV2 options have no resilience level in qiskit-ibm-runtime (it is an
+EstimatorV2 option). The value is still recorded in result metadata.
+`poll_interval_seconds` must be 2.0: the executor waits on `job.result()` rather
+than polling, and `timeout_seconds` bounds that wait.
+
 The exact executor was exercised offline with a deliberately supplied AerSimulator
 backend, through the real vendor SamplerV2 and transpiler. Both asymmetric basis
 states return the expected canonical `10` and `01` counts. This local qualification
