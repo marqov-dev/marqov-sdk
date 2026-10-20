@@ -16,5 +16,5 @@ public disclosure. We appreciate responsible disclosure.
 
 | Version | Supported |
 |---------|-----------|
-| 0.4.x   | Yes       |
-| < 0.4   | No        |
+| 0.9.x   | Yes       |
+| < 0.9   | No        |
