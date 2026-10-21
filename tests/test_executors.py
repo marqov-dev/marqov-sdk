@@ -1216,6 +1216,17 @@ class TestCUNQAFactoryConfigValidation:
         with pytest.raises(ValueError, match=rf"{key} must be"):
             ExecutorFactory.create_executor("cunqa", {"provider": "CUNQA", key: value})
 
+    @pytest.mark.parametrize("key", ["startup_timeout_s", "poll_interval_s"])
+    def test_numpy_float32_timing_accepted_like_config(self, key: str) -> None:
+        import numpy as np
+
+        with patch("marqov.executors.cunqa._CunqaModuleClient", MagicMock()):
+            executor = ExecutorFactory.create_executor(
+                "cunqa", {"provider": "CUNQA", key: np.float32(2.5)}
+            )
+        value = getattr(executor._config, key)
+        assert value == 2.5 and type(value) is float
+
     def test_int_accepted_for_float_fields(self) -> None:
         with patch("marqov.executors.cunqa._CunqaModuleClient", MagicMock()):
             executor = ExecutorFactory.create_executor(

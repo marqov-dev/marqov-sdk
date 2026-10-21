@@ -18,6 +18,7 @@ Example:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from marqov.executors.alice_bob import AliceBobExecutor, AliceBobExecutorConfig
@@ -25,7 +26,12 @@ from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorCon
 from marqov.executors.base import BaseExecutor
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
 from marqov.executors.cudaq import _SLUG_TO_TARGET, CudaqExecutor, CudaqExecutorConfig
-from marqov.executors.cunqa import CUNQAExecutor, CUNQAExecutorConfig, _validate_n_qpus
+from marqov.executors.cunqa import (
+    CUNQAExecutor,
+    CUNQAExecutorConfig,
+    _validate_n_qpus,
+    _validate_seconds,
+)
 from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig, normalize_ibm_connection
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
 from marqov.executors.lightning import LightningExecutor, LightningExecutorConfig
@@ -529,20 +535,23 @@ class ExecutorFactory:
         Returns:
             Configured CUNQAExecutor instance.
         """
+        # Fields the dataclass validates itself are checked with its own
+        # validators, so the factory accepts exactly what CUNQAExecutorConfig
+        # accepts; the error is wrapped to name the config key.
+        validated_fields: dict[str, Callable[[Any], object]] = {
+            "n_qpus": _validate_n_qpus,
+            "startup_timeout_s": lambda v: _validate_seconds("startup_timeout_s", v),
+            "poll_interval_s": lambda v: _validate_seconds("poll_interval_s", v),
+        }
         # Expected type per remaining CUNQAExecutorConfig field, checked here so
-        # a bad value is reported against its config key. n_qpus is checked
-        # below by the dataclass's own validator, so the factory accepts
-        # exactly what CUNQAExecutorConfig accepts; the dataclass also
-        # range-checks the two timing fields.
-        field_types: dict[str, type | tuple[type, ...]] = {
+        # a bad value is reported against its config key.
+        field_types: dict[str, type] = {
             "walltime": str,
             "simulator": str,
             "co_located": bool,
             "classical_comm": bool,
             "quantum_comm": bool,
             "mem_per_qpu_gb": int,
-            "startup_timeout_s": (int, float),
-            "poll_interval_s": (int, float),
         }
         if "seed" in backend_config:
             raise ValueError(
@@ -550,24 +559,26 @@ class ExecutorFactory:
                 "is reserved and never reaches run()); omit the key"
             )
         kwargs: dict[str, Any] = {}
-        if "n_qpus" in backend_config:
-            n_qpus = backend_config["n_qpus"]
+        for key, validate in validated_fields.items():
+            if key not in backend_config:
+                continue
+            value = backend_config[key]
             try:
-                _validate_n_qpus(n_qpus)
+                validate(value)
             except ValueError as exc:
                 raise ValueError(
-                    f"CUNQA config key 'n_qpus' is invalid (got {type(n_qpus).__name__}): {exc}"
+                    f"CUNQA config key {key!r} is invalid (got {type(value).__name__}): {exc}"
                 ) from exc
-            kwargs["n_qpus"] = n_qpus
+            kwargs[key] = value
         for key, expected in field_types.items():
             if key not in backend_config:
                 continue
             value = backend_config[key]
             # bool is an int subclass; it is only valid where bool is expected.
             if isinstance(value, bool) != (expected is bool) or not isinstance(value, expected):
-                names = expected.__name__ if isinstance(expected, type) else "number"
                 raise ValueError(
-                    f"CUNQA config key {key!r} must be {names}, got {type(value).__name__}"
+                    f"CUNQA config key {key!r} must be {expected.__name__}, "
+                    f"got {type(value).__name__}"
                 )
             kwargs[key] = value
         return CUNQAExecutor(CUNQAExecutorConfig(**kwargs))
