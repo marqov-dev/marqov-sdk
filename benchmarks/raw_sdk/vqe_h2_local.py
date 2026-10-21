@@ -19,8 +19,10 @@ from braket.circuits import Circuit
 # Add parent to path for harness import
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from harness import BenchmarkResult, save_results, print_summary
+from shared.vqe_h2 import build_braket_ansatz
 from datetime import datetime
 
 
@@ -46,25 +48,11 @@ def create_ansatz(params: np.ndarray) -> Circuit:
     """
     Create parameterized ansatz circuit for H₂ VQE (2 qubits).
 
-    Uses hardware-efficient ansatz: Ry rotations + CNOT entanglement.
+    Uses the shared UCC ansatz from benchmarks/shared/vqe_h2.py, so this
+    baseline runs the same circuit as the other raw-SDK VQE benchmarks.
     Single parameter theta controls the ansatz.
-
-    For H₂, the optimal state is approximately:
-    cos(θ/2)|01⟩ - sin(θ/2)|10⟩ (singlet state)
     """
-    circuit = Circuit()
-
-    # Start in |01⟩ (HF reference for H₂)
-    circuit.x(1)
-
-    # Parameterized excitation (single parameter for simplicity)
-    # This creates superposition between |01⟩ and |10⟩
-    theta = params[0]
-    circuit.ry(0, theta)
-    circuit.ry(1, -theta)
-    circuit.cnot(0, 1)
-
-    return circuit
+    return build_braket_ansatz(params[0])
 
 
 def measure_expectation(circuit: Circuit, pauli_string: str, device, shots: int = 1000) -> float:
@@ -85,12 +73,10 @@ def measure_expectation(circuit: Circuit, pauli_string: str, device, shots: int 
 
     for bitstring, count in counts.items():
         parity = 1
-        # Braket bitstring: qubit 0 is LAST character (little-endian)
-        # Reverse to make qubit 0 first for easier indexing
-        bits = bitstring[::-1]
+        # Braket uses big-endian: bitstring[0] is qubit 0
         for i, pauli in enumerate(pauli_string):
             if pauli in ['x', 'y', 'z']:
-                if bits[i] == '1':
+                if bitstring[i] == '1':
                     parity *= -1
         expectation += parity * count / total
 

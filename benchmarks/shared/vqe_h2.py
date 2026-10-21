@@ -203,35 +203,46 @@ def compute_h2_energy(
 
 
 def run_vqe_optimization(
-    measure_pauli: Callable[[str, float], dict[str, int]],
+    measure_pauli: Callable[..., dict[str, int]],
     shots: int = DEFAULT_SHOTS,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
     initial_theta: float = 0.0,
     verbose: bool = True,
+    seed: int | None = None,
 ) -> dict[str, Any]:
     """
     Run VQE optimization to find H₂ ground state energy.
 
     Args:
         measure_pauli: Function that measures a Pauli string and returns counts.
-                      Signature: measure_pauli(pauli_string, theta) -> counts
+                      Signature: measure_pauli(pauli_string, theta) -> counts,
+                      or measure_pauli(pauli_string, theta, seed=...) -> counts
+                      when a seed is given
         shots: Number of shots per measurement
         max_iterations: Maximum optimizer iterations
         initial_theta: Initial variational parameter
         verbose: Print progress
+        seed: Optional run seed. When set, each measure_pauli call receives a
+              per-circuit seed derived deterministically from it, which the
+              callback can pass to a seedable executor. A callback for a
+              backend without seeding should accept and ignore it. The seed
+              is recorded in the returned dict either way.
 
     Returns:
         Dict with optimization results
     """
     iteration_data = []
     circuit_count = [0]
+    seed_rng = np.random.default_rng(seed) if seed is not None else None
 
     def objective(params):
         theta = params[0]
 
         def counted_measure(pauli, t):
             circuit_count[0] += 1
-            return measure_pauli(pauli, t)
+            if seed_rng is None:
+                return measure_pauli(pauli, t)
+            return measure_pauli(pauli, t, seed=int(seed_rng.integers(2**32)))
 
         energy, exp_vals = compute_h2_energy(theta, counted_measure, shots)
 
@@ -271,7 +282,28 @@ def run_vqe_optimization(
         'optimizer_message': result.message,
         'iteration_data': iteration_data,
         'hamiltonian': H2_HAMILTONIAN,
+        'seed': seed,
     }
+
+
+def build_braket_ansatz(theta: float) -> Any:
+    """
+    Build the create_ansatz UCC circuit as a Braket Circuit.
+
+    Args:
+        theta: Variational parameter
+
+    Returns:
+        braket.circuits.Circuit
+    """
+    from braket.circuits import Circuit  # type: ignore[import-untyped]
+
+    circuit = Circuit()
+    # Each gate tuple is (name, *qubits_and_angle), matching Braket's
+    # Circuit.<name>(target, angle) and Circuit.cnot(control, target)
+    for name, *args in create_ansatz(theta)['gates']:
+        getattr(circuit, name)(*args)
+    return circuit
 
 
 # Convenience function for building Braket circuits
@@ -289,14 +321,9 @@ def build_braket_circuit(theta: float, pauli_string: str):
     Returns:
         braket.circuits.Circuit
     """
-    from braket.circuits import Circuit
-
-    circuit = Circuit()
+    circuit = build_braket_ansatz(theta)
     spec = create_measurement_circuit(create_ansatz(theta), pauli_string)
-
-    # Each gate tuple is (name, *qubits_and_angle), matching Braket's
-    # Circuit.<name>(target, angle) and Circuit.cnot(control, target)
-    for name, *args in spec['base_ansatz']['gates'] + spec['basis_rotations']:
+    for name, *args in spec['basis_rotations']:
         getattr(circuit, name)(*args)
 
     return circuit
