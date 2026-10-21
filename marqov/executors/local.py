@@ -4,8 +4,11 @@ This executor runs circuits on QuantumFlow's built-in state vector simulator.
 No cloud credentials required - perfect for development and testing.
 """
 
+import hashlib
+import json
 import time
 from dataclasses import dataclass
+from importlib.metadata import version
 from typing import Any
 
 import numpy as np
@@ -64,7 +67,11 @@ class LocalExecutor(BaseExecutor):
             **kwargs: Unsupported; any option raises TypeError.
 
         Returns:
-            ExecutionResult with measurement counts.
+            ExecutionResult with measurement counts. ``metadata["reproducibility"]``
+            records the configured ``seed`` (None when unseeded), shots, package
+            versions, bit order and a counts hash. The executor draws from one
+            generator seeded at construction, so the seed replays a run only as
+            the same sequence of calls on a fresh executor.
 
         Raises:
             TypeError: If any keyword option is supplied.
@@ -88,7 +95,20 @@ class LocalExecutor(BaseExecutor):
             execution_time_ms=execution_time_ms,
             shots=shots,
             raw_result=state,
-            metadata={"simulator": "quantumflow"},
+            metadata={
+                "simulator": "quantumflow",
+                "reproducibility": {
+                    "record_version": 1,
+                    "packages": {p: version(p) for p in ("marqov-quantumflow", "numpy")},
+                    "seed": self.config.seed,
+                    "rng_policy": "one generator seeded at construction; draws continue across calls",
+                    "shots": shots,
+                    "counts_sha256": hashlib.sha256(
+                        json.dumps(counts, sort_keys=True, separators=(",", ":")).encode()
+                    ).hexdigest(),
+                    "bit_order": "qubit_0_first",
+                },
+            },
         )
 
     def _sample_measurements(self, state: Any, shots: int) -> dict[str, int]:

@@ -1,5 +1,7 @@
 """Tests for marqov.executors module."""
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -110,6 +112,35 @@ class TestLocalExecutor:
         result = await executor.execute(circuit, shots=10)
 
         assert "simulator" in result.metadata
+        assert result.metadata["simulator"] == "quantumflow"
+
+    @pytest.mark.asyncio
+    async def test_execute_records_seed_for_replay(self) -> None:
+        """The reproducibility record carries the seed, and replaying it reproduces counts."""
+        result = await LocalExecutor(LocalExecutorConfig(seed=123)).execute(bell_state(), shots=100)
+
+        record = result.metadata["reproducibility"]
+        assert record["record_version"] == 1
+        assert record["seed"] == 123
+        assert record["shots"] == 100 == sum(result.counts.values())
+        assert record["bit_order"] == "qubit_0_first"
+        assert set(record["packages"]) == {"marqov-quantumflow", "numpy"}
+        expected = hashlib.sha256(
+            json.dumps(result.counts, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        assert record["counts_sha256"] == expected
+
+        replay = await LocalExecutor(LocalExecutorConfig(seed=record["seed"])).execute(
+            bell_state(), shots=100
+        )
+        assert replay.counts == result.counts
+
+    @pytest.mark.asyncio
+    async def test_execute_records_none_seed_when_unseeded(self) -> None:
+        """An unseeded executor records seed None rather than omitting it."""
+        result = await LocalExecutor().execute(Circuit().x(0), shots=10)
+
+        assert result.metadata["reproducibility"]["seed"] is None
         assert result.metadata["simulator"] == "quantumflow"
 
     @pytest.mark.asyncio
