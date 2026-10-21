@@ -5,6 +5,89 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
+## [0.10.1] - 2026-10-21
+
+A patch release of fixes found after 0.10.0. The platform client keeps its
+error contract on unreadable responses and honours the `result()` deadline,
+workflow task scratch directories are removed and kept out of the shared temp
+root, `NoiseModel.realistic_device` reproduces the T2 it is given, and the
+CUNQA executor stops over-counting shots and validates its inputs. The README
+on PyPI is current again.
+
+### Upgrading
+
+These are fixes, but they can change what existing code observes.
+
+- `NoiseModel.realistic_device` produces different simulated results: the
+  phase-damping rate no longer double counts T1, so coherence now decays at
+  the requested T2. It raises `ValueError` for non-positive `t1`, `t2` or
+  `gate_time` and for `t2 > 2 * t1`.
+- `Job.result()` reports a transport failure after its deadline as
+  `TimeoutError`, and stops retrying once the deadline passes. A response
+  below HTTP 400 whose body is not JSON raises `TransportError` instead of a
+  raw `requests` decode error; `submit_native()` and `submit_script()` still
+  report it as `submission_outcome_unknown` with the idempotency key.
+- Workflow task workdirs are deleted when the task finishes (set
+  `MARQOV_KEEP_TASK_WORKDIR=1` to keep them), and the task's process group is
+  killed when the task process exits, so a background process a task leaves
+  running no longer outlives it.
+- `CUNQAExecutor` raises `ValueError` for `n_qpus` below 1 or not an integer,
+  and for `shots` below 1 or not an integer, before any CUNQA call.
+  `startup_timeout_s` is one budget across `qraise` and vQPU registration, so
+  slow starts time out sooner, and `execution_time_ms` no longer includes
+  teardown.
+- Calling an `async def` `@task` outside a workflow still returns a coroutine
+  that must be awaited. This is now documented; a future minor release may
+  change how direct invocation behaves.
+
+### Fixed
+
+- The platform client raises `TransportError` for a non-JSON response below
+  HTTP 400 and never retries it, clamps a negative `Retry-After` to 0, gains
+  `close()` and context-manager support on `MarqovClient` and the transport,
+  and bounds each `Job.result()` poll and retry by the remaining deadline.
+  (marqov-sdk#277, closes marqov-sdk#150)
+
+- `execute_task` removes each task's workdir after the task finishes, on
+  success, failure and cancellation, off the event loop; task workdirs live in
+  a private per-process parent (mode 0700) instead of the shared temp root.
+  (marqov-sdk#278, closes marqov-sdk#144)
+
+- `NoiseModel.realistic_device` derives phase damping from the pure dephasing
+  rate `1/T_phi = 1/T2 - 1/(2*T1)` and validates its inputs.
+  (marqov-sdk#279, closes marqov-sdk#158)
+
+- `LocalExecutor` records the seed in `metadata["reproducibility"]`, with the
+  same keys as the other executors' records. (marqov-sdk#276, closes
+  marqov-sdk#78)
+
+- `CUNQAExecutor` uses only the requested number of vQPUs (extra
+  registrations multiplied the shots), validates `n_qpus` and `shots`, keeps a
+  `TimeoutError` raised by `qraise` itself, drops a family whose `qraise`
+  finishes after the timeout, and lets `asyncio.run()` return promptly after a
+  timeout. NumPy integers are accepted for both values. (marqov-sdk#281,
+  closes marqov-sdk#138)
+
+- The H2 VQE benchmarks build the documented UCC ansatz, which reaches the
+  exact ground energy (the previous circuit stopped 1.23 Ha short), take an
+  optional `seed`, and the raw-SDK scripts use the correct bit order and
+  ground-energy constant. Benchmark code is not in the wheel.
+  (marqov-sdk#280, closes marqov-sdk#160)
+
+### Documentation
+
+- The README, which is the PyPI project page, no longer names 0.7.0 as the
+  current release and uses absolute links so they work on PyPI.
+  (marqov-sdk#274)
+
+- The preflight module no longer claims mandatory server-side budget
+  enforcement; it states that `preflight()` performs no budget comparison.
+  (marqov-sdk#275, closes marqov-sdk#80)
+
+- The `@task` docstring and README document that an async task called outside
+  a workflow must be awaited, and the test suite fails on a never-awaited
+  coroutine. (marqov-sdk#282, closes marqov-sdk#103)
+
 ## [0.10.0] — 2026-10-20
 
 A correctness release. A review of the 0.8.1 to 0.9.1 changes found
