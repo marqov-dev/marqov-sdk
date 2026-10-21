@@ -252,7 +252,9 @@ async def execute_task(
     then removed (in a thread, off the event loop) once the output has been
     read, whether the task succeeded, failed or was cancelled (a Temporal
     timeout arrives as a cancellation, and a further cancellation during the
-    removal does not cut it short). Setting ``MARQOV_KEEP_TASK_WORKDIR``
+    removal does not cut it short). Heartbeats continue until the removal has
+    finished, so a slow removal cannot trip the heartbeat timeout and retry a
+    task that has already completed. Setting ``MARQOV_KEEP_TASK_WORKDIR``
     to ``1``, ``true``, ``yes`` or ``on`` keeps it and logs its path, as a
     debugging aid.
 
@@ -277,21 +279,52 @@ async def execute_task(
             or whose ``node_id`` does not match this activity's ``node_id``.
     """
     workdir = new_task_workdir(node_id)
+    # One heartbeat loop spans the child run AND the workdir removal: a large
+    # workdir can take longer to remove than the heartbeat timeout, and a
+    # timeout there would retry a task that already finished.
+    heartbeat_task = asyncio.create_task(_heartbeat_loop(node_id))
     try:
-        return await _run_task_in_workdir(
-            workdir, node_id, func_ref, args_json, kwargs_json, provider_env
-        )
+        try:
+            return await _run_task_in_workdir(
+                workdir, node_id, func_ref, args_json, kwargs_json, provider_env
+            )
+        finally:
+            if keep_task_workdir_requested():
+                activity.logger.info("Keeping workdir for node %s: %s", node_id, workdir)
+            else:
+                await _remove_task_workdir(workdir)
     finally:
-        if keep_task_workdir_requested():
-            activity.logger.info("Keeping workdir for node %s: %s", node_id, workdir)
-        else:
-            await _remove_task_workdir(workdir)
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            # Already reported by _heartbeat_loop; do not let it mask the
+            # activity's own outcome (result, child error, or cancellation).
+            pass
+
+
+async def _heartbeat_loop(node_id: str) -> None:
+    """Send heartbeats to Temporal until cancelled."""
+    try:
+        while True:
+            await asyncio.sleep(_HEARTBEAT_INTERVAL_S)
+            activity.heartbeat(f"executing {node_id}")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Heartbeating has stopped. Without this log the operator would see
+        # only a Temporal heartbeat timeout, never the actual cause.
+        activity.logger.exception("Heartbeat loop failed for node %s", node_id)
+        raise
 
 
 async def _remove_task_workdir(workdir: Path) -> None:
     """Remove ``workdir`` off the event loop, finishing even if cancelled meanwhile.
 
-    The removal runs in a thread so a large workdir does not stall heartbeats.
+    The removal runs in a thread so a large workdir does not stall the event
+    loop, and ``execute_task`` keeps heartbeating until it has finished.
     It is shielded, and a cancellation that arrives while it runs is held
     back until the removal has finished, then re-raised.
     """
@@ -316,7 +349,11 @@ async def _run_task_in_workdir(
     kwargs_json: str,
     provider_env: dict[str, str] | None,
 ) -> str:
-    """Body of ``execute_task``: run the child in ``workdir`` and read its output."""
+    """Body of ``execute_task``: run the child in ``workdir`` and read its output.
+
+    Heartbeats are sent by ``execute_task``, which keeps them going until the
+    workdir has been removed.
+    """
     result_path = workdir / "result.json"
 
     # Write inputs for the child.  func_ref is base64-encoded; write the text
@@ -340,21 +377,6 @@ async def _run_task_in_workdir(
         start_new_session=True,
     )
 
-    async def _heartbeat_loop() -> None:
-        """Send heartbeats to Temporal until cancelled."""
-        try:
-            while True:
-                await asyncio.sleep(_HEARTBEAT_INTERVAL_S)
-                activity.heartbeat(f"executing {node_id}")
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            # Heartbeating has stopped. Without this log the operator would see
-            # only a Temporal heartbeat timeout, never the actual cause.
-            activity.logger.exception("Heartbeat loop failed for node %s", node_id)
-            raise
-
-    heartbeat_task = asyncio.create_task(_heartbeat_loop())
     child_task = asyncio.create_task(proc.wait())
 
     # Drain the child's stderr for the whole of its lifetime.  asyncio's
@@ -389,15 +411,6 @@ async def _run_task_in_workdir(
         activity.logger.warning("Activity cancelled for node %s — child killed", node_id)
         raise
     finally:
-        heartbeat_task.cancel()
-        try:
-            await heartbeat_task
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            # Already reported by _heartbeat_loop; do not let it mask the
-            # activity's own outcome (result, child error, or cancellation).
-            pass
         if stderr_task is not None:
             stderr_task.cancel()
             try:

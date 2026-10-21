@@ -1113,3 +1113,133 @@ async def test_grandchild_cannot_recreate_workdir(mock_activity_ctx, monkeypatch
         import shutil
 
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Heartbeats span the workdir removal: a slow removal after the task finished
+# must not let Temporal's heartbeat timeout fire and retry the task.
+# ---------------------------------------------------------------------------
+
+
+def _heartbeat_gated_rmtree(mock_hb: Any, removing: Any, beat_seen: Any) -> Any:
+    """A stand-in for shutil.rmtree that waits for a heartbeat, then removes.
+
+    While it runs, ``removing`` is set; a heartbeat sent in that window sets
+    ``beat_seen``. It waits up to 10s for one, so the test does not depend on
+    tight timing, then performs the real removal.
+    """
+    import shutil
+
+    real_rmtree = shutil.rmtree
+
+    def on_heartbeat(*args: Any, **kwargs: Any) -> None:
+        if removing.is_set():
+            beat_seen.set()
+
+    mock_hb.side_effect = on_heartbeat
+
+    def gated(path: Any, *args: Any, **kwargs: Any) -> None:
+        removing.set()
+        try:
+            beat_seen.wait(timeout=10)
+        finally:
+            removing.clear()
+        real_rmtree(path, *args, **kwargs)
+
+    return gated
+
+
+@pytest.mark.asyncio
+async def test_heartbeats_continue_during_removal_after_success(
+    mock_activity_ctx, monkeypatch
+):
+    import threading
+
+    import marqov.workflows.activity as activity_mod
+
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+    monkeypatch.setattr(activity_mod, "_HEARTBEAT_INTERVAL_S", 0.05)
+    removing, beat_seen = threading.Event(), threading.Event()
+    with patch(
+        "marqov.workflows.activity.shutil.rmtree",
+        _heartbeat_gated_rmtree(mock_activity_ctx, removing, beat_seen),
+    ):
+        result_json = await execute_task(
+            "hb-rm-ok", _workdir_fn_ref(), json.dumps([]), json.dumps({})
+        )
+    assert not os.path.exists(json.loads(result_json)["result"])
+    assert beat_seen.is_set(), "no heartbeat was sent while the workdir was removed"
+
+
+@pytest.mark.asyncio
+async def test_heartbeats_continue_during_removal_after_failure(
+    mock_activity_ctx, monkeypatch
+):
+    import threading
+
+    import marqov.workflows.activity as activity_mod
+
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+    monkeypatch.setattr(activity_mod, "_HEARTBEAT_INTERVAL_S", 0.05)
+
+    def fail() -> None:
+        raise RuntimeError("task failed on purpose")
+
+    removing, beat_seen = threading.Event(), threading.Event()
+    with patch(
+        "marqov.workflows.activity.shutil.rmtree",
+        _heartbeat_gated_rmtree(mock_activity_ctx, removing, beat_seen),
+    ):
+        with pytest.raises(RuntimeError, match="task failed on purpose"):
+            await execute_task("hb-rm-fail", _enc(fail), json.dumps([]), json.dumps({}))
+    assert beat_seen.is_set(), "no heartbeat was sent while the workdir was removed"
+
+
+@pytest.mark.asyncio
+async def test_heartbeats_continue_during_removal_after_cancellation(
+    mock_activity_ctx, monkeypatch
+):
+    import threading
+
+    import marqov.workflows.activity as activity_mod
+
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+    monkeypatch.setattr(activity_mod, "_HEARTBEAT_INTERVAL_S", 0.05)
+
+    def very_slow_fn() -> int:
+        import time as _time
+
+        _time.sleep(60)
+        return 0
+
+    removing, beat_seen = threading.Event(), threading.Event()
+    with patch(
+        "marqov.workflows.activity.shutil.rmtree",
+        _heartbeat_gated_rmtree(mock_activity_ctx, removing, beat_seen),
+    ):
+        task = asyncio.create_task(
+            execute_task("hb-rm-cancel", _enc(very_slow_fn), json.dumps([]), json.dumps({}))
+        )
+        await asyncio.sleep(0.5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert beat_seen.is_set(), "no heartbeat was sent while the workdir was removed"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_loop_stops_after_removal(mock_activity_ctx, monkeypatch):
+    import marqov.workflows.activity as activity_mod
+
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+    monkeypatch.setattr(activity_mod, "_HEARTBEAT_INTERVAL_S", 0.02)
+    result_json = await execute_task(
+        "hb-stop", _workdir_fn_ref(), json.dumps([]), json.dumps({})
+    )
+    assert not os.path.exists(json.loads(result_json)["result"])
+    beats_at_return = mock_activity_ctx.call_count
+    # Ten heartbeat intervals: a loop still running would have beaten again.
+    await asyncio.sleep(0.2)
+    assert mock_activity_ctx.call_count == beats_at_return, (
+        "heartbeats were still sent after execute_task returned"
+    )
