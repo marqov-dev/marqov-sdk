@@ -477,6 +477,39 @@ async def test_raised_messages_contain_no_em_dash() -> None:
     assert "\u2014" not in str(timeout_error.value)
 
 
+@pytest.mark.parametrize("n_qpus", [1.5, True, "2"])
+def test_config_rejects_non_int_n_qpus(n_qpus: Any) -> None:
+    with pytest.raises(ValueError, match="n_qpus must be an int"):
+        CUNQAExecutorConfig(n_qpus=n_qpus)
+
+
+@pytest.mark.asyncio
+async def test_execute_revalidates_n_qpus_mutated_after_construction() -> None:
+    fake_client = _FakeCunqaClient(counts_per_qpu={"00": 500})
+    config = CUNQAExecutorConfig(n_qpus=2, walltime="00:05:00", **_FAST_POLL)
+    executor = CUNQAExecutor(config, client=fake_client)
+    config.n_qpus = 0
+
+    with pytest.raises(ValueError, match="n_qpus must be >= 1, got 0"):
+        await executor.execute(bell_state(), shots=1000)
+
+    assert fake_client.qraise_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shots", [0, -4, 2.0, True])
+async def test_execute_rejects_non_positive_or_non_int_shots(shots: Any) -> None:
+    fake_client = _FakeCunqaClient(counts_per_qpu={"00": 1})
+    config = CUNQAExecutorConfig(n_qpus=2, walltime="00:05:00", **_FAST_POLL)
+    executor = CUNQAExecutor(config, client=fake_client)
+
+    with pytest.raises(ValueError, match=rf"CUNQA shots must be a positive integer, got {shots!r}"):
+        await executor.execute(bell_state(), shots=shots)
+
+    assert fake_client.qraise_calls == []
+    assert fake_client.run_calls == []
+
+
 def test_config_defaults() -> None:
     config = CUNQAExecutorConfig()
     assert config.n_qpus == 4

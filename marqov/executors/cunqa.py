@@ -207,8 +207,15 @@ class CUNQAExecutorConfig:
     seed: int = 0
 
     def __post_init__(self) -> None:
-        if self.n_qpus < 1:
-            raise ValueError(f"n_qpus must be >= 1, got {self.n_qpus}")
+        _validate_n_qpus(self.n_qpus)
+
+
+def _validate_n_qpus(n_qpus: object) -> None:
+    # bool is an int subclass but never a valid vQPU count.
+    if isinstance(n_qpus, bool) or not isinstance(n_qpus, int):
+        raise ValueError(f"n_qpus must be an int, got {n_qpus!r}")
+    if n_qpus < 1:
+        raise ValueError(f"n_qpus must be >= 1, got {n_qpus}")
 
 
 class CUNQAExecutor(BaseExecutor):
@@ -228,6 +235,10 @@ class CUNQAExecutor(BaseExecutor):
         circuit = self._validate_circuit(circuit)
         cfg = self._config
 
+        # Re-checked here: the config is mutable after construction.
+        _validate_n_qpus(cfg.n_qpus)
+        if isinstance(shots, bool) or not isinstance(shots, int) or shots < 1:
+            raise ValueError(f"CUNQA shots must be a positive integer, got {shots!r}")
         if shots % cfg.n_qpus != 0:
             raise ValueError(
                 f"shots ({shots}) must be evenly divisible by n_qpus ({cfg.n_qpus}) "
