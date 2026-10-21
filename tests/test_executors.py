@@ -144,6 +144,68 @@ class TestLocalExecutor:
         assert result.metadata["simulator"] == "quantumflow"
 
     @pytest.mark.asyncio
+    async def test_package_versions_looked_up_once_per_process(self) -> None:
+        """Package versions are read from distribution metadata once, not per execute."""
+        from importlib.metadata import version as real_version
+
+        import marqov.executors.local as local_module
+
+        calls: list[str] = []
+
+        def counting_version(name: str) -> str:
+            calls.append(name)
+            return real_version(name)
+
+        local_module._package_versions.cache_clear()
+        try:
+            with patch("marqov.executors.local.version", counting_version):
+                executor = LocalExecutor(LocalExecutorConfig(seed=7))
+                for _ in range(3):
+                    await executor.execute(bell_state(), shots=10)
+        finally:
+            local_module._package_versions.cache_clear()
+
+        assert sorted(calls) == ["marqov-quantumflow", "numpy"]
+
+    @pytest.mark.asyncio
+    async def test_missing_package_metadata_records_none(self) -> None:
+        """Absent distribution metadata records None instead of failing execute."""
+        from importlib.metadata import PackageNotFoundError
+
+        import marqov.executors.local as local_module
+
+        def missing_version(name: str) -> str:
+            raise PackageNotFoundError(name)
+
+        local_module._package_versions.cache_clear()
+        try:
+            with patch("marqov.executors.local.version", missing_version):
+                result = await LocalExecutor(LocalExecutorConfig(seed=7)).execute(
+                    bell_state(), shots=10
+                )
+        finally:
+            local_module._package_versions.cache_clear()
+
+        assert sum(result.counts.values()) == 10
+        assert result.metadata["reproducibility"]["packages"] == {
+            "marqov-quantumflow": None,
+            "numpy": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_package_versions_dict_is_fresh_per_result(self) -> None:
+        """Each result gets its own packages dict, so mutating one cannot affect another."""
+        executor = LocalExecutor()
+        first = await executor.execute(bell_state(), shots=10)
+        second = await executor.execute(bell_state(), shots=10)
+
+        first_packages = first.metadata["reproducibility"]["packages"]
+        second_packages = second.metadata["reproducibility"]["packages"]
+        assert first_packages is not second_packages
+        first_packages["numpy"] = "mutated"
+        assert second_packages["numpy"] != "mutated"
+
+    @pytest.mark.asyncio
     async def test_execute_timing(self) -> None:
         """Execution time is recorded."""
         executor = LocalExecutor()

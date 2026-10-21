@@ -8,13 +8,30 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass
-from importlib.metadata import version
+from functools import lru_cache
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 import numpy as np
 
 from marqov.circuits import Circuit
 from marqov.executors.base import BaseExecutor, ExecutionResult, reject_unsupported_options
+
+
+@lru_cache(maxsize=1)
+def _package_versions() -> dict[str, str | None]:
+    """Installed versions of the simulator's packages (cached per process).
+
+    A package whose distribution metadata is absent (a frozen app or vendored
+    copy) records None rather than failing the run.
+    """
+    versions: dict[str, str | None] = {}
+    for package in ("marqov-quantumflow", "numpy"):
+        try:
+            versions[package] = version(package)
+        except PackageNotFoundError:
+            versions[package] = None
+    return versions
 
 
 @dataclass
@@ -69,7 +86,8 @@ class LocalExecutor(BaseExecutor):
         Returns:
             ExecutionResult with measurement counts. ``metadata["reproducibility"]``
             records the configured ``seed`` (None when unseeded), shots, package
-            versions, bit order and a counts hash. The executor draws from one
+            versions (None for a package without distribution metadata), bit
+            order and a counts hash. The executor draws from one
             generator seeded at construction, so the seed replays a run only as
             the same sequence of calls on a fresh executor.
 
@@ -99,7 +117,7 @@ class LocalExecutor(BaseExecutor):
                 "simulator": "quantumflow",
                 "reproducibility": {
                     "record_version": 1,
-                    "packages": {p: version(p) for p in ("marqov-quantumflow", "numpy")},
+                    "packages": dict(_package_versions()),
                     "seed": self.config.seed,
                     "rng_policy": "one generator seeded at construction; draws continue across calls",
                     "shots": shots,
