@@ -5,6 +5,7 @@ job or need a cluster.
 """
 
 import asyncio
+import threading
 import time
 from typing import Any
 
@@ -269,20 +270,211 @@ async def test_execute_raises_timeout_if_qraise_itself_never_returns() -> None:
     the family generated before the call (qraise's own return value is
     unusable here — it never returned one)."""
 
+    release = threading.Event()
+
     class _HangingQraiseClient(_FakeCunqaClient):
         def qraise(self, n_qpus: int, walltime: str, **kwargs: Any) -> str:
-            time.sleep(2)
+            release.wait(5)
             return super().qraise(n_qpus, walltime, **kwargs)
 
     fake_client = _HangingQraiseClient(counts_per_qpu={})
     config = CUNQAExecutorConfig(n_qpus=2, walltime="00:05:00", startup_timeout_s=0.1, poll_interval_s=0.01)
     executor = CUNQAExecutor(config, client=fake_client)
 
-    with pytest.raises(TimeoutError, match="qraise did not return"):
+    try:
+        with pytest.raises(TimeoutError, match="qraise did not return"):
+            await executor.execute(bell_state(), shots=1000)
+
+        assert len(fake_client.dropped) == 1
+        assert fake_client.dropped[0].startswith("marqov-")
+    finally:
+        release.set()
+
+
+class _ShotTrackingClient(_FakeCunqaClient):
+    """Derives counts from the shots ``run()`` was handed, so an extra vQPU
+    shows up as extra shots instead of being hidden by a fixed counts dict."""
+
+    def __init__(self, *, extra_qpus: int = 0) -> None:
+        super().__init__(counts_per_qpu={})
+        self._extra_qpus = extra_qpus
+        self.registered: list[str] = []
+
+    def get_QPUs(self, co_located: bool, family: str) -> list[str]:
+        n_qpus = self.qraise_calls[-1]["n_qpus"]
+        self.registered = [f"qpu-{i}" for i in range(n_qpus + self._extra_qpus)]
+        return list(self.registered)
+
+    def run(self, circuits: list[Any], qpus: list[Any], **run_args: Any) -> list[Any]:
+        super().run(circuits, qpus, **run_args)
+        return [run_args["shots"]] * len(circuits)
+
+    def gather(self, jobs: list[Any]) -> list[_FakeCunqaResult]:
+        return [_FakeCunqaResult({"00": shots}) for shots in jobs]
+
+
+@pytest.mark.asyncio
+async def test_execute_uses_only_requested_qpus_when_extra_register() -> None:
+    fake_client = _ShotTrackingClient(extra_qpus=1)
+    config = CUNQAExecutorConfig(n_qpus=4, walltime="00:05:00", **_FAST_POLL)
+    executor = CUNQAExecutor(config, client=fake_client)
+
+    result = await executor.execute(bell_state(), shots=1000)
+
+    assert len(fake_client.registered) == 5
+    assert fake_client.run_calls[0]["n_circuits"] == 4
+    assert fake_client.run_calls[0]["n_qpus"] == 4
+    assert sum(result.counts.values()) == 1000
+
+
+@pytest.mark.parametrize("n_qpus", [0, -1])
+def test_config_rejects_non_positive_n_qpus(n_qpus: int) -> None:
+    with pytest.raises(ValueError, match=rf"n_qpus.*{n_qpus}"):
+        CUNQAExecutorConfig(n_qpus=n_qpus)
+
+
+@pytest.mark.asyncio
+async def test_execution_time_excludes_teardown() -> None:
+    drop_s = 0.3
+
+    class _SlowDropClient(_FakeCunqaClient):
+        def qdrop(self, family: str) -> None:
+            time.sleep(drop_s)
+            super().qdrop(family)
+
+    fake_client = _SlowDropClient(counts_per_qpu={"00": 500})
+    config = CUNQAExecutorConfig(n_qpus=2, walltime="00:05:00", **_FAST_POLL)
+    executor = CUNQAExecutor(config, client=fake_client)
+
+    start = time.monotonic()
+    result = await executor.execute(bell_state(), shots=1000)
+    wall_ms = (time.monotonic() - start) * 1000
+
+    assert result.execution_time_ms <= wall_ms - drop_s * 1000
+
+
+@pytest.mark.asyncio
+async def test_startup_timeout_is_one_budget_for_qraise_and_registration() -> None:
+    class _SlowQraiseNeverRegisters(_FakeCunqaClient):
+        def qraise(self, n_qpus: int, walltime: str, **kwargs: Any) -> str:
+            time.sleep(0.4)
+            return super().qraise(n_qpus, walltime, **kwargs)
+
+    fake_client = _SlowQraiseNeverRegisters(counts_per_qpu={}, ready_after_polls=10**6)
+    config = CUNQAExecutorConfig(n_qpus=1, walltime="00:05:00", startup_timeout_s=0.5, poll_interval_s=0.01)
+    executor = CUNQAExecutor(config, client=fake_client)
+
+    start = time.monotonic()
+    with pytest.raises(TimeoutError, match="registered"):
+        await executor.execute(bell_state(), shots=1000)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.5 + 0.2
+
+
+@pytest.mark.asyncio
+async def test_timeout_error_raised_by_qraise_itself_keeps_its_message() -> None:
+    class _QraiseTimesOut(_FakeCunqaClient):
+        def qraise(self, n_qpus: int, walltime: str, **kwargs: Any) -> str:
+            super().qraise(n_qpus, walltime, **kwargs)
+            raise TimeoutError("sbatch submission timed out talking to the controller")
+
+    fake_client = _QraiseTimesOut(counts_per_qpu={})
+    config = CUNQAExecutorConfig(n_qpus=2, walltime="00:05:00", **_FAST_POLL)
+    executor = CUNQAExecutor(config, client=fake_client)
+
+    with pytest.raises(TimeoutError, match="sbatch submission timed out") as excinfo:
         await executor.execute(bell_state(), shots=1000)
 
-    assert len(fake_client.dropped) == 1
-    assert fake_client.dropped[0].startswith("marqov-")
+    assert "may still be running" not in str(excinfo.value)
+    assert fake_client.dropped == [fake_client.qraise_calls[0]["family"]]
+
+
+@pytest.mark.asyncio
+async def test_late_qraise_completion_is_dropped_again() -> None:
+    release = threading.Event()
+    late_drop = threading.Event()
+
+    class _LateQraiseClient(_FakeCunqaClient):
+        def qraise(self, n_qpus: int, walltime: str, **kwargs: Any) -> str:
+            release.wait(5)
+            return super().qraise(n_qpus, walltime, **kwargs)
+
+        def qdrop(self, family: str) -> None:
+            super().qdrop(family)
+            if release.is_set():
+                late_drop.set()
+
+    fake_client = _LateQraiseClient(counts_per_qpu={})
+    config = CUNQAExecutorConfig(n_qpus=2, walltime="00:05:00", startup_timeout_s=0.1, poll_interval_s=0.01)
+    executor = CUNQAExecutor(config, client=fake_client)
+
+    try:
+        with pytest.raises(TimeoutError, match="qraise did not return"):
+            await executor.execute(bell_state(), shots=1000)
+        assert len(fake_client.dropped) == 1
+    finally:
+        release.set()
+
+    assert late_drop.wait(5)
+    family = fake_client.qraise_calls[0]["family"]
+    assert fake_client.dropped == [family, family]
+
+
+def test_abandoned_qraise_does_not_block_asyncio_run() -> None:
+    release = threading.Event()
+
+    class _HangingQraiseClient(_FakeCunqaClient):
+        def qraise(self, n_qpus: int, walltime: str, **kwargs: Any) -> str:
+            release.wait(3)
+            return super().qraise(n_qpus, walltime, **kwargs)
+
+    fake_client = _HangingQraiseClient(counts_per_qpu={})
+    config = CUNQAExecutorConfig(n_qpus=2, walltime="00:05:00", startup_timeout_s=0.1, poll_interval_s=0.01)
+    executor = CUNQAExecutor(config, client=fake_client)
+
+    async def run() -> None:
+        with pytest.raises(TimeoutError, match="qraise did not return"):
+            await executor.execute(bell_state(), shots=1000)
+
+    start = time.monotonic()
+    try:
+        asyncio.run(run())
+        elapsed = time.monotonic() - start
+    finally:
+        release.set()
+
+    assert elapsed < 1.0
+
+
+@pytest.mark.asyncio
+async def test_raised_messages_contain_no_em_dash() -> None:
+    release = threading.Event()
+
+    class _HangingQraiseClient(_FakeCunqaClient):
+        def qraise(self, n_qpus: int, walltime: str, **kwargs: Any) -> str:
+            release.wait(5)
+            return super().qraise(n_qpus, walltime, **kwargs)
+
+    divisibility = CUNQAExecutor(
+        CUNQAExecutorConfig(n_qpus=3, walltime="00:05:00", **_FAST_POLL),
+        client=_FakeCunqaClient(counts_per_qpu={}),
+    )
+    with pytest.raises(ValueError) as value_error:
+        await divisibility.execute(bell_state(), shots=1000)
+
+    hanging = CUNQAExecutor(
+        CUNQAExecutorConfig(n_qpus=2, walltime="00:05:00", startup_timeout_s=0.1, poll_interval_s=0.01),
+        client=_HangingQraiseClient(counts_per_qpu={}),
+    )
+    try:
+        with pytest.raises(TimeoutError, match="qraise did not return") as timeout_error:
+            await hanging.execute(bell_state(), shots=1000)
+    finally:
+        release.set()
+
+    assert "\u2014" not in str(value_error.value)
+    assert "\u2014" not in str(timeout_error.value)
 
 
 def test_config_defaults() -> None:
