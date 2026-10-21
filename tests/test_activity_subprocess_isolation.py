@@ -1243,3 +1243,28 @@ async def test_heartbeat_loop_stops_after_removal(mock_activity_ctx, monkeypatch
     assert mock_activity_ctx.call_count == beats_at_return, (
         "heartbeats were still sent after execute_task returned"
     )
+
+
+@pytest.mark.asyncio
+async def test_cancellation_while_stopping_heartbeat_propagates() -> None:
+    """A cancel of execute_task that lands while its heartbeat loop is stopped
+    must propagate, not be taken for the loop's own cancellation."""
+    import marqov.workflows.activity as activity_mod
+
+    outer: asyncio.Task[str] | None = None
+
+    async def fake_run(*args: Any, **kwargs: Any) -> str:
+        return "RESULT"
+
+    async def fake_remove(workdir: Path) -> None:
+        # Fires on the next loop tick, while the outer finally awaits the
+        # cancelled heartbeat loop.
+        assert outer is not None
+        asyncio.get_running_loop().call_soon(outer.cancel)
+
+    with patch.object(activity_mod, "_run_task_in_workdir", fake_run), patch.object(
+        activity_mod, "_remove_task_workdir", fake_remove
+    ), patch("temporalio.activity.heartbeat"), patch("temporalio.activity.logger", MagicMock()):
+        outer = asyncio.create_task(execute_task("hb-cancel-stop", "x", "[]", "{}"))
+        with pytest.raises(asyncio.CancelledError):
+            await outer

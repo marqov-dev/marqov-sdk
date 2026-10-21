@@ -295,14 +295,15 @@ async def execute_task(
                 await _remove_task_workdir(workdir)
     finally:
         heartbeat_task.cancel()
-        try:
-            await heartbeat_task
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            # Already reported by _heartbeat_loop; do not let it mask the
-            # activity's own outcome (result, child error, or cancellation).
-            pass
+        # asyncio.wait does not raise the loop's own outcome, so a cancellation
+        # of execute_task itself that lands here still propagates instead of
+        # being mistaken for the loop's.
+        await asyncio.wait({heartbeat_task})
+        if not heartbeat_task.cancelled():
+            # Already reported by _heartbeat_loop; retrieve it so it does not
+            # mask the activity's own outcome (result, child error, or
+            # cancellation) or log as never retrieved.
+            heartbeat_task.exception()
 
 
 async def _heartbeat_loop(node_id: str) -> None:
