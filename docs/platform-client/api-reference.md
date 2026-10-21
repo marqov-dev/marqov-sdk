@@ -306,8 +306,9 @@ at 10 seconds.
 **`timeout`:** overall wall-clock deadline in seconds. If the job has not
 completed in time, `TimeoutError` is raised. **The job continues running
 server-side on timeout** — it is not cancelled automatically. Each poll's HTTP
-timeout is capped at the time left in this budget, and a `TransportError` from
-a poll that ends after the deadline is raised as `TimeoutError` instead.
+timeout is capped at the time left in this budget, no retry or backoff runs
+after the deadline, and a `TransportError` from a poll that ends after the
+deadline is raised as `TimeoutError` instead.
 
 **`poll_interval`:** starting interval for client-side back-off (seconds).
 Doubles each round, capped at 10 seconds.
@@ -447,7 +448,7 @@ All inherit from `MarqovPlatformError`. Import any from `marqov.platform`:
 | `InvalidProgram` | Server rejected the program (bad gates, syntax, etc.) |
 | `JobFailed` | Job reached a failure terminal state |
 | `RateLimited` | HTTP 429; `.retry_after` (int seconds, never negative, or `None`) |
-| `TransportError` | Low-level network or unstructured HTTP failure, including a 2xx whose body is not JSON |
+| `TransportError` | Low-level network or unstructured HTTP failure, including a success response (status below 400) whose body is not JSON |
 
 `PaidBackendNotSupportedYet` is retained (never deleted) after paid backends
 are enabled in a future update, so that existing `except PaidBackendNotSupportedYet`

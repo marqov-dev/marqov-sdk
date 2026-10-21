@@ -691,19 +691,40 @@ class TestJobResultDeadline:
 
         job = Job(transport, "job-abc", rng=random.Random(0))
         start = time.monotonic()
+        # Real sleeps: the transport's backoff must not run past the deadline.
         with patch.object(transport._session, "request", side_effect=hang):
-            with patch("marqov.platform._transport.time.sleep"):
-                with pytest.raises(TimeoutError) as exc_info:
-                    job.result(timeout=budget)
+            with pytest.raises(TimeoutError) as exc_info:
+                job.result(timeout=budget)
         elapsed = time.monotonic() - start
 
         assert not isinstance(exc_info.value, TransportError)
         assert isinstance(exc_info.value.__cause__, TransportError)
         assert "did not complete within" in str(exc_info.value)
-        assert seen_timeouts, "transport was never called"
-        assert all(t <= budget for t in seen_timeouts), seen_timeouts
-        # Old behaviour: 3 attempts x 2.0 s = 6 s.  New: 3 x 0.3 s.
-        assert elapsed < 2.0, f"elapsed {elapsed:.2f}s on a {budget}s budget"
+        # One attempt used the whole budget; no retry starts after it.
+        assert len(seen_timeouts) == 1, seen_timeouts
+        assert seen_timeouts[0] <= budget
+        # Before: 3 attempts x 2.0 s plus 1.5 s backoff.
+        assert elapsed < budget + 0.3, f"elapsed {elapsed:.2f}s on a {budget}s budget"
+
+    def test_fast_failures_stop_at_deadline(self):
+        """Failures that return at once are retried only until the deadline."""
+        import requests
+
+        budget = 0.3
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        job = Job(transport, "job-abc", rng=random.Random(0))
+        start = time.monotonic()
+        with patch.object(
+            transport._session,
+            "request",
+            side_effect=requests.exceptions.ConnectionError("refused"),
+        ):
+            with pytest.raises(TimeoutError):
+                job.result(timeout=budget)
+        elapsed = time.monotonic() - start
+
+        # Before: the 0.5 s + 1.0 s backoff ran in full.
+        assert elapsed < budget + 0.3, f"elapsed {elapsed:.2f}s on a {budget}s budget"
 
     def test_transport_failure_inside_deadline_propagates(self):
         """A transport failure well before the deadline is not converted."""

@@ -48,7 +48,7 @@ from marqov.circuits import Circuit
 
 from ._models import Backend, PlatformInfo
 from ._native import build_public_submission, check_receipt, parse_runtimes, require_uuid
-from ._transport import Transport
+from ._transport import Transport, _UnreadableSuccessBody
 from .errors import MarqovPlatformError, TransportError
 from .job import Job
 
@@ -672,16 +672,12 @@ class MarqovClient:
 
 
 def _is_unreadable_success(exc: MarqovPlatformError) -> bool:
-    """Report whether `exc` is the transport's failure for a non-JSON 2xx body.
+    """Report whether `exc` is the transport's failure for a non-JSON success body.
 
-    It is the only :class:`TransportError` the transport raises with a 2xx
-    status: the server answered, but what it said cannot be read.
+    The server answered (any ``resp.ok`` status, 3xx included), but what it
+    said cannot be read.
     """
-    return (
-        isinstance(exc, TransportError)
-        and exc.status is not None
-        and 200 <= exc.status < 300
-    )
+    return isinstance(exc, _UnreadableSuccessBody)
 
 
 def _nonempty(value: str, name: str) -> None:

@@ -159,6 +159,15 @@ def _parse_retry_after(raw: str) -> int | None:
     return max(0, int(delta.total_seconds()))
 
 
+class _UnreadableSuccessBody(TransportError):
+    """A success-range response (``resp.ok``) whose body is not JSON.
+
+    Internal marker: the server answered, but what it said cannot be read.
+    Callers inside this package (submission paths) recognise it to report an
+    unknown outcome; to everyone else it is an ordinary :class:`TransportError`.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Transport
 # ---------------------------------------------------------------------------
@@ -252,6 +261,7 @@ class Transport:
         wait: int | None = None,
         idempotency_key: str | None = None,
         timeout: float | None = None,
+        deadline: float | None = None,
     ) -> dict[str, Any]:
         """Execute an HTTP request against the platform API.
 
@@ -295,6 +305,12 @@ class Transport:
                               the ``"wait"`` query param on the status endpoint.
             timeout:          Per-attempt timeout in seconds for this call.
                               Defaults to the transport's :attr:`timeout`.
+            deadline:         Optional absolute :func:`time.monotonic` time.
+                              Once it has passed no further attempt starts
+                              and no backoff runs: the last failure is raised
+                              as it would be when attempts run out.  A retry
+                              that does start has its timeout capped at the
+                              time left.  The first attempt always runs.
 
         Returns:
             Decoded JSON response body as a plain ``dict``.
@@ -319,8 +335,10 @@ class Transport:
             TransportError:              Ambiguous network failure (e.g.
                                          ``Timeout`` on a write), an HTTP
                                          error with no structured body, or a
-                                         2xx whose body is not JSON (not
-                                         retried).
+                                         success response (``resp.ok``, so
+                                         any status below 400) whose body is
+                                         not JSON (not retried; carries the
+                                         write's ``idempotency_key``).
         """
         url = self._base_url + path
         request_timeout = self._timeout if timeout is None else timeout
@@ -349,11 +367,26 @@ class Transport:
         last_exc: Exception | None = None
         last_resp: requests.Response | None = None
         next_sleep: float | None = None
+        attempts_made = 0
         for attempt in range(_MAX_RETRIES):
+            attempt_timeout = request_timeout
             if attempt > 0:
                 default_backoff = _RETRY_BACKOFF_BASE * (2 ** (attempt - 1))
-                time.sleep(next_sleep if next_sleep is not None else default_backoff)
+                pause = next_sleep if next_sleep is not None else default_backoff
+                if deadline is not None:
+                    # Neither back off nor retry past the caller's deadline.
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        break
+                    pause = min(pause, left)
+                time.sleep(pause)
+                if deadline is not None:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        break
+                    attempt_timeout = min(request_timeout, left)
             next_sleep = None
+            attempts_made = attempt + 1
 
             try:
                 resp = self._session.request(
@@ -362,7 +395,7 @@ class Transport:
                     json=json,
                     params=merged_params or None,
                     headers=extra_headers,
-                    timeout=request_timeout,
+                    timeout=attempt_timeout,
                 )
             except requests.exceptions.ConnectionError as exc:
                 # Connect-phase failures (refused, DNS, connect timeout)
@@ -410,12 +443,17 @@ class Transport:
                 try:
                     return resp.json()
                 except ValueError as exc:
-                    # e.g. a captive portal or proxy answering 200 with HTML.
-                    message = "non-JSON 2xx body"
+                    # e.g. a captive portal or proxy answering 200 with HTML,
+                    # or an unfollowed 3xx (``resp.ok`` holds below 400).
+                    detail = f"HTTP {resp.status_code}"
                     content_type = resp.headers.get("Content-Type")
                     if content_type:
-                        message += f" (Content-Type: {content_type})"
-                    raise TransportError(message, status=resp.status_code) from exc
+                        detail += f", Content-Type: {content_type}"
+                    raise _UnreadableSuccessBody(
+                        f"non-JSON success body ({detail})",
+                        status=resp.status_code,
+                        idempotency_key=idempotency_key,
+                    ) from exc
 
             # Transient server-side statuses are retried for idempotent
             # requests only; a write that was not marked idempotent must not
@@ -440,7 +478,7 @@ class Transport:
             # example, RateLimited still surfaces with its retry_after.
             return self._raise_for_response(last_resp)
         raise TransportError(
-            f"Request failed after {_MAX_RETRIES} attempts: {last_exc!r}"
+            f"Request failed after {attempts_made} attempts: {last_exc!r}"
         ) from last_exc
 
     # ------------------------------------------------------------------

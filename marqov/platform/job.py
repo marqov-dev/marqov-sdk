@@ -164,8 +164,10 @@ class Job:
 
         This guarantees the server-side hold is **strictly less than** the
         HTTP request timeout, so the transport cannot time out before the
-        server responds.  A transport failure raised once the deadline has
-        passed is reported as :class:`TimeoutError`.
+        server responds.  The deadline is also passed to the transport, which
+        starts no retry and runs no backoff after it, and caps a retry's
+        timeout at the time left.  A transport failure raised once the
+        deadline has passed is reported as :class:`TimeoutError`.
 
         Args:
             timeout:       Overall wall-clock deadline in seconds.  If the
@@ -234,6 +236,7 @@ class Job:
                     f"/api/jobs/{self._job_id}/status",
                     wait=wait_seconds if wait_seconds > 0 else None,
                     timeout=request_timeout,
+                    deadline=deadline,
                 )
             except TransportError as exc:
                 # A poll cut short by the deadline is a timeout, not a

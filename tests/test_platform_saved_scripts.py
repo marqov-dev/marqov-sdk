@@ -151,19 +151,32 @@ def test_unreadable_submit_receipt_holds_with_effective_operation_key(response):
     UUID(failure.value.idempotency_key)
 
 
-def test_non_json_submit_response_holds_with_effective_operation_key():
-    client = MarqovClient(api_key="fixture", base_url="https://test.invalid")
-    sent = []
-
+def _html_reply(status, sent):
     def request(method, url, **kwargs):
         sent.append(kwargs)
         response = requests.Response()
-        response.status_code = 200
+        response.status_code = status
         response._content = b"<html>captive portal</html>"
         response.headers["Content-Type"] = "text/html"
         return response
 
-    client._transport._session.request = request
+    return request
+
+
+def test_non_json_save_response_carries_the_sent_key():
+    client = MarqovClient(api_key="fixture", base_url="https://test.invalid")
+    sent = []
+    client._transport._session.request = _html_reply(200, sent)
+    with pytest.raises(TransportError) as failure:
+        client.save_script(SOURCE, name="n")
+    assert failure.value.idempotency_key == sent[0]["headers"]["Idempotency-Key"]
+
+
+@pytest.mark.parametrize("status", [200, 302, 304])
+def test_non_json_submit_response_holds_with_effective_operation_key(status):
+    client = MarqovClient(api_key="fixture", base_url="https://test.invalid")
+    sent = []
+    client._transport._session.request = _html_reply(status, sent)
     with pytest.raises(TransportError) as failure:
         client.submit_script(SCRIPT, backend="local", analysis_id=ANALYSIS)
     assert len(sent) == 1
