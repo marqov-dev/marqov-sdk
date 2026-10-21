@@ -3,9 +3,11 @@
 Client-side advisory layer. Warns but does not block.
 Use --force to bypass warnings.
 
-Server-side budget enforcement in the Temporal worker is mandatory
-and cannot be bypassed via --force. This utility helps researchers
-catch issues before submission — it does not replace backend checks.
+This module performs no budget comparison and enforces no spending
+limit; nothing here blocks a run on cost. Any server-side
+budget enforcement is the concern of the hosted platform, and this
+SDK does not guarantee it exists. This utility helps researchers
+catch issues before submission; it is not a spending backstop.
 
 Usage in experiment scripts:
 

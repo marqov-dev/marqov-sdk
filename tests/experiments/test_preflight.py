@@ -191,6 +191,12 @@ class TestPreflightReportsOnlyWhatItDoes:
         assert "platform-side caller" in doc
         assert "never populated by preflight()" in doc
 
+    def test_module_doc_does_not_promise_server_side_enforcement(self) -> None:
+        doc = inspect.getdoc(preflight_module) or ""
+        assert "mandatory" not in doc
+        assert "cannot be bypassed" not in doc
+        assert "performs no budget comparison" in doc
+
     def test_config_keys_logged_on_success_path(self, caplog) -> None:
         with caplog.at_level(logging.DEBUG, logger=preflight_module.logger.name):
             result = preflight(
