@@ -279,6 +279,9 @@ def build_braket_circuit(theta: float, pauli_string: str):
     """
     Build a Braket Circuit for measuring a Pauli expectation value.
 
+    Translates the gate lists from create_ansatz and create_measurement_circuit,
+    so the circuit the benchmarks run is the documented UCC ansatz.
+
     Args:
         theta: Variational parameter
         pauli_string: 2-character Pauli string ('zi', 'iz', 'zz', 'xx', 'yy')
@@ -289,19 +292,12 @@ def build_braket_circuit(theta: float, pauli_string: str):
     from braket.circuits import Circuit
 
     circuit = Circuit()
+    spec = create_measurement_circuit(create_ansatz(theta), pauli_string)
 
-    # Build ansatz
-    circuit.x(1)                    # HF reference |01⟩
-    circuit.ry(0, theta)            # Excitation
-    circuit.ry(1, -theta)
-    circuit.cnot(0, 1)
-
-    # Add basis rotations for measurement
-    for i, pauli in enumerate(pauli_string):
-        if pauli == 'x':
-            circuit.h(i)
-        elif pauli == 'y':
-            circuit.rx(i, -np.pi/2)
+    # Each gate tuple is (name, *qubits_and_angle), matching Braket's
+    # Circuit.<name>(target, angle) and Circuit.cnot(control, target)
+    for name, *args in spec['base_ansatz']['gates'] + spec['basis_rotations']:
+        getattr(circuit, name)(*args)
 
     return circuit
 
