@@ -232,9 +232,14 @@ def _validate_seconds(name: str, value: object) -> float:
     # timeout fails before qraise can return, so both must be finite and > 0.
     if isinstance(value, bool) or not isinstance(value, numbers.Real):
         raise ValueError(f"{name} must be a real number of seconds, got {value!r}")
-    if not math.isfinite(value) or value <= 0:
+    try:
+        seconds = float(value)
+    except OverflowError:
+        # An int too large for a float (e.g. 10**400) is not a usable timeout.
+        raise ValueError(f"{name} must be finite and > 0, got {value!r}") from None
+    if not math.isfinite(seconds) or seconds <= 0:
         raise ValueError(f"{name} must be finite and > 0, got {value!r}")
-    return float(value)
+    return seconds
 
 
 class CUNQAExecutor(BaseExecutor):

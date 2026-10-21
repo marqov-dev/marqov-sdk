@@ -543,7 +543,7 @@ async def test_numpy_integer_shots_and_n_qpus_are_accepted() -> None:
 
 
 _TIMING_FIELDS = ("startup_timeout_s", "poll_interval_s")
-_BAD_TIMING_VALUES = [0, 0.0, -1, -0.5, float("nan"), float("inf"), float("-inf"), True, False, "1", None]
+_BAD_TIMING_VALUES = [0, 0.0, -1, -0.5, float("nan"), float("inf"), float("-inf"), True, False, "1", None, 10**400]
 
 
 @pytest.mark.parametrize("field", _TIMING_FIELDS)
