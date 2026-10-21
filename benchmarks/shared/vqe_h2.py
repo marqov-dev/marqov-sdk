@@ -60,14 +60,18 @@ def create_ansatz(theta: float) -> dict:
     """
     Create ansatz circuit specification for H₂ VQE.
 
-    Implements the Unitary Coupled Cluster (UCC) ansatz from O'Malley et al. 2016:
-        |ϕ(θ)⟩ = exp(-iθ X₀Y₁) |01⟩
+    Implements the Unitary Coupled Cluster (UCC) ansatz from O'Malley et al. 2016.
+    With Rz(θ) = exp(-iθZ/2), the gates below prepare
+        |ϕ(θ)⟩ = exp(-i(θ/2) Y₀X₁) |10⟩ = exp(+i(θ/2) X₀Y₁) |10⟩
+
+    Kets are written qubit 0 first, matching Braket bitstrings (bitstring[0]
+    is qubit 0), so |10⟩ is the Hartree-Fock reference with qubit 0 occupied.
 
     Circuit matches O'Malley Figure 1 (page 2):
-        1. X(q0) - prepare Hartree-Fock state |01⟩
-        2. Basis rotations: Ry(π/2, q1), Rx(-π/2, q0)
+        1. X(q0) - prepare Hartree-Fock state |10⟩
+        2. Basis rotations: Ry(π/2, q1) maps X₁ to Z₁, Rx(-π/2, q0) maps Y₀ to Z₀
         3. CNOT(q1 → q0) - entangle
-        4. Rz(θ, q0) - apply rotation
+        4. Rz(θ, q0) - with steps 3 and 5, applies exp(-i(θ/2) Z₀Z₁)
         5. CNOT(q1 → q0) - disentangle
         6. Inverse basis rotations: Ry(-π/2, q1), Rx(π/2, q0)
 
@@ -82,9 +86,9 @@ def create_ansatz(theta: float) -> dict:
         'qubits': 2,
         'theta': theta,
         'gates': [
-            ('x', 0),                       # Prepare |01⟩ HF reference
-            ('ry', 1, np.pi/2),            # Basis rotation Y→Z
-            ('rx', 0, -np.pi/2),           # Basis rotation X→Z
+            ('x', 0),                       # Prepare |10⟩ HF reference
+            ('ry', 1, np.pi/2),            # Basis rotation X→Z
+            ('rx', 0, -np.pi/2),           # Basis rotation Y→Z
             ('cnot', 1, 0),                # Entangle (control=q1, target=q0)
             ('rz', 0, theta),              # Apply rotation
             ('cnot', 1, 0),                # Disentangle
