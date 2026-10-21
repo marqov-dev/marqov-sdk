@@ -144,16 +144,35 @@ class NoiseModel:
 
         Computes damping rates from T1/T2 relaxation times and gate duration:
           gamma_ad = 1 - exp(-gate_time / T1)
-          gamma_pd = 1 - exp(-gate_time / T2)
+          gamma_pd = 1 - exp(-2 * gate_time * (1/T2 - 1/(2*T1)))
+
+        T2 is the total transverse coherence time (what a Ramsey or echo
+        measurement reports), so 1/T2 = 1/(2*T1) + 1/T_phi. Amplitude damping
+        already supplies the 1/(2*T1) part; phase damping supplies only the
+        pure dephasing rate 1/T_phi. With both channels applied once per gate,
+        off-diagonal elements decay by exp(-gate_time / T2) per gate.
 
         Args:
             t1: T1 relaxation time (seconds).
-            t2: T2 dephasing time (seconds).
+            t2: T2 total coherence time (seconds).
             gate_time: Single gate duration (seconds).
             num_qubits: Number of qubits in the circuit.
+
+        Raises:
+            ValueError: If t1, t2 or gate_time is not positive, or if
+                t2 > 2 * t1 (unphysical).
         """
+        if not t1 > 0:
+            raise ValueError(f"t1 must be positive, got {t1}")
+        if not t2 > 0:
+            raise ValueError(f"t2 must be positive, got {t2}")
+        if not gate_time > 0:
+            raise ValueError(f"gate_time must be positive, got {gate_time}")
+        if t2 > 2 * t1:
+            raise ValueError(f"t2 must be at most 2 * t1 ({2 * t1}), got {t2}")
+
         gamma_ad = 1 - math.exp(-gate_time / t1)
-        gamma_pd = 1 - math.exp(-gate_time / t2)
+        gamma_pd = 1 - math.exp(-2 * gate_time * (1 / t2 - 1 / (2 * t1)))
         qubits = list(range(num_qubits))
 
         model = cls()
