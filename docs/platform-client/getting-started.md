@@ -61,6 +61,16 @@ client = MarqovClient(api_key="marqey_live_your_key_here")
 
 `AuthenticationError` is raised immediately if no key can be resolved.
 
+The client keeps a pooled HTTP session open. In a long-lived process, use it
+as a context manager so the session is closed when you are done (or call
+`client.close()`):
+
+```python
+with MarqovClient() as client:
+    for b in client.backends():
+        print(b.slug)
+```
+
 **Constructor options:**
 
 | Parameter | Default | Description |

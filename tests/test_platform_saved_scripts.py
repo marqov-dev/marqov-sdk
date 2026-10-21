@@ -151,6 +151,27 @@ def test_unreadable_submit_receipt_holds_with_effective_operation_key(response):
     UUID(failure.value.idempotency_key)
 
 
+def test_non_json_submit_response_holds_with_effective_operation_key():
+    client = MarqovClient(api_key="fixture", base_url="https://test.invalid")
+    sent = []
+
+    def request(method, url, **kwargs):
+        sent.append(kwargs)
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b"<html>captive portal</html>"
+        response.headers["Content-Type"] = "text/html"
+        return response
+
+    client._transport._session.request = request
+    with pytest.raises(TransportError) as failure:
+        client.submit_script(SCRIPT, backend="local", analysis_id=ANALYSIS)
+    assert len(sent) == 1
+    assert failure.value.code == "submission_outcome_unknown"
+    assert failure.value.idempotency_key == sent[0]["headers"]["Idempotency-Key"]
+    assert isinstance(failure.value.__cause__, ValueError)
+
+
 @pytest.mark.parametrize(
     "shots,accepted",
     [(np.int64(16), True), (np.uint8(16), True), (True, False), (3.0, False), (0, False)],

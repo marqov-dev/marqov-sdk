@@ -37,6 +37,16 @@ then the built-in production endpoint (`https://app.marqov.ai`).
 **`timeout`** is the per-request HTTP timeout in seconds (not the overall
 `result()` poll timeout — those are separate).
 
+**Closing:** the client holds a pooled HTTP session. Use it as a context
+manager, which closes the session on exit, or call `client.close()` when you
+are done. `close()` is idempotent; using the client after it is not supported.
+
+```python
+with MarqovClient() as client:
+    job = client.job(job_id)
+    result = job.result(timeout=300.0)
+```
+
 ---
 
 ### `client.submit()`
@@ -295,7 +305,9 @@ at 10 seconds.
 
 **`timeout`:** overall wall-clock deadline in seconds. If the job has not
 completed in time, `TimeoutError` is raised. **The job continues running
-server-side on timeout** — it is not cancelled automatically.
+server-side on timeout** — it is not cancelled automatically. Each poll's HTTP
+timeout is capped at the time left in this budget, and a `TransportError` from
+a poll that ends after the deadline is raised as `TimeoutError` instead.
 
 **`poll_interval`:** starting interval for client-side back-off (seconds).
 Doubles each round, capped at 10 seconds.
@@ -303,7 +315,7 @@ Doubles each round, capped at 10 seconds.
 **Raises:**
 - `JobFailed` — job reached `failed` or `dispatch_failed` (or `cancelled`) terminal state.
 - `TimeoutError` — deadline elapsed before the job completed.
-- `MarqovPlatformError` — transport error during polling.
+- `MarqovPlatformError` — transport error during polling, before the deadline.
 
 ---
 
@@ -434,8 +446,8 @@ All inherit from `MarqovPlatformError`. Import any from `marqov.platform`:
 | `BackendUnavailable` | Backend offline or unrecognised |
 | `InvalidProgram` | Server rejected the program (bad gates, syntax, etc.) |
 | `JobFailed` | Job reached a failure terminal state |
-| `RateLimited` | HTTP 429; `.retry_after` (int seconds or `None`) |
-| `TransportError` | Low-level network or unstructured HTTP failure |
+| `RateLimited` | HTTP 429; `.retry_after` (int seconds, never negative, or `None`) |
+| `TransportError` | Low-level network or unstructured HTTP failure, including a 2xx whose body is not JSON |
 
 `PaidBackendNotSupportedYet` is retained (never deleted) after paid backends
 are enabled in a future update, so that existing `except PaidBackendNotSupportedYet`

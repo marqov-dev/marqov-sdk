@@ -14,7 +14,7 @@ import time
 import typing
 import uuid
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import Any, Self
 
 import requests
 import requests.exceptions
@@ -132,7 +132,7 @@ def _parse_retry_after(raw: str) -> int | None:
     """Parse a ``Retry-After`` header value into whole seconds.
 
     RFC 7231 §7.1.3 allows two forms:
-      - delta-seconds — a plain integer, e.g. ``"30"``.
+      - delta-seconds — a plain integer, e.g. ``"30"``, clamped to ``>= 0``.
       - HTTP-date — e.g. ``"Wed, 21 Oct 2026 07:28:00 GMT"``, converted to a
         delta against the current time and clamped to ``>= 0`` (a date in
         the past never yields a negative wait).
@@ -141,7 +141,7 @@ def _parse_retry_after(raw: str) -> int | None:
     parseable HTTP-date.
     """
     try:
-        return int(raw)
+        return max(0, int(raw))
     except (ValueError, TypeError):
         pass
 
@@ -207,6 +207,7 @@ class Transport:
         )
         self._base_url = resolved_url.rstrip("/")
         self._timeout = timeout
+        self._closed = False
 
         # --- Build session --------------------------------------------------
         self._session = requests.Session()
@@ -223,6 +224,23 @@ class Transport:
         """
         return self._timeout
 
+    def close(self) -> None:
+        """Close the underlying HTTP session and release its pooled sockets.
+
+        Idempotent: a second call does nothing.  Reusing the transport after
+        ``close()`` is not supported.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        self._session.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
     def request(
         self,
         method: str,
@@ -233,6 +251,7 @@ class Transport:
         idempotent_write: bool = False,
         wait: int | None = None,
         idempotency_key: str | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Execute an HTTP request against the platform API.
 
@@ -274,6 +293,8 @@ class Transport:
             wait:             If given, appended as the ``wait`` query
                               parameter (long-poll seconds).  The server reads
                               the ``"wait"`` query param on the status endpoint.
+            timeout:          Per-attempt timeout in seconds for this call.
+                              Defaults to the transport's :attr:`timeout`.
 
         Returns:
             Decoded JSON response body as a plain ``dict``.
@@ -286,7 +307,7 @@ class Transport:
                                          from the ``Retry-After`` header when
                                          present — either delta-seconds or an
                                          RFC 7231 HTTP-date (converted to a
-                                         delta, clamped to ``>= 0``) — else
+                                         delta), clamped to ``>= 0`` — else
                                          ``None``. The header is not required
                                          for this to raise.
             BackendUnavailable:          HTTP 422 ``backend_unknown`` /
@@ -296,10 +317,13 @@ class Transport:
                                          (``code`` preserved; never coerced to
                                          ``TransportError``).
             TransportError:              Ambiguous network failure (e.g.
-                                         ``Timeout`` on a write) or an HTTP
-                                         error with no structured body.
+                                         ``Timeout`` on a write), an HTTP
+                                         error with no structured body, or a
+                                         2xx whose body is not JSON (not
+                                         retried).
         """
         url = self._base_url + path
+        request_timeout = self._timeout if timeout is None else timeout
 
         # Merge wait into query params.
         # Server reads the "wait" query param on the status endpoint.
@@ -338,7 +362,7 @@ class Transport:
                     json=json,
                     params=merged_params or None,
                     headers=extra_headers,
-                    timeout=self._timeout,
+                    timeout=request_timeout,
                 )
             except requests.exceptions.ConnectionError as exc:
                 # Connect-phase failures (refused, DNS, connect timeout)
@@ -383,7 +407,15 @@ class Transport:
 
             # --- HTTP response received -------------------------------------
             if resp.ok:
-                return resp.json()
+                try:
+                    return resp.json()
+                except ValueError as exc:
+                    # e.g. a captive portal or proxy answering 200 with HTML.
+                    message = "non-JSON 2xx body"
+                    content_type = resp.headers.get("Content-Type")
+                    if content_type:
+                        message += f" (Content-Type: {content_type})"
+                    raise TransportError(message, status=resp.status_code) from exc
 
             # Transient server-side statuses are retried for idempotent
             # requests only; a write that was not marked idempotent must not

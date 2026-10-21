@@ -125,8 +125,8 @@ class RateLimited(MarqovPlatformError):
             seconds.  Accepts both the delta-seconds form (e.g. ``"30"``) and
             the RFC 7231 HTTP-date form (e.g. ``"Wed, 21 Oct 2026 07:28:00
             GMT"``) — the latter is converted to a delta against the current
-            time, clamped to ``>= 0``.  ``None`` if the header was absent or
-            unparseable.
+            time.  Either form is clamped to ``>= 0``.  ``None`` if the header
+            was absent or unparseable.
     """
 
     def __init__(

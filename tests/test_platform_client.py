@@ -580,3 +580,29 @@ class TestDocClaimsPinned:
             result = client.backends()
         assert [b.slug for b in result] == ["c", "a", "b"]
         assert [b.extra["displayOrder"] for b in result] == [1, 3, 2]
+
+
+# ---------------------------------------------------------------------------
+# Session lifecycle (marqov-sdk#150)
+# ---------------------------------------------------------------------------
+
+
+class TestSessionLifecycle:
+    """MarqovClient closes its HTTP session via close() or a with block."""
+
+    def test_context_manager_closes_session_once(self):
+        """The with form closes the session exactly once; a later close() is safe."""
+        client = _make_client()
+        with patch.object(client._transport._session, "close") as mock_close:
+            with client as entered:
+                assert entered is client
+                assert mock_close.call_count == 0
+            assert mock_close.call_count == 1
+            client.close()
+        assert mock_close.call_count == 1
+
+    def test_close_delegates_to_transport(self):
+        client = _make_client()
+        with patch.object(client._transport, "close") as mock_close:
+            client.close()
+        mock_close.assert_called_once_with()
