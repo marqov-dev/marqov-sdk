@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import numbers
 import threading
 import time
@@ -189,9 +190,12 @@ class CUNQAExecutorConfig:
             observing real usage on a live cluster.
         startup_timeout_s: One budget, in seconds, covering both the
             ``qraise`` call and the wait for all n_qpus vQPUs to register
-            after it. TimeoutError is raised once it is spent.
+            after it. TimeoutError is raised once it is spent. Must be a
+            finite real number > 0 (not bool); NumPy numeric types are
+            accepted and stored as float. ValueError otherwise.
         poll_interval_s: Seconds between readiness polls. Clamped so the
-            final poll never sleeps past startup_timeout_s.
+            final poll never sleeps past startup_timeout_s. Same rules as
+            startup_timeout_s: finite, > 0, not bool, stored as float.
         seed: Reserved for Phase 1 (deterministic seeding). NOT wired into
             ``run()`` yet — CUNQA's run() has no documented seed kwarg.
     """
@@ -210,6 +214,8 @@ class CUNQAExecutorConfig:
     def __post_init__(self) -> None:
         _validate_n_qpus(self.n_qpus)
         self.n_qpus = int(self.n_qpus)
+        self.startup_timeout_s = _validate_seconds("startup_timeout_s", self.startup_timeout_s)
+        self.poll_interval_s = _validate_seconds("poll_interval_s", self.poll_interval_s)
 
 
 def _validate_n_qpus(n_qpus: object) -> None:
@@ -219,6 +225,16 @@ def _validate_n_qpus(n_qpus: object) -> None:
         raise ValueError(f"n_qpus must be an int, got {n_qpus!r}")
     if n_qpus < 1:
         raise ValueError(f"n_qpus must be >= 1, got {n_qpus}")
+
+
+def _validate_seconds(name: str, value: object) -> float:
+    # A zero poll interval busy-polls get_QPUs, and a non-positive or NaN
+    # timeout fails before qraise can return, so both must be finite and > 0.
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise ValueError(f"{name} must be a real number of seconds, got {value!r}")
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be finite and > 0, got {value!r}")
+    return float(value)
 
 
 class CUNQAExecutor(BaseExecutor):
@@ -240,6 +256,8 @@ class CUNQAExecutor(BaseExecutor):
 
         # Re-checked here: the config is mutable after construction.
         _validate_n_qpus(cfg.n_qpus)
+        _validate_seconds("startup_timeout_s", cfg.startup_timeout_s)
+        _validate_seconds("poll_interval_s", cfg.poll_interval_s)
         if isinstance(shots, bool) or not isinstance(shots, numbers.Integral) or shots < 1:
             raise ValueError(f"CUNQA shots must be a positive integer, got {shots!r}")
         shots = int(shots)

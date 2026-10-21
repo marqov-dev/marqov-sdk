@@ -1196,6 +1196,26 @@ class TestCUNQAFactoryConfigValidation:
         assert repr(key) in message
         assert received in message
 
+    @pytest.mark.parametrize("dtype", ["int64", "int32"])
+    def test_numpy_integer_n_qpus_accepted_like_config(self, dtype: str) -> None:
+        import numpy as np
+
+        value = getattr(np, dtype)(4)
+        with patch("marqov.executors.cunqa._CunqaModuleClient", MagicMock()):
+            executor = ExecutorFactory.create_executor("cunqa", {"provider": "CUNQA", "n_qpus": value})
+        assert executor._config.n_qpus == 4 and type(executor._config.n_qpus) is int
+
+    @pytest.mark.parametrize("value", [0, -2])
+    def test_non_positive_n_qpus_rejected_naming_key(self, value: int) -> None:
+        with pytest.raises(ValueError, match=rf"'n_qpus'.*n_qpus must be >= 1, got {value}"):
+            ExecutorFactory.create_executor("cunqa", {"provider": "CUNQA", "n_qpus": value})
+
+    @pytest.mark.parametrize("key", ["startup_timeout_s", "poll_interval_s"])
+    @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
+    def test_non_positive_or_non_finite_timing_rejected(self, key: str, value: float) -> None:
+        with pytest.raises(ValueError, match=rf"{key} must be"):
+            ExecutorFactory.create_executor("cunqa", {"provider": "CUNQA", key: value})
+
     def test_int_accepted_for_float_fields(self) -> None:
         with patch("marqov.executors.cunqa._CunqaModuleClient", MagicMock()):
             executor = ExecutorFactory.create_executor(

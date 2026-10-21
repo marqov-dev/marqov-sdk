@@ -25,7 +25,7 @@ from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorCon
 from marqov.executors.base import BaseExecutor
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
 from marqov.executors.cudaq import _SLUG_TO_TARGET, CudaqExecutor, CudaqExecutorConfig
-from marqov.executors.cunqa import CUNQAExecutor, CUNQAExecutorConfig
+from marqov.executors.cunqa import CUNQAExecutor, CUNQAExecutorConfig, _validate_n_qpus
 from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig, normalize_ibm_connection
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
 from marqov.executors.lightning import LightningExecutor, LightningExecutorConfig
@@ -529,10 +529,12 @@ class ExecutorFactory:
         Returns:
             Configured CUNQAExecutor instance.
         """
-        # Expected type per CUNQAExecutorConfig field; the dataclass does not
-        # validate, so a wrong type would otherwise surface inside execute().
+        # Expected type per remaining CUNQAExecutorConfig field, checked here so
+        # a bad value is reported against its config key. n_qpus is checked
+        # below by the dataclass's own validator, so the factory accepts
+        # exactly what CUNQAExecutorConfig accepts; the dataclass also
+        # range-checks the two timing fields.
         field_types: dict[str, type | tuple[type, ...]] = {
-            "n_qpus": int,
             "walltime": str,
             "simulator": str,
             "co_located": bool,
@@ -548,6 +550,15 @@ class ExecutorFactory:
                 "is reserved and never reaches run()); omit the key"
             )
         kwargs: dict[str, Any] = {}
+        if "n_qpus" in backend_config:
+            n_qpus = backend_config["n_qpus"]
+            try:
+                _validate_n_qpus(n_qpus)
+            except ValueError as exc:
+                raise ValueError(
+                    f"CUNQA config key 'n_qpus' is invalid (got {type(n_qpus).__name__}): {exc}"
+                ) from exc
+            kwargs["n_qpus"] = n_qpus
         for key, expected in field_types.items():
             if key not in backend_config:
                 continue

@@ -540,3 +540,38 @@ async def test_numpy_integer_shots_and_n_qpus_are_accepted() -> None:
     assert result.counts == {"00": 60, "11": 40}
     assert result.shots == 100 and type(result.shots) is int
     assert fake_client.run_calls[-1]["shots"] == 50
+
+
+_TIMING_FIELDS = ("startup_timeout_s", "poll_interval_s")
+_BAD_TIMING_VALUES = [0, 0.0, -1, -0.5, float("nan"), float("inf"), float("-inf"), True, False, "1", None]
+
+
+@pytest.mark.parametrize("field", _TIMING_FIELDS)
+@pytest.mark.parametrize("value", _BAD_TIMING_VALUES)
+def test_config_rejects_bad_timing_value(field: str, value: Any) -> None:
+    with pytest.raises(ValueError, match=rf"{field} must be"):
+        CUNQAExecutorConfig(**{field: value})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", _TIMING_FIELDS)
+@pytest.mark.parametrize("value", _BAD_TIMING_VALUES)
+async def test_execute_revalidates_timing_mutated_after_construction(field: str, value: Any) -> None:
+    fake_client = _FakeCunqaClient(counts_per_qpu={"00": 500})
+    config = CUNQAExecutorConfig(n_qpus=2, walltime="00:05:00", **_FAST_POLL)
+    executor = CUNQAExecutor(config, client=fake_client)
+    setattr(config, field, value)
+
+    with pytest.raises(ValueError, match=rf"{field} must be"):
+        await executor.execute(bell_state(), shots=1000)
+
+    assert fake_client.qraise_calls == []
+    assert fake_client.run_calls == []
+
+
+def test_config_accepts_numpy_timing_values_and_normalises_to_float() -> None:
+    import numpy as np
+
+    config = CUNQAExecutorConfig(startup_timeout_s=np.float32(2.5), poll_interval_s=np.int64(1))
+    assert config.startup_timeout_s == 2.5 and type(config.startup_timeout_s) is float
+    assert config.poll_interval_s == 1.0 and type(config.poll_interval_s) is float
