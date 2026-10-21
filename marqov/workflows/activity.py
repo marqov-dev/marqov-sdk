@@ -217,6 +217,9 @@ def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
 
     ``start_new_session=True`` makes pgid == pid, so grandchildren die with it
     instead of lingering (mirrors dwave_executor._kill_process_group).
+    Safe to call after the child has exited: a group with no members left
+    raises ProcessLookupError, and ``proc.kill()`` on a reaped child is a no-op
+    or raises ProcessLookupError, both of which are swallowed.
     """
     try:
         os.killpg(proc.pid, signal.SIGKILL)
@@ -244,9 +247,12 @@ async def execute_task(
     and validated here (shape plus node_id), because the child owns its
     workdir and must not be able to name a different node.
 
-    The task's workdir is removed once the child has exited and its output has
-    been read, whether the task succeeded, failed or was cancelled (a Temporal
-    timeout arrives as a cancellation). Setting ``MARQOV_KEEP_TASK_WORKDIR``
+    When the child exits, its whole process group is killed, so a process the
+    task body left running does not outlive the task. The task's workdir is
+    then removed (in a thread, off the event loop) once the output has been
+    read, whether the task succeeded, failed or was cancelled (a Temporal
+    timeout arrives as a cancellation, and a further cancellation during the
+    removal does not cut it short). Setting ``MARQOV_KEEP_TASK_WORKDIR``
     to ``1``, ``true``, ``yes`` or ``on`` keeps it and logs its path, as a
     debugging aid.
 
@@ -279,7 +285,27 @@ async def execute_task(
         if keep_task_workdir_requested():
             activity.logger.info("Keeping workdir for node %s: %s", node_id, workdir)
         else:
-            shutil.rmtree(workdir, ignore_errors=True)
+            await _remove_task_workdir(workdir)
+
+
+async def _remove_task_workdir(workdir: Path) -> None:
+    """Remove ``workdir`` off the event loop, finishing even if cancelled meanwhile.
+
+    The removal runs in a thread so a large workdir does not stall heartbeats.
+    It is shielded, and a cancellation that arrives while it runs is held
+    back until the removal has finished, then re-raised.
+    """
+    removal = asyncio.ensure_future(
+        asyncio.to_thread(shutil.rmtree, workdir, ignore_errors=True)
+    )
+    cancelled = False
+    while not removal.done():
+        try:
+            await asyncio.shield(removal)
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 async def _run_task_in_workdir(
@@ -342,6 +368,10 @@ async def _run_task_in_workdir(
 
     try:
         await child_task
+        # Anything the task body left running in its process group (a
+        # grandchild) dies now, before the output is read and the workdir is
+        # removed, so it cannot rewrite either afterwards.
+        _kill_process_group(proc)
         if stderr_task is not None:
             # The child has exited; let the reader reach EOF so the tail is
             # complete before it is used in an error message.

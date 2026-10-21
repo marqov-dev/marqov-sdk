@@ -990,3 +990,126 @@ async def test_workdir_lives_in_private_worker_parent(mock_activity_ctx):
         assert value.startswith(workdir + os.sep), (
             f"{key}={value!r} exposes the worker parent directory"
         )
+
+
+def _slow_rmtree(started: Any, delay: float) -> Any:
+    """A stand-in for shutil.rmtree that takes ``delay`` seconds, then removes."""
+    import shutil
+
+    real_rmtree = shutil.rmtree
+
+    def slow(path: Any, *args: Any, **kwargs: Any) -> None:
+        started.set()
+        time.sleep(delay)
+        real_rmtree(path, *args, **kwargs)
+
+    return slow
+
+
+@pytest.mark.asyncio
+async def test_workdir_removal_does_not_block_event_loop(mock_activity_ctx, monkeypatch):
+    """A slow workdir removal must not stall the worker's event loop (heartbeats)."""
+    import threading
+
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+    started = threading.Event()
+    gaps: list[float] = []
+    stop = False
+
+    async def ticker() -> None:
+        last = time.monotonic()
+        while not stop:
+            await asyncio.sleep(0.01)
+            now = time.monotonic()
+            if started.is_set():
+                gaps.append(now - last)
+            last = now
+
+    tick_task = asyncio.create_task(ticker())
+    with patch(
+        "marqov.workflows.activity.shutil.rmtree", _slow_rmtree(started, delay=1.0)
+    ):
+        result_json = await execute_task(
+            "wd-slow-rm", _workdir_fn_ref(), json.dumps([]), json.dumps({})
+        )
+    stop = True
+    await tick_task
+
+    assert started.is_set(), "workdir removal never ran"
+    assert not os.path.exists(json.loads(result_json)["result"])
+    assert gaps and max(gaps) < 0.5, (
+        f"event loop stalled for {max(gaps, default=0):.2f}s during workdir removal"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_removal_still_removes_workdir(
+    mock_activity_ctx, monkeypatch
+):
+    """A cancellation that lands while the workdir is being removed must not skip it."""
+    import threading
+
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+    started = threading.Event()
+    with patch(
+        "marqov.workflows.activity.shutil.rmtree", _slow_rmtree(started, delay=0.5)
+    ):
+        task = asyncio.create_task(
+            execute_task("wd-cancel-rm", _workdir_fn_ref(), json.dumps([]), json.dumps({}))
+        )
+        deadline = time.monotonic() + 30
+        while not started.is_set():
+            assert time.monotonic() < deadline, "workdir removal never started"
+            await asyncio.sleep(0.01)
+        # Cancel twice while removal is in progress.
+        task.cancel()
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    from marqov.workflows import _child_env as ce
+
+    parent = ce._worker_parent_dir
+    assert parent is not None
+    leftover = list(parent.glob("marqov_task_wd-cancel-rm_*"))
+    assert leftover == [], f"workdir left behind after cancellation: {leftover}"
+
+
+@pytest.mark.asyncio
+async def test_grandchild_cannot_recreate_workdir(mock_activity_ctx, monkeypatch):
+    """A process the task leaves running is killed before the workdir is removed."""
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+
+    def spawn_late_writer() -> str:
+        import os as _os
+        import subprocess as _subprocess
+        import sys as _sys
+
+        wd = _os.environ["MARQOV_TASK_WORKDIR"]
+        code = (
+            "import os, time; time.sleep(0.5); "
+            f"os.makedirs(os.path.join({wd!r}, 'late'), exist_ok=True); "
+            f"open(os.path.join({wd!r}, 'late', 'x'), 'w').write('hi')"
+        )
+        _subprocess.Popen(
+            [_sys.executable, "-c", code],
+            stdin=_subprocess.DEVNULL,
+            stdout=_subprocess.DEVNULL,
+            stderr=_subprocess.DEVNULL,
+        )
+        return wd
+
+    result_json = await execute_task(
+        "wd-grandchild", _enc(spawn_late_writer), json.dumps([]), json.dumps({})
+    )
+    workdir = json.loads(result_json)["result"]
+    await asyncio.sleep(1.5)
+    try:
+        assert not os.path.exists(workdir), (
+            f"a leftover grandchild recreated {workdir} after removal"
+        )
+    finally:
+        import shutil
+
+        shutil.rmtree(workdir, ignore_errors=True)
