@@ -43,8 +43,12 @@ Independent tasks execute in parallel automatically. Marqov handles scheduling, 
 
 ## Installation
 
-SDK 0.7.0 is published. See the [changelog](CHANGELOG.md) and
-[0.7.0 upgrade guide](docs/releases/0.7.0.md), especially if you use AWS Braket.
+The current release is on [PyPI](https://pypi.org/project/marqov/). The
+[changelog](https://github.com/marqov-dev/marqov-sdk/blob/main/CHANGELOG.md) lists every change by release, with an Upgrading
+section for anything that can alter existing code. If you are upgrading from
+0.9.x or earlier, read the [0.10.0 release notes](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/releases/0.10.0.md)
+first: options an executor or `MarqovDevice.run()` does not apply now raise
+`TypeError` instead of being ignored.
 
 ```bash
 pip install marqov
@@ -78,11 +82,11 @@ pip install "marqov[all]"
 Use Python 3.12 for `[all]`, `[rigetti]` and `[pyquil]`: current pyQuil/quil
 dependencies do not reliably install and import on Python 3.13. Release
 verification covers Python 3.12; it does not establish 3.13 support for these extras.
-See the [Python compatibility matrix](docs/python-compatibility.md) for independently
+See the [Python compatibility matrix](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/python-compatibility.md) for independently
 qualified Python 3.13 paths, exact candidate versions and known restrictions.
 
 The Azure extra selects the vendor's Qiskit and Cirq adapter dependencies,
-including Q# support. See [Azure installation checks](docs/azure-installation.md).
+including Q# support. See [Azure installation checks](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/azure-installation.md).
 
 AWS Braket is an optional provider dependency. Existing Braket installations
 should use `marqov[braket]` (or `marqov[all]`) when upgrading. Core workflows,
@@ -92,7 +96,7 @@ Braket circuit conversions. Hosted compiler/task environments can pin
 their serialization version without inheriting Braket's separate job serializer
 constraint.
 
-See the [QuTiP guide](docs/qutip.md) for a copy-and-run simulation, recorded
+See the [QuTiP guide](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/qutip.md) for a copy-and-run simulation, recorded
 observables, seed replay and saved-state handling. In a source checkout, run:
 
 ```bash
@@ -174,13 +178,13 @@ result = await executor.execute(circuit, shots=1000)
 | Quantum Brilliance | Available — requires `qristal` installed separately (not on PyPI, no `marqov[...]` extra); build from source or use the Docker image: https://qristal.readthedocs.io/ |
 | CUDA-Q | Available — not in `[all]` (GPU-heavy); install separately with `pip install "marqov[cudaq]"` |
 | Qilimanjaro (qilisdk local simulators — digital `execute()` and analog `execute_analog()`) | Available — not on PyPI as a `marqov[...]` extra (like Quantum Brilliance): `qilisdk`'s numpy floor is incompatible with marqov's own numpy ceiling outside a narrow macOS overlap window. Install separately: `pip install qilisdk`. |
-| PennyLane Lightning (Xanadu `lightning.qubit`, `lightning.kokkos`, `lightning.gpu`, `lightning.tensor`; local) | Available — `pip install "marqov[pennylane]"` for `lightning.qubit` (also in `[all]`); add `marqov[lightning-kokkos]` for `lightning.kokkos` (Linux x86_64/aarch64, macOS arm64). GPU/tensor source support requires compatible optional plugins and NVIDIA libraries/hardware; GPU execution remains unqualified. See [Lightning guide](docs/lightning.md). |
-| Alice & Bob (local logical-qubit emulator) | Available — not a `marqov[...]` extra; install in an isolated environment: `pip install qiskit-alice-bob-provider==1.2.0`. See [Alice & Bob guide](docs/alice-bob.md). |
+| PennyLane Lightning (Xanadu `lightning.qubit`, `lightning.kokkos`, `lightning.gpu`, `lightning.tensor`; local) | Available — `pip install "marqov[pennylane]"` for `lightning.qubit` (also in `[all]`); add `marqov[lightning-kokkos]` for `lightning.kokkos` (Linux x86_64/aarch64, macOS arm64). GPU/tensor source support requires compatible optional plugins and NVIDIA libraries/hardware; GPU execution remains unqualified. See [Lightning guide](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/lightning.md). |
+| Alice & Bob (local logical-qubit emulator) | Available — not a `marqov[...]` extra; install in an isolated environment: `pip install qiskit-alice-bob-provider==1.2.0`. See [Alice & Bob guide](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/alice-bob.md). |
 | CESGA CUNQA (distributed-QC emulator, Slurm-based) | Available (provider `"CUNQA"`) — not on PyPI at all (no wheel; build from source, see `CESGA-Quantum-Spain/cunqa`) and not a `marqov[...]` extra: CUNQA's exact `qiskit==1.2.4` pin would downgrade the whole project's lockfile if included in `[project.optional-dependencies]`, same class of problem `qilisdk` had. Install `qiskit==1.2.4` separately in the environment where CUNQA is built. |
 
 ---
 
-For QiliSim sampling seeds and repeatability limits, see [QiliSDK seed support](docs/qilisdk.md).
+For QiliSim sampling seeds and repeatability limits, see [QiliSDK seed support](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/qilisdk.md).
 
 ## Circuit Interop
 
@@ -224,7 +228,7 @@ platform client. It is only activated when you import it explicitly.
 > through `client.submit_native()`; `client.backends()`, `client.job()`,
 > `job.status()` and `job.result()` work for any job. The request shapes are
 > tested against the hosted API's contract; authenticated live verification is
-> pending. See [Current limitations](docs/platform-client/native-workflows.md#current-limitations)
+> pending. See [Current limitations](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/platform-client/native-workflows.md#current-limitations)
 > — in particular `client.submit()`, `Circuit` submission, API-key
 > `job.cancel()` and `platform_info()` do not currently work against the
 > hosted API.
@@ -262,8 +266,8 @@ for output in result.raw["outputs"]:
 ```
 
 The complete example, with the saved script and idempotent retry, is in
-[`docs/platform-client/native-workflows.md`](docs/platform-client/native-workflows.md)
-and [`examples/platform_native_workflow.py`](examples/platform_native_workflow.py).
+[`docs/platform-client/native-workflows.md`](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/platform-client/native-workflows.md)
+and [`examples/platform_native_workflow.py`](https://github.com/marqov-dev/marqov-sdk/blob/main/examples/platform_native_workflow.py).
 
 **3. Check available backends:**
 
@@ -304,21 +308,21 @@ except TimeoutError:
 ```
 
 For the full error taxonomy and retry guidance see
-[`docs/platform-client/error-handling.md`](docs/platform-client/error-handling.md).
+[`docs/platform-client/error-handling.md`](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/platform-client/error-handling.md).
 
 ### Platform documentation
 
-- [Getting started](docs/platform-client/getting-started.md)
-- [Native workflows on the hosted platform](docs/platform-client/native-workflows.md)
-- [Saved-script execution](docs/platform-client/saved-scripts.md)
-- [Error handling](docs/platform-client/error-handling.md)
-- [API reference](docs/platform-client/api-reference.md)
+- [Getting started](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/platform-client/getting-started.md)
+- [Native workflows on the hosted platform](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/platform-client/native-workflows.md)
+- [Saved-script execution](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/platform-client/saved-scripts.md)
+- [Error handling](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/platform-client/error-handling.md)
+- [API reference](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/platform-client/api-reference.md)
 
 ---
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the executor interface spec, canonical gate set, factory registration steps, and local QVM setup for Rigetti development.
+See [CONTRIBUTING.md](https://github.com/marqov-dev/marqov-sdk/blob/main/CONTRIBUTING.md) for the executor interface spec, canonical gate set, factory registration steps, and local QVM setup for Rigetti development.
 
 The bounty issues that were open through [unitaryHACK 2026](https://unitaryhack.dev) — have been claimed, but follow the [issues page](https://github.com/marqov-dev/marqov-sdk/issues) as we will be looking at ongoing and rolling issue bounties to support and encourage community participation.
 
@@ -328,4 +332,4 @@ This project was created by **David Ryan** ([@ddri](https://github.com/ddri)), w
 
 ## License
 
-[Apache 2.0](LICENSE)
+[Apache 2.0](https://github.com/marqov-dev/marqov-sdk/blob/main/LICENSE)
