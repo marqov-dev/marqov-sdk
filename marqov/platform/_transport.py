@@ -132,7 +132,7 @@ def _parse_retry_after(raw: str) -> int | None:
     """Parse a ``Retry-After`` header value into whole seconds.
 
     RFC 7231 §7.1.3 allows two forms:
-      - delta-seconds — a plain integer, e.g. ``"30"``, clamped to ``>= 0``.
+      - delta-seconds: a plain integer, e.g. ``"30"``, clamped to ``>= 0``.
       - HTTP-date — e.g. ``"Wed, 21 Oct 2026 07:28:00 GMT"``, converted to a
         delta against the current time and clamped to ``>= 0`` (a date in
         the past never yields a negative wait).
@@ -323,7 +323,7 @@ class Transport:
                                          from the ``Retry-After`` header when
                                          present — either delta-seconds or an
                                          RFC 7231 HTTP-date (converted to a
-                                         delta), clamped to ``>= 0`` — else
+                                         delta), clamped to ``>= 0``; else
                                          ``None``. The header is not required
                                          for this to raise.
             BackendUnavailable:          HTTP 422 ``backend_unknown`` /

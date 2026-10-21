@@ -305,7 +305,7 @@ at 10 seconds.
 
 **`timeout`:** overall wall-clock deadline in seconds. If the job has not
 completed in time, `TimeoutError` is raised. **The job continues running
-server-side on timeout** — it is not cancelled automatically. Each poll's HTTP
+server-side on timeout**; it is not cancelled automatically. Each poll's HTTP
 timeout is capped at the time left in this budget, no retry or backoff runs
 after the deadline, and a `TransportError` from a poll that ends after the
 deadline is raised as `TimeoutError` instead.
@@ -316,7 +316,7 @@ Doubles each round, capped at 10 seconds.
 **Raises:**
 - `JobFailed` — job reached `failed` or `dispatch_failed` (or `cancelled`) terminal state.
 - `TimeoutError` — deadline elapsed before the job completed.
-- `MarqovPlatformError` — transport error during polling, before the deadline.
+- `MarqovPlatformError`: transport error during polling, before the deadline.
 
 ---
 
