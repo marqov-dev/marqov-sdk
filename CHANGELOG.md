@@ -30,9 +30,14 @@ These are fixes, but they can change what existing code observes.
 - Workflow task workdirs are deleted when the task finishes (set
   `MARQOV_KEEP_TASK_WORKDIR=1` to keep them), and the task's process group is
   killed when the task process exits, so a background process a task leaves
-  running no longer outlives it.
+  running no longer outlives it. Workdirs now sit one level down, in
+  `$TMPDIR/marqov_worker_*/marqov_task_*`: a host cleanup script that globbed
+  `$TMPDIR/marqov_task_*` for directories a killed worker left behind should
+  also sweep `marqov_worker_*` directories whose worker process has exited.
 - `CUNQAExecutor` raises `ValueError` for `n_qpus` below 1 or not an integer,
-  and for `shots` below 1 or not an integer, before any CUNQA call.
+  for `shots` below 1 or not an integer, and for a `startup_timeout_s` or
+  `poll_interval_s` that is not a finite number above 0, before any CUNQA
+  call. The two timing fields are stored as float.
   `startup_timeout_s` is one budget across `qraise` and vQPU registration, so
   slow starts time out sooner, and `execution_time_ms` no longer includes
   teardown.
@@ -61,12 +66,27 @@ These are fixes, but they can change what existing code observes.
   same keys as the other executors' records. (marqov-sdk#276, closes
   marqov-sdk#78)
 
+- `LocalExecutor` looks up the package versions for that record once per
+  process instead of on every call, which had made a small-circuit execute
+  about 40 times slower, and records `None` for a package without
+  distribution metadata instead of raising. (marqov-sdk#284)
+
+- `execute_task` keeps heartbeating until the task workdir has been removed,
+  so a slow removal cannot trip the activity's heartbeat timeout after the
+  task succeeded, and a cancellation that arrives while the heartbeat stops
+  now propagates. (marqov-sdk#285)
+
 - `CUNQAExecutor` uses only the requested number of vQPUs (extra
   registrations multiplied the shots), validates `n_qpus` and `shots`, keeps a
   `TimeoutError` raised by `qraise` itself, drops a family whose `qraise`
   finishes after the timeout, and lets `asyncio.run()` return promptly after a
   timeout. NumPy integers are accepted for both values. (marqov-sdk#281,
   closes marqov-sdk#138)
+
+- `CUNQAExecutor` validates `startup_timeout_s` and `poll_interval_s` (a zero
+  poll interval busy-polled vQPU registration), and `ExecutorFactory` accepts
+  the same NumPy values for `n_qpus` and the timing fields as
+  `CUNQAExecutorConfig` does. (marqov-sdk#286)
 
 - The H2 VQE benchmarks build the documented UCC ansatz, which reaches the
   exact ground energy (the previous circuit stopped 1.23 Ha short), take an
