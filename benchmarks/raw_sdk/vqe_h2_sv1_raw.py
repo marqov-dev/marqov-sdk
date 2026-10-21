@@ -3,7 +3,7 @@
 VQE H₂ benchmark using raw Braket SDK.
 
 Implements Variational Quantum Eigensolver for H₂ ground state energy.
-Uses 4-qubit circuit with UCCSD-inspired ansatz, COBYLA optimizer, 50 iterations.
+Uses a 4-qubit hardware-efficient ansatz (Ry layers with CNOTs), COBYLA optimizer, at most 20 iterations.
 """
 
 import os
