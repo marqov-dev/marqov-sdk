@@ -522,3 +522,21 @@ def test_config_defaults() -> None:
     assert config.startup_timeout_s == 60.0
     assert config.poll_interval_s == 1.0
     assert config.seed == 0
+
+
+
+@pytest.mark.asyncio
+async def test_numpy_integer_shots_and_n_qpus_are_accepted() -> None:
+    """NumPy integers are accepted for shots and n_qpus, as elsewhere in the SDK."""
+    import numpy as np
+
+    config = CUNQAExecutorConfig(n_qpus=np.int64(2), walltime="00:05:00", **_FAST_POLL)
+    assert config.n_qpus == 2 and type(config.n_qpus) is int
+    fake_client = _FakeCunqaClient(counts_per_qpu={"00": 30, "11": 20})
+    executor = CUNQAExecutor(config, client=fake_client)
+
+    result = await executor.execute(bell_state(), shots=np.int64(100))
+
+    assert result.counts == {"00": 60, "11": 40}
+    assert result.shots == 100 and type(result.shots) is int
+    assert fake_client.run_calls[-1]["shots"] == 50

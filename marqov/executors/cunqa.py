@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import numbers
 import threading
 import time
 import uuid
@@ -208,11 +209,13 @@ class CUNQAExecutorConfig:
 
     def __post_init__(self) -> None:
         _validate_n_qpus(self.n_qpus)
+        self.n_qpus = int(self.n_qpus)
 
 
 def _validate_n_qpus(n_qpus: object) -> None:
-    # bool is an int subclass but never a valid vQPU count.
-    if isinstance(n_qpus, bool) or not isinstance(n_qpus, int):
+    # bool is an int subclass but never a valid vQPU count; NumPy integers are
+    # accepted, as for shots elsewhere in the SDK.
+    if isinstance(n_qpus, bool) or not isinstance(n_qpus, numbers.Integral):
         raise ValueError(f"n_qpus must be an int, got {n_qpus!r}")
     if n_qpus < 1:
         raise ValueError(f"n_qpus must be >= 1, got {n_qpus}")
@@ -237,8 +240,9 @@ class CUNQAExecutor(BaseExecutor):
 
         # Re-checked here: the config is mutable after construction.
         _validate_n_qpus(cfg.n_qpus)
-        if isinstance(shots, bool) or not isinstance(shots, int) or shots < 1:
+        if isinstance(shots, bool) or not isinstance(shots, numbers.Integral) or shots < 1:
             raise ValueError(f"CUNQA shots must be a positive integer, got {shots!r}")
+        shots = int(shots)
         if shots % cfg.n_qpus != 0:
             raise ValueError(
                 f"shots ({shots}) must be evenly divisible by n_qpus ({cfg.n_qpus}) "
