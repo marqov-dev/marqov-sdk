@@ -1,5 +1,8 @@
 """Tests for @task/@workflow decorators."""
 
+import asyncio
+import inspect
+
 from marqov import task, workflow
 from marqov.workflows import TransportGraph, TaskProxy
 
@@ -27,6 +30,21 @@ class TestTaskDecorator:
 
         result = measure("test")
         assert result == {"counts": {"00": 500}}
+
+    def test_async_task_outside_workflow_returns_coroutine(self):
+        """An async task called outside a workflow returns a coroutine that must be awaited."""
+        ran = []
+
+        @task
+        async def measure(shots):
+            ran.append(shots)
+            return shots * 2
+
+        result = measure(100)
+        assert inspect.iscoroutine(result)
+        assert ran == []  # nothing runs until the coroutine is awaited
+        assert asyncio.run(result) == 200
+        assert ran == [100]
 
     def test_task_inside_workflow_returns_proxy(self):
         """Task called inside workflow should return proxy."""

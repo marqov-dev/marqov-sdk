@@ -184,6 +184,14 @@ strict = true
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "--strict-markers"
+# An unawaited coroutine (for example an async @task called without await)
+# warns from its finalizer, where the error filter can only raise an ignored
+# exception; pytest reports that as PytestUnraisableExceptionWarning, so both
+# are errors for the leak to fail the test.
+filterwarnings = [
+    "error::RuntimeWarning",
+    "error::pytest.PytestUnraisableExceptionWarning",
+]
 markers = [
     "integration: requires external hardware, a cluster, or a local service; opt-in via module environment guards",
 ]

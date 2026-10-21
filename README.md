@@ -39,6 +39,22 @@ dispatch = multi_shot_study([100, 500, 1000, 5000])
 
 Independent tasks execute in parallel automatically. Marqov handles scheduling, retries, and result collection across any supported backend. Run your own Temporal worker (see `marqov/workflows/`). Hosted execution is provided separately by the [Marqov Platform](https://marqov.ai). SDK installation alone does not enable managed execution.
 
+Outside a `@workflow`, calling a task runs the function directly. For an
+`async def` task that call returns a coroutine, and nothing runs until you
+await it; a coroutine that is never awaited is dropped with only a
+`RuntimeWarning` when it is garbage collected:
+
+```python
+import asyncio
+
+async def main():
+    # counts = measure(1000)      # wrong: returns a coroutine, nothing runs
+    counts = await measure(1000)  # right
+    print(counts)
+
+asyncio.run(main())  # from sync code, asyncio.run(measure(1000)) also works
+```
+
 ---
 
 ## Installation

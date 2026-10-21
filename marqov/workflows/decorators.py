@@ -288,12 +288,17 @@ def task(
     return a proxy that registers the call in the transport graph.
 
     When called outside a workflow, the wrapper just calls the decorated
-    function directly (`fn(*args, **kwargs)`) — it does not special-case
+    function directly (`fn(*args, **kwargs)`); it does not special-case
     coroutine functions. For a sync function that means "executes normally
     and returns its result." For an `async def` function it does NOT await
-    it: calling it bare returns an unawaited coroutine and nothing runs. If
-    you need to call an async @task outside a workflow, drive it yourself
-    with `asyncio.run(...)` (see the second example below).
+    it: the call returns a coroutine, and nothing runs until you await it.
+    A coroutine that is never awaited is dropped silently, apart from a
+    ``RuntimeWarning: coroutine ... was never awaited`` when it is garbage
+    collected::
+
+        result = measure(circuit)        # wrong: nothing runs
+        result = await measure(circuit)  # right, inside async code
+        result = asyncio.run(measure(circuit))  # right, from sync code
 
     Args:
         func: The function to decorate.
@@ -324,8 +329,8 @@ def task(
         ... async def measure(circuit):
         ...     return await executor.run(circuit)
         >>>
-        >>> # Outside workflow, an async @task must be driven explicitly —
-        >>> # measure(circuit) alone would return an unawaited coroutine.
+        >>> # Outside workflow, an async @task must be awaited or driven
+        >>> # explicitly: measure(circuit) alone returns a coroutine.
         >>> import asyncio
         >>> result = asyncio.run(measure(circuit))
     """
