@@ -362,9 +362,17 @@ async def test_task_failure_surfaces_via_error_json(mock_activity_ctx):
 
 
 @pytest.mark.asyncio
-async def test_error_json_exists_result_json_absent_on_failure(mock_activity_ctx, tmp_path):
+async def test_error_json_exists_result_json_absent_on_failure(
+    mock_activity_ctx, tmp_path, monkeypatch
+):
     """On child failure, error.json must exist and result.json must NOT exist."""
+    import shutil
+
     from marqov.workflows import _child_env as ce
+
+    # Inspecting the workdir after the fact needs the debug escape hatch:
+    # execute_task otherwise removes it (marqov-sdk#144).
+    monkeypatch.setenv("MARQOV_KEEP_TASK_WORKDIR", "1")
 
     workdir_capture: list[Path] = []
     original_ntw = ce.new_task_workdir
@@ -388,13 +396,16 @@ async def test_error_json_exists_result_json_absent_on_failure(mock_activity_ctx
     error_path = workdir / "error.json"
     result_path = workdir / "result.json"
 
-    assert error_path.exists(), "error.json must exist when the child task fails"
-    assert not result_path.exists(), "result.json must NOT exist when the child task fails"
+    try:
+        assert error_path.exists(), "error.json must exist when the child task fails"
+        assert not result_path.exists(), "result.json must NOT exist when the child task fails"
 
-    # error.json must be valid, structured JSON with an "error" key.
-    error_data = json.loads(error_path.read_text())
-    assert "error" in error_data, "error.json must contain an 'error' key"
-    assert "channel test failure" in error_data["error"]
+        # error.json must be valid, structured JSON with an "error" key.
+        error_data = json.loads(error_path.read_text())
+        assert "error" in error_data, "error.json must contain an 'error' key"
+        assert "channel test failure" in error_data["error"]
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -809,3 +820,173 @@ async def test_deeply_nested_result_is_rejected(mock_activity_ctx):
 
     assert excinfo.value.non_retryable is True
     assert len(str(excinfo.value)) < 2000
+
+
+# ---------------------------------------------------------------------------
+# Workdir lifecycle (marqov-sdk#144): each task's scratch directory is removed
+# once execute_task finishes, and lives inside a private per-worker parent.
+# ---------------------------------------------------------------------------
+
+
+def _task_dirs_under_temp_root() -> set[str]:
+    """Every ``marqov_task_*`` dir in the temp root or a ``marqov_worker_*`` parent."""
+    import glob
+    import tempfile
+
+    root = tempfile.gettempdir()
+    return set(glob.glob(os.path.join(root, "marqov_task_*"))) | set(
+        glob.glob(os.path.join(root, "marqov_worker_*", "marqov_task_*"))
+    )
+
+
+def _workdir_fn_ref() -> str:
+    """Encode a task body that returns its own workdir.
+
+    Defined locally so cloudpickle serialises it by value: the child cannot
+    import this test module.
+    """
+
+    def return_workdir() -> str:
+        import os as _os
+
+        return _os.environ["MARQOV_TASK_WORKDIR"]
+
+    return _enc(return_workdir)
+
+
+@pytest.mark.asyncio
+async def test_workdir_removed_after_success(mock_activity_ctx, monkeypatch):
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+    result_json = await execute_task(
+        "wd-ok", _workdir_fn_ref(), json.dumps([]), json.dumps({})
+    )
+    workdir = json.loads(result_json)["result"]
+    assert isinstance(workdir, str) and workdir
+    assert not os.path.exists(workdir), f"workdir {workdir} survived a successful task"
+
+
+@pytest.mark.asyncio
+async def test_workdir_removed_after_failure(mock_activity_ctx, monkeypatch):
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+
+    def fail_with_workdir() -> None:
+        import os as _os
+
+        raise RuntimeError("WD<" + _os.environ["MARQOV_TASK_WORKDIR"] + ">")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await execute_task(
+            "wd-fail", _enc(fail_with_workdir), json.dumps([]), json.dumps({})
+        )
+    workdir = str(excinfo.value).split("WD<", 1)[1].split(">", 1)[0]
+    assert not os.path.exists(workdir), f"workdir {workdir} survived a failed task"
+
+
+@pytest.mark.asyncio
+async def test_workdir_removed_after_cancellation(mock_activity_ctx, monkeypatch):
+    """Cancellation (which is also how a Temporal timeout arrives) cleans up."""
+    from marqov.workflows import _child_env as ce
+
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+    captured: list[Path] = []
+    original_ntw = ce.new_task_workdir
+
+    def capturing_ntw(node_id: str) -> Path:
+        wd = original_ntw(node_id)
+        captured.append(wd)
+        return wd
+
+    def very_slow_fn() -> int:
+        import time as _time
+
+        _time.sleep(60)
+        return 0
+
+    with patch("marqov.workflows.activity.new_task_workdir", side_effect=capturing_ntw):
+        task = asyncio.create_task(
+            execute_task("wd-cancel", _enc(very_slow_fn), json.dumps([]), json.dumps({}))
+        )
+        await asyncio.sleep(0.5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert captured, "new_task_workdir was never called"
+    assert not captured[0].exists(), f"workdir {captured[0]} survived cancellation"
+
+
+@pytest.mark.asyncio
+async def test_keep_task_workdir_escape_hatch(mock_activity_ctx, monkeypatch):
+    import shutil
+
+    monkeypatch.setenv("MARQOV_KEEP_TASK_WORKDIR", "1")
+    result_json = await execute_task(
+        "wd-keep", _workdir_fn_ref(), json.dumps([]), json.dumps({})
+    )
+    kept = json.loads(result_json)["result"]
+    try:
+        assert os.path.isdir(kept), "MARQOV_KEEP_TASK_WORKDIR=1 must keep the workdir"
+    finally:
+        shutil.rmtree(kept, ignore_errors=True)
+
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR")
+    result_json = await execute_task(
+        "wd-keep2", _workdir_fn_ref(), json.dumps([]), json.dumps({})
+    )
+    assert not os.path.exists(json.loads(result_json)["result"])
+
+
+@pytest.mark.asyncio
+async def test_no_workdir_accumulation_across_batch(mock_activity_ctx, monkeypatch):
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+
+    def ok() -> int:
+        return 1
+
+    def bad() -> int:
+        raise RuntimeError("batch failure")
+
+    before = _task_dirs_under_temp_root()
+    for i in range(6):
+        if i % 2:
+            with pytest.raises(RuntimeError):
+                await execute_task(f"batch-{i}", _enc(bad), json.dumps([]), json.dumps({}))
+        else:
+            await execute_task(f"batch-{i}", _enc(ok), json.dumps([]), json.dumps({}))
+    after = _task_dirs_under_temp_root()
+    assert after - before == set(), f"task workdirs left behind: {sorted(after - before)}"
+
+
+@pytest.mark.asyncio
+async def test_workdir_lives_in_private_worker_parent(mock_activity_ctx):
+    import stat as stat_mod
+
+    def report_parent() -> dict:
+        import os as _os
+
+        wd = _os.environ["MARQOV_TASK_WORKDIR"]
+        parent = _os.path.dirname(wd)
+        return {
+            "parent": parent,
+            "parent_name": _os.path.basename(parent),
+            "env": dict(_os.environ),
+        }
+
+    result_json = await execute_task(
+        "wd-parent", _enc(report_parent), json.dumps([]), json.dumps({})
+    )
+    seen = json.loads(result_json)["result"]
+    assert seen["parent_name"].startswith("marqov_worker_"), seen["parent_name"]
+    if sys.platform != "win32":
+        mode = stat_mod.S_IMODE(os.stat(seen["parent"]).st_mode)
+        assert mode == 0o700, oct(mode)
+
+    # No variable other than MARQOV_TASK_WORKDIR names the parent itself, and
+    # every other mention of it is inside this task's own workdir (HOME, TMPDIR).
+    workdir = seen["env"]["MARQOV_TASK_WORKDIR"]
+    for key, value in seen["env"].items():
+        if key == "MARQOV_TASK_WORKDIR" or seen["parent"] not in value:
+            continue
+        assert value.startswith(workdir + os.sep), (
+            f"{key}={value!r} exposes the worker parent directory"
+        )

@@ -21,6 +21,7 @@ import asyncio
 import base64
 import json
 import os
+import shutil
 import signal
 import sys
 from collections import deque
@@ -30,7 +31,11 @@ from typing import Any
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from marqov.workflows._child_env import build_child_env, new_task_workdir
+from marqov.workflows._child_env import (
+    build_child_env,
+    keep_task_workdir_requested,
+    new_task_workdir,
+)
 
 # Heartbeat interval for execute_task. Temporal throttles forwarding to 80%
 # of heartbeat_timeout (48s for 60s timeout), so the send interval just needs
@@ -239,6 +244,12 @@ async def execute_task(
     and validated here (shape plus node_id), because the child owns its
     workdir and must not be able to name a different node.
 
+    The task's workdir is removed once the child has exited and its output has
+    been read, whether the task succeeded, failed or was cancelled (a Temporal
+    timeout arrives as a cancellation). Setting ``MARQOV_KEEP_TASK_WORKDIR``
+    to ``1``, ``true``, ``yes`` or ``on`` keeps it and logs its path, as a
+    debugging aid.
+
     Args:
         node_id: Unique identifier for this node.
         func_ref: Base64-encoded cloudpickle of the function.
@@ -260,6 +271,26 @@ async def execute_task(
             or whose ``node_id`` does not match this activity's ``node_id``.
     """
     workdir = new_task_workdir(node_id)
+    try:
+        return await _run_task_in_workdir(
+            workdir, node_id, func_ref, args_json, kwargs_json, provider_env
+        )
+    finally:
+        if keep_task_workdir_requested():
+            activity.logger.info("Keeping workdir for node %s: %s", node_id, workdir)
+        else:
+            shutil.rmtree(workdir, ignore_errors=True)
+
+
+async def _run_task_in_workdir(
+    workdir: Path,
+    node_id: str,
+    func_ref: str,
+    args_json: str,
+    kwargs_json: str,
+    provider_env: dict[str, str] | None,
+) -> str:
+    """Body of ``execute_task``: run the child in ``workdir`` and read its output."""
     result_path = workdir / "result.json"
 
     # Write inputs for the child.  func_ref is base64-encoded; write the text
