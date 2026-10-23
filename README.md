@@ -159,6 +159,12 @@ async def main():
 asyncio.run(main())
 ```
 
+`s3_prefix` is optional and defaults to `"marqov"`. `MarqovDevice` reads the
+same key names as `ExecutorFactory` (for IBM: `channel`, `instance`, `token`,
+`optimization_level`; for Azure: `subscription_id`, `resource_group`,
+`workspace_name`, `location`, which defaults to `"eastus"`). The older
+`ibm_`/`azure_` prefixed spellings still work but emit a `DeprecationWarning`.
+
 Or run directly on IonQ hardware via the native REST API (no AWS account needed):
 
 ```python

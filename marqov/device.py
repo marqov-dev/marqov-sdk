@@ -9,6 +9,12 @@ from marqov.backends import is_azure, is_braket, is_ibm, is_simulator
 from marqov.circuits import Circuit
 from marqov._braket_native import SUPPORTED_EXECUTE_OPTIONS, prepare_braket, validate_options
 from marqov._optional import require_braket
+from marqov.executors._params import (
+    DEFAULT_AZURE_LOCATION,
+    DEFAULT_IBM_OPTIMIZATION_LEVEL,
+    DEFAULT_S3_PREFIX,
+    normalize_backend_params,
+)
 from marqov.executors.base import reject_unsupported_options
 
 
@@ -178,11 +184,25 @@ class MarqovDevice:
     without needing vendor-specific branching. Accepts any supported circuit type
     (Braket, Qiskit, Cirq, PennyLane, QASM string, or Marqov Circuit) and
     automatically converts to the target backend's native format.
+
+    ``params`` uses the same key names as
+    :meth:`~marqov.executors.factory.ExecutorFactory.create_executor`: IBM
+    ``channel``, ``instance``, ``token`` and ``optimization_level`` (default
+    1); Azure ``subscription_id``, ``resource_group``, ``workspace_name`` and
+    ``location`` (default ``"eastus"``); Braket ``device_arn``, ``s3_bucket``
+    and ``s3_prefix`` (default ``"marqov"``). The older ``ibm_``/``azure_``
+    prefixed spellings still work and emit a :class:`DeprecationWarning`;
+    supplying both spellings of one key with different values raises
+    :class:`ValueError`.
     """
 
     def __init__(self, backend: str, params: dict) -> None:
         self._backend = backend
         self._params = params
+        # Canonical spellings, shared with ExecutorFactory (marqov-sdk#162).
+        # The deprecated ibm_/azure_ keys warn here, and conflicting
+        # spellings raise before any provider is touched.
+        self._backend_params = normalize_backend_params(params, stacklevel=3)
         self._provider_device = None
 
     @property
@@ -215,13 +235,13 @@ class MarqovDevice:
             # values are translated with a warning, and an absent instance is
             # omitted so the service auto-discovers it from the token.
             channel, instance = normalize_ibm_connection(
-                self._params.get("ibm_channel"), self._params.get("ibm_instance")
+                self._backend_params.get("channel"), self._backend_params.get("instance")
             )
             kwargs = {"channel": channel}
             if instance:
                 kwargs["instance"] = instance
-            if self._params.get("ibm_token"):
-                kwargs["token"] = self._params["ibm_token"]
+            if self._backend_params.get("token"):
+                kwargs["token"] = self._backend_params["token"]
 
             service = QiskitRuntimeService(**kwargs)
             self._provider_device = service.backend(self._backend)
@@ -230,10 +250,10 @@ class MarqovDevice:
             from azure.quantum import Workspace
 
             workspace = Workspace(
-                subscription_id=self._params["azure_subscription_id"],
-                resource_group=self._params["azure_resource_group"],
-                name=self._params["azure_workspace_name"],
-                location=self._params.get("azure_location", "eastus"),
+                subscription_id=self._backend_params["subscription_id"],
+                resource_group=self._backend_params["resource_group"],
+                name=self._backend_params["workspace_name"],
+                location=self._backend_params.get("location", DEFAULT_AZURE_LOCATION),
             )
             targets = workspace.get_targets(name=self._backend)
             self._provider_device = targets
@@ -257,7 +277,7 @@ class MarqovDevice:
             raise ValueError(
                 f"Cannot determine provider for backend '{self._backend}'. "
                 f"Params must include one of: device_arn (AWS Braket), "
-                f"ibm_token/ibm_channel (IBM Quantum), azure_subscription_id (Azure Quantum)."
+                f"channel/token (IBM Quantum), subscription_id (Azure Quantum)."
             )
 
         return self._provider_device
@@ -425,7 +445,9 @@ class MarqovDevice:
 
             from marqov.executors._counts import extract_sampler_counts
 
-            optimization_level = self._params.get("ibm_optimization_level", 1)
+            optimization_level = self._backend_params.get(
+                "optimization_level", DEFAULT_IBM_OPTIMIZATION_LEVEL
+            )
             pm = generate_preset_pass_manager(
                 optimization_level=optimization_level,
                 backend=device,
@@ -453,15 +475,14 @@ class MarqovDevice:
         elif is_braket(self._params):
             s3_folder = self._params.get("s3_destination_folder")
             if not s3_folder:
-                # Construct from separate bucket/prefix params (worker passes these)
-                s3_bucket = self._params.get("s3_bucket")
-                s3_prefix = self._params.get("s3_prefix")
-                if s3_bucket and s3_prefix:
-                    s3_folder = (s3_bucket, s3_prefix)
-                else:
+                # Construct from separate bucket/prefix params (worker passes
+                # these). The prefix defaults exactly as ExecutorFactory's does.
+                s3_bucket = self._backend_params.get("s3_bucket")
+                if not s3_bucket:
                     raise ValueError(
-                        "s3_destination_folder or s3_bucket+s3_prefix required for AWS device execution"
+                        "s3_destination_folder or s3_bucket required for AWS device execution"
                     )
+                s3_folder = (s3_bucket, self._backend_params.get("s3_prefix", DEFAULT_S3_PREFIX))
             try:
                 disable_rewiring = kwargs.get("disable_qubit_rewiring", False)
 
@@ -503,7 +524,7 @@ class MarqovDevice:
             raise ValueError(
                 f"Cannot determine provider for backend '{self._backend}'. "
                 f"Params must include one of: device_arn (AWS Braket), "
-                f"ibm_token/ibm_channel (IBM Quantum), azure_subscription_id (Azure Quantum)."
+                f"channel/token (IBM Quantum), subscription_id (Azure Quantum)."
             )
 
 

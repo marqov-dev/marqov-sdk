@@ -21,6 +21,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from marqov.executors._params import (
+    DEFAULT_AZURE_LOCATION,
+    DEFAULT_IBM_OPTIMIZATION_LEVEL,
+    DEFAULT_S3_PREFIX,
+    normalize_backend_params,
+)
 from marqov.executors.alice_bob import AliceBobExecutor, AliceBobExecutorConfig
 from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorConfig
 from marqov.executors.base import BaseExecutor
@@ -231,6 +237,7 @@ class ExecutorFactory:
         Raises:
             ValueError: If required fields are missing.
         """
+        backend_config = normalize_backend_params(backend_config, stacklevel=4)
         required_fields = ["device_arn", "s3_bucket"]
         missing_fields = [f for f in required_fields if f not in backend_config]
 
@@ -243,7 +250,7 @@ class ExecutorFactory:
         config = BraketExecutorConfig(
             device_arn=backend_config["device_arn"],
             s3_bucket=backend_config["s3_bucket"],
-            s3_prefix=backend_config.get("s3_prefix", "marqov"),
+            s3_prefix=backend_config.get("s3_prefix", DEFAULT_S3_PREFIX),
             aws_profile=backend_config.get("aws_profile"),
             aws_region=backend_config.get("region"),
             poll_interval_seconds=backend_config.get("poll_interval_seconds", 1.0),
@@ -304,11 +311,11 @@ class ExecutorFactory:
         Raises:
             ValueError: If required fields are missing.
         """
+        backend_config = normalize_backend_params(backend_config, stacklevel=4)
         required_fields = [
             "subscription_id",
             "resource_group",
             "workspace_name",
-            "location",
             "target",
         ]
         missing_fields = [f for f in required_fields if f not in backend_config]
@@ -323,7 +330,7 @@ class ExecutorFactory:
             subscription_id=backend_config["subscription_id"],
             resource_group=backend_config["resource_group"],
             workspace_name=backend_config["workspace_name"],
-            location=backend_config["location"],
+            location=backend_config.get("location", DEFAULT_AZURE_LOCATION),
             target=backend_config["target"],
             framework=backend_config.get("framework", "qiskit"),
             timeout_seconds=backend_config.get("timeout_seconds", 300.0),
@@ -350,7 +357,8 @@ class ExecutorFactory:
         Raises:
             ValueError: If required fields are missing.
         """
-        # backend_name is required — map slug to IBM backend name if needed
+        backend_config = normalize_backend_params(backend_config, stacklevel=4)
+        # backend_name is required: map slug to IBM backend name if needed
         backend_name = backend_config.get(
             "backend_name",
             backend_slug.replace("-", "_"),
@@ -368,7 +376,9 @@ class ExecutorFactory:
             channel=channel,
             instance=instance,
             token=backend_config.get("token"),
-            optimization_level=backend_config.get("optimization_level", 1),
+            optimization_level=backend_config.get(
+                "optimization_level", DEFAULT_IBM_OPTIMIZATION_LEVEL
+            ),
             resilience_level=backend_config.get("resilience_level", 1),
             poll_interval_seconds=backend_config.get("poll_interval_seconds", 2.0),
             timeout_seconds=backend_config.get("timeout_seconds"),

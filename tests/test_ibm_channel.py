@@ -265,11 +265,11 @@ def test_factory_translates_stored_legacy_values():
 
 def _device_kwargs(fake_runtime, channel, instance):
     captured, _ = fake_runtime
-    params = {"backend": "ibm_brisbane", "ibm_token": "tok"}
+    params = {"backend": "ibm_brisbane", "token": "tok"}
     if channel is not None:
-        params["ibm_channel"] = channel
+        params["channel"] = channel
     if instance is not None:
-        params["ibm_instance"] = instance
+        params["instance"] = instance
     MarqovDevice("ibm_brisbane", params)._get_provider_device()
     return captured["kwargs"]
 
