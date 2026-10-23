@@ -362,9 +362,17 @@ async def test_task_failure_surfaces_via_error_json(mock_activity_ctx):
 
 
 @pytest.mark.asyncio
-async def test_error_json_exists_result_json_absent_on_failure(mock_activity_ctx, tmp_path):
+async def test_error_json_exists_result_json_absent_on_failure(
+    mock_activity_ctx, tmp_path, monkeypatch
+):
     """On child failure, error.json must exist and result.json must NOT exist."""
+    import shutil
+
     from marqov.workflows import _child_env as ce
+
+    # Inspecting the workdir after the fact needs the debug escape hatch:
+    # execute_task otherwise removes it (marqov-sdk#144).
+    monkeypatch.setenv("MARQOV_KEEP_TASK_WORKDIR", "1")
 
     workdir_capture: list[Path] = []
     original_ntw = ce.new_task_workdir
@@ -388,13 +396,16 @@ async def test_error_json_exists_result_json_absent_on_failure(mock_activity_ctx
     error_path = workdir / "error.json"
     result_path = workdir / "result.json"
 
-    assert error_path.exists(), "error.json must exist when the child task fails"
-    assert not result_path.exists(), "result.json must NOT exist when the child task fails"
+    try:
+        assert error_path.exists(), "error.json must exist when the child task fails"
+        assert not result_path.exists(), "result.json must NOT exist when the child task fails"
 
-    # error.json must be valid, structured JSON with an "error" key.
-    error_data = json.loads(error_path.read_text())
-    assert "error" in error_data, "error.json must contain an 'error' key"
-    assert "channel test failure" in error_data["error"]
+        # error.json must be valid, structured JSON with an "error" key.
+        error_data = json.loads(error_path.read_text())
+        assert "error" in error_data, "error.json must contain an 'error' key"
+        assert "channel test failure" in error_data["error"]
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -809,3 +820,451 @@ async def test_deeply_nested_result_is_rejected(mock_activity_ctx):
 
     assert excinfo.value.non_retryable is True
     assert len(str(excinfo.value)) < 2000
+
+
+# ---------------------------------------------------------------------------
+# Workdir lifecycle (marqov-sdk#144): each task's scratch directory is removed
+# once execute_task finishes, and lives inside a private per-worker parent.
+# ---------------------------------------------------------------------------
+
+
+def _task_dirs_under_temp_root() -> set[str]:
+    """Every ``marqov_task_*`` dir in the temp root or a ``marqov_worker_*`` parent."""
+    import glob
+    import tempfile
+
+    root = tempfile.gettempdir()
+    return set(glob.glob(os.path.join(root, "marqov_task_*"))) | set(
+        glob.glob(os.path.join(root, "marqov_worker_*", "marqov_task_*"))
+    )
+
+
+def _workdir_fn_ref() -> str:
+    """Encode a task body that returns its own workdir.
+
+    Defined locally so cloudpickle serialises it by value: the child cannot
+    import this test module.
+    """
+
+    def return_workdir() -> str:
+        import os as _os
+
+        return _os.environ["MARQOV_TASK_WORKDIR"]
+
+    return _enc(return_workdir)
+
+
+@pytest.mark.asyncio
+async def test_workdir_removed_after_success(mock_activity_ctx, monkeypatch):
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+    result_json = await execute_task(
+        "wd-ok", _workdir_fn_ref(), json.dumps([]), json.dumps({})
+    )
+    workdir = json.loads(result_json)["result"]
+    assert isinstance(workdir, str) and workdir
+    assert not os.path.exists(workdir), f"workdir {workdir} survived a successful task"
+
+
+@pytest.mark.asyncio
+async def test_workdir_removed_after_failure(mock_activity_ctx, monkeypatch):
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+
+    def fail_with_workdir() -> None:
+        import os as _os
+
+        raise RuntimeError("WD<" + _os.environ["MARQOV_TASK_WORKDIR"] + ">")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await execute_task(
+            "wd-fail", _enc(fail_with_workdir), json.dumps([]), json.dumps({})
+        )
+    workdir = str(excinfo.value).split("WD<", 1)[1].split(">", 1)[0]
+    assert not os.path.exists(workdir), f"workdir {workdir} survived a failed task"
+
+
+@pytest.mark.asyncio
+async def test_workdir_removed_after_cancellation(mock_activity_ctx, monkeypatch):
+    """Cancellation (which is also how a Temporal timeout arrives) cleans up."""
+    from marqov.workflows import _child_env as ce
+
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+    captured: list[Path] = []
+    original_ntw = ce.new_task_workdir
+
+    def capturing_ntw(node_id: str) -> Path:
+        wd = original_ntw(node_id)
+        captured.append(wd)
+        return wd
+
+    def very_slow_fn() -> int:
+        import time as _time
+
+        _time.sleep(60)
+        return 0
+
+    with patch("marqov.workflows.activity.new_task_workdir", side_effect=capturing_ntw):
+        task = asyncio.create_task(
+            execute_task("wd-cancel", _enc(very_slow_fn), json.dumps([]), json.dumps({}))
+        )
+        await asyncio.sleep(0.5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert captured, "new_task_workdir was never called"
+    assert not captured[0].exists(), f"workdir {captured[0]} survived cancellation"
+
+
+@pytest.mark.asyncio
+async def test_keep_task_workdir_escape_hatch(mock_activity_ctx, monkeypatch):
+    import shutil
+
+    monkeypatch.setenv("MARQOV_KEEP_TASK_WORKDIR", "1")
+    result_json = await execute_task(
+        "wd-keep", _workdir_fn_ref(), json.dumps([]), json.dumps({})
+    )
+    kept = json.loads(result_json)["result"]
+    try:
+        assert os.path.isdir(kept), "MARQOV_KEEP_TASK_WORKDIR=1 must keep the workdir"
+    finally:
+        shutil.rmtree(kept, ignore_errors=True)
+
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR")
+    result_json = await execute_task(
+        "wd-keep2", _workdir_fn_ref(), json.dumps([]), json.dumps({})
+    )
+    assert not os.path.exists(json.loads(result_json)["result"])
+
+
+@pytest.mark.asyncio
+async def test_no_workdir_accumulation_across_batch(mock_activity_ctx, monkeypatch):
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+
+    def ok() -> int:
+        return 1
+
+    def bad() -> int:
+        raise RuntimeError("batch failure")
+
+    before = _task_dirs_under_temp_root()
+    for i in range(6):
+        if i % 2:
+            with pytest.raises(RuntimeError):
+                await execute_task(f"batch-{i}", _enc(bad), json.dumps([]), json.dumps({}))
+        else:
+            await execute_task(f"batch-{i}", _enc(ok), json.dumps([]), json.dumps({}))
+    after = _task_dirs_under_temp_root()
+    assert after - before == set(), f"task workdirs left behind: {sorted(after - before)}"
+
+
+@pytest.mark.asyncio
+async def test_workdir_lives_in_private_worker_parent(mock_activity_ctx):
+    import stat as stat_mod
+
+    def report_parent() -> dict:
+        import os as _os
+
+        wd = _os.environ["MARQOV_TASK_WORKDIR"]
+        parent = _os.path.dirname(wd)
+        return {
+            "parent": parent,
+            "parent_name": _os.path.basename(parent),
+            "env": dict(_os.environ),
+        }
+
+    result_json = await execute_task(
+        "wd-parent", _enc(report_parent), json.dumps([]), json.dumps({})
+    )
+    seen = json.loads(result_json)["result"]
+    assert seen["parent_name"].startswith("marqov_worker_"), seen["parent_name"]
+    if sys.platform != "win32":
+        mode = stat_mod.S_IMODE(os.stat(seen["parent"]).st_mode)
+        assert mode == 0o700, oct(mode)
+
+    # No variable other than MARQOV_TASK_WORKDIR names the parent itself, and
+    # every other mention of it is inside this task's own workdir (HOME, TMPDIR).
+    workdir = seen["env"]["MARQOV_TASK_WORKDIR"]
+    for key, value in seen["env"].items():
+        if key == "MARQOV_TASK_WORKDIR" or seen["parent"] not in value:
+            continue
+        assert value.startswith(workdir + os.sep), (
+            f"{key}={value!r} exposes the worker parent directory"
+        )
+
+
+def _slow_rmtree(started: Any, delay: float) -> Any:
+    """A stand-in for shutil.rmtree that takes ``delay`` seconds, then removes."""
+    import shutil
+
+    real_rmtree = shutil.rmtree
+
+    def slow(path: Any, *args: Any, **kwargs: Any) -> None:
+        started.set()
+        time.sleep(delay)
+        real_rmtree(path, *args, **kwargs)
+
+    return slow
+
+
+@pytest.mark.asyncio
+async def test_workdir_removal_does_not_block_event_loop(mock_activity_ctx, monkeypatch):
+    """A slow workdir removal must not stall the worker's event loop (heartbeats)."""
+    import threading
+
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+    started = threading.Event()
+    gaps: list[float] = []
+    stop = False
+
+    async def ticker() -> None:
+        last = time.monotonic()
+        while not stop:
+            await asyncio.sleep(0.01)
+            now = time.monotonic()
+            if started.is_set():
+                gaps.append(now - last)
+            last = now
+
+    tick_task = asyncio.create_task(ticker())
+    with patch(
+        "marqov.workflows.activity.shutil.rmtree", _slow_rmtree(started, delay=1.0)
+    ):
+        result_json = await execute_task(
+            "wd-slow-rm", _workdir_fn_ref(), json.dumps([]), json.dumps({})
+        )
+    stop = True
+    await tick_task
+
+    assert started.is_set(), "workdir removal never ran"
+    assert not os.path.exists(json.loads(result_json)["result"])
+    assert gaps and max(gaps) < 0.5, (
+        f"event loop stalled for {max(gaps, default=0):.2f}s during workdir removal"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_removal_still_removes_workdir(
+    mock_activity_ctx, monkeypatch
+):
+    """A cancellation that lands while the workdir is being removed must not skip it."""
+    import threading
+
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+    started = threading.Event()
+    with patch(
+        "marqov.workflows.activity.shutil.rmtree", _slow_rmtree(started, delay=0.5)
+    ):
+        task = asyncio.create_task(
+            execute_task("wd-cancel-rm", _workdir_fn_ref(), json.dumps([]), json.dumps({}))
+        )
+        deadline = time.monotonic() + 30
+        while not started.is_set():
+            assert time.monotonic() < deadline, "workdir removal never started"
+            await asyncio.sleep(0.01)
+        # Cancel twice while removal is in progress.
+        task.cancel()
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    from marqov.workflows import _child_env as ce
+
+    parent = ce._worker_parent_dir
+    assert parent is not None
+    leftover = list(parent.glob("marqov_task_wd-cancel-rm_*"))
+    assert leftover == [], f"workdir left behind after cancellation: {leftover}"
+
+
+@pytest.mark.asyncio
+async def test_grandchild_cannot_recreate_workdir(mock_activity_ctx, monkeypatch):
+    """A process the task leaves running is killed before the workdir is removed."""
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+
+    def spawn_late_writer() -> str:
+        import os as _os
+        import subprocess as _subprocess
+        import sys as _sys
+
+        wd = _os.environ["MARQOV_TASK_WORKDIR"]
+        code = (
+            "import os, time; time.sleep(0.5); "
+            f"os.makedirs(os.path.join({wd!r}, 'late'), exist_ok=True); "
+            f"open(os.path.join({wd!r}, 'late', 'x'), 'w').write('hi')"
+        )
+        _subprocess.Popen(
+            [_sys.executable, "-c", code],
+            stdin=_subprocess.DEVNULL,
+            stdout=_subprocess.DEVNULL,
+            stderr=_subprocess.DEVNULL,
+        )
+        return wd
+
+    result_json = await execute_task(
+        "wd-grandchild", _enc(spawn_late_writer), json.dumps([]), json.dumps({})
+    )
+    workdir = json.loads(result_json)["result"]
+    await asyncio.sleep(1.5)
+    try:
+        assert not os.path.exists(workdir), (
+            f"a leftover grandchild recreated {workdir} after removal"
+        )
+    finally:
+        import shutil
+
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Heartbeats span the workdir removal: a slow removal after the task finished
+# must not let Temporal's heartbeat timeout fire and retry the task.
+# ---------------------------------------------------------------------------
+
+
+def _heartbeat_gated_rmtree(mock_hb: Any, removing: Any, beat_seen: Any) -> Any:
+    """A stand-in for shutil.rmtree that waits for a heartbeat, then removes.
+
+    While it runs, ``removing`` is set; a heartbeat sent in that window sets
+    ``beat_seen``. It waits up to 10s for one, so the test does not depend on
+    tight timing, then performs the real removal.
+    """
+    import shutil
+
+    real_rmtree = shutil.rmtree
+
+    def on_heartbeat(*args: Any, **kwargs: Any) -> None:
+        if removing.is_set():
+            beat_seen.set()
+
+    mock_hb.side_effect = on_heartbeat
+
+    def gated(path: Any, *args: Any, **kwargs: Any) -> None:
+        removing.set()
+        try:
+            beat_seen.wait(timeout=10)
+        finally:
+            removing.clear()
+        real_rmtree(path, *args, **kwargs)
+
+    return gated
+
+
+@pytest.mark.asyncio
+async def test_heartbeats_continue_during_removal_after_success(
+    mock_activity_ctx, monkeypatch
+):
+    import threading
+
+    import marqov.workflows.activity as activity_mod
+
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+    monkeypatch.setattr(activity_mod, "_HEARTBEAT_INTERVAL_S", 0.05)
+    removing, beat_seen = threading.Event(), threading.Event()
+    with patch(
+        "marqov.workflows.activity.shutil.rmtree",
+        _heartbeat_gated_rmtree(mock_activity_ctx, removing, beat_seen),
+    ):
+        result_json = await execute_task(
+            "hb-rm-ok", _workdir_fn_ref(), json.dumps([]), json.dumps({})
+        )
+    assert not os.path.exists(json.loads(result_json)["result"])
+    assert beat_seen.is_set(), "no heartbeat was sent while the workdir was removed"
+
+
+@pytest.mark.asyncio
+async def test_heartbeats_continue_during_removal_after_failure(
+    mock_activity_ctx, monkeypatch
+):
+    import threading
+
+    import marqov.workflows.activity as activity_mod
+
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+    monkeypatch.setattr(activity_mod, "_HEARTBEAT_INTERVAL_S", 0.05)
+
+    def fail() -> None:
+        raise RuntimeError("task failed on purpose")
+
+    removing, beat_seen = threading.Event(), threading.Event()
+    with patch(
+        "marqov.workflows.activity.shutil.rmtree",
+        _heartbeat_gated_rmtree(mock_activity_ctx, removing, beat_seen),
+    ):
+        with pytest.raises(RuntimeError, match="task failed on purpose"):
+            await execute_task("hb-rm-fail", _enc(fail), json.dumps([]), json.dumps({}))
+    assert beat_seen.is_set(), "no heartbeat was sent while the workdir was removed"
+
+
+@pytest.mark.asyncio
+async def test_heartbeats_continue_during_removal_after_cancellation(
+    mock_activity_ctx, monkeypatch
+):
+    import threading
+
+    import marqov.workflows.activity as activity_mod
+
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+    monkeypatch.setattr(activity_mod, "_HEARTBEAT_INTERVAL_S", 0.05)
+
+    def very_slow_fn() -> int:
+        import time as _time
+
+        _time.sleep(60)
+        return 0
+
+    removing, beat_seen = threading.Event(), threading.Event()
+    with patch(
+        "marqov.workflows.activity.shutil.rmtree",
+        _heartbeat_gated_rmtree(mock_activity_ctx, removing, beat_seen),
+    ):
+        task = asyncio.create_task(
+            execute_task("hb-rm-cancel", _enc(very_slow_fn), json.dumps([]), json.dumps({}))
+        )
+        await asyncio.sleep(0.5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert beat_seen.is_set(), "no heartbeat was sent while the workdir was removed"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_loop_stops_after_removal(mock_activity_ctx, monkeypatch):
+    import marqov.workflows.activity as activity_mod
+
+    monkeypatch.delenv("MARQOV_KEEP_TASK_WORKDIR", raising=False)
+    monkeypatch.setattr(activity_mod, "_HEARTBEAT_INTERVAL_S", 0.02)
+    result_json = await execute_task(
+        "hb-stop", _workdir_fn_ref(), json.dumps([]), json.dumps({})
+    )
+    assert not os.path.exists(json.loads(result_json)["result"])
+    beats_at_return = mock_activity_ctx.call_count
+    # Ten heartbeat intervals: a loop still running would have beaten again.
+    await asyncio.sleep(0.2)
+    assert mock_activity_ctx.call_count == beats_at_return, (
+        "heartbeats were still sent after execute_task returned"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancellation_while_stopping_heartbeat_propagates() -> None:
+    """A cancel of execute_task that lands while its heartbeat loop is stopped
+    must propagate, not be taken for the loop's own cancellation."""
+    import marqov.workflows.activity as activity_mod
+
+    outer: asyncio.Task[str] | None = None
+
+    async def fake_run(*args: Any, **kwargs: Any) -> str:
+        return "RESULT"
+
+    async def fake_remove(workdir: Path) -> None:
+        # Fires on the next loop tick, while the outer finally awaits the
+        # cancelled heartbeat loop.
+        assert outer is not None
+        asyncio.get_running_loop().call_soon(outer.cancel)
+
+    with patch.object(activity_mod, "_run_task_in_workdir", fake_run), patch.object(
+        activity_mod, "_remove_task_workdir", fake_remove
+    ), patch("temporalio.activity.heartbeat"), patch("temporalio.activity.logger", MagicMock()):
+        outer = asyncio.create_task(execute_task("hb-cancel-stop", "x", "[]", "{}"))
+        with pytest.raises(asyncio.CancelledError):
+            await outer

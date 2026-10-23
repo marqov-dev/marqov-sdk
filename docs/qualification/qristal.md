@@ -109,11 +109,17 @@ One authenticated POST uses verified HTTPS, no redirects/retries/ambient proxy
 or credentials. The caller supplies an already valid reservation token;
 this adapter does not reserve hardware or send reservation writes. Any uncertain
 POST raises acceptance_unknown and must not be resubmitted automatically.
+Cancelling `execute()` while the POST is in flight waits up to 1 s for its
+reply, then re-raises the `CancelledError` (the `__cause__` of an
+`asyncio.wait_for` `TimeoutError`). A returned ID is stored in `last_job` and
+named in a note on that error; otherwise the error carries
+`acceptance_unknown = True` and a do-not-resubmit note, and a later reply is
+logged at WARNING with its ID.
 Known IDs remain in immutable `last_job` for GET-only `readback(job)` across
 restarts. Null data/HTTP 425 means pending; exact binary per-shot rows are required
 for success. Errors/timeouts retain the known ID. No cancellation/status endpoint
 or provider idempotency guarantee is claimed: cancel returns False and device
-status raises NotImplementedError. Poll/request/byte limits are finite; DNS and
+status reports `maintenance` with no queue data. Poll/request/byte limits are finite; DNS and
 OS blocking may leave a daemon one-send request in flight after the caller
 deadline; the watchdog bounds caller wait without claiming request cancellation.
 An uncertain write must still be reconciled and never replayed. Local simulation

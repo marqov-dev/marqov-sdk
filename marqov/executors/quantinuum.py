@@ -12,7 +12,12 @@ from functools import partial
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Mapping
 
-from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
+from marqov.executors.base import (
+    BaseExecutor,
+    DeviceStatus,
+    ExecutionResult,
+    reject_unsupported_options,
+)
 
 if TYPE_CHECKING:
     from marqov.circuits import Circuit
@@ -57,6 +62,18 @@ class QuantinuumExecutorConfig:
     poll_interval_seconds: float = 2.0
     timeout_seconds: float | None = 300.0
     optimisation_level: int = 2
+
+# Options forwarded to pytket's process_circuit, which ignores keys it does not
+# read, so anything outside this set raises instead. Derived from what
+# pytket-quantinuum 0.59.1 QuantinuumBackend.process_circuits actually reads
+# (valid_check plus its kwargs.get calls), not from its docstring, which also
+# lists group, pytketpass, options, request_options and max_cost; that version
+# never reads them per call. Re-derive this set on any pytket-quantinuum floor bump.
+FORWARDED_EXECUTE_OPTIONS = frozenset({
+    "valid_check", "postprocess", "simplify_initial", "noisy_simulation",
+    "wasm_file_handler", "language", "leakage_detection", "n_leakage_detection_qubits",
+    "seed", "multithreading",
+})
 
 
 class QuantinuumExecutor(BaseExecutor):
@@ -164,11 +181,25 @@ class QuantinuumExecutor(BaseExecutor):
         Args:
             circuit: The circuit to execute.
             shots: Number of measurement shots.
-            **kwargs: Additional backend-specific options.
+            **kwargs: Forwarded to pytket's ``process_circuit``. Only the
+                options in ``FORWARDED_EXECUTE_OPTIONS`` (the ones
+                pytket-quantinuum 0.59.1 ``process_circuits`` actually reads)
+                are accepted; pytket ignores unknown keys, so any other option
+                raises TypeError before the backend is initialized. That
+                includes ``api_handler``, ``group`` and ``options``, which
+                pytket reads only when the backend is constructed: use
+                ``QuantinuumExecutorConfig.api_handler``, ``.group`` and
+                ``.options`` (passed as backend constructor keywords) instead.
 
         Returns:
             ExecutionResult with measurement counts and metadata.
+
+        Raises:
+            TypeError: If an option outside ``FORWARDED_EXECUTE_OPTIONS`` is supplied.
         """
+        reject_unsupported_options(
+            "QuantinuumExecutor.execute()", kwargs, FORWARDED_EXECUTE_OPTIONS
+        )
         circuit = self._validate_circuit(circuit)
         loop = asyncio.get_running_loop()
         start_time = time.perf_counter()

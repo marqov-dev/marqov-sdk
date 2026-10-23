@@ -3,9 +3,11 @@
 Client-side advisory layer. Warns but does not block.
 Use --force to bypass warnings.
 
-Server-side budget enforcement in the Temporal worker is mandatory
-and cannot be bypassed via --force. This utility helps researchers
-catch issues before submission — it does not replace backend checks.
+This module performs no budget comparison and enforces no spending
+limit; nothing here blocks a run on cost. Any server-side
+budget enforcement is the concern of the hosted platform, and this
+SDK does not guarantee it exists. This utility helps researchers
+catch issues before submission; it is not a spending backstop.
 
 Usage in experiment scripts:
 
@@ -40,13 +42,24 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PreflightResult:
-    """Result of a pre-flight validation check."""
+    """Result of a pre-flight validation check.
+
+    Attributes:
+        budget_check: Always ``None`` from :func:`preflight`, which performs
+            no budget comparison. It is the field a platform-side caller
+            populates; it is never populated by preflight() itself.
+        dry_run_passed: Tri-state. ``None`` means no dry run was attempted,
+            which is what :func:`preflight` returns because it never runs
+            one. Only a caller that actually ran a dry run sets ``True`` or
+            ``False``. Test ``is True`` rather than truthiness if the
+            distinction matters.
+    """
 
     schema_valid: bool
     estimated_cost: float
     estimated_circuits: int
     budget_check: dict | None
-    dry_run_passed: bool
+    dry_run_passed: bool | None
     warnings: list[str] = field(default_factory=list)
     output_fields: list[str] = field(default_factory=list)
 
@@ -68,7 +81,9 @@ def preflight(
     include quality assessment, and estimates are provided.
 
     Args:
-        experiment_config: The experiment parameters (for logging).
+        experiment_config: The experiment parameters. Only the key names are
+            logged (at debug level); values are never logged, since configs
+            can carry tokens.
         output_sample: A sample of what the result JSONB will contain.
             Used to validate that raw data fields are present.
         estimated_cost: Estimated cost in USD.
@@ -112,8 +127,8 @@ def preflight(
     if estimated_cost is None:
         warnings.append(
             "WARNING: No cost estimate provided. "
-            "Cannot check against team budget. "
-            "Pass estimated_cost to enable budget validation."
+            "The cost is recorded as 0 in the result. "
+            "This function does not check cost against a budget."
         )
 
     # Check 4: Circuit count provided
@@ -137,6 +152,10 @@ def preflight(
         )
 
     # Log results
+    logger.debug(
+        "Pre-flight experiment_config keys: %s",
+        sorted(str(k) for k in (experiment_config or {})),
+    )
     if warnings:
         for w in warnings:
             logger.warning(w)
@@ -156,8 +175,8 @@ def preflight(
         schema_valid=len(warnings) == 0,
         estimated_cost=estimated_cost or 0,
         estimated_circuits=estimated_circuits or 0,
-        budget_check=None,  # populated when running through platform
-        dry_run_passed=True,  # set by caller after local sim
+        budget_check=None,  # no budget check is performed here; a platform-side caller populates it
+        dry_run_passed=None,  # no dry run is attempted here; a caller that ran one sets it
         warnings=warnings,
         output_fields=output_fields,
     )

@@ -65,7 +65,9 @@ async def spam_benchmark(
     """Run per-qubit SPAM benchmarking.
 
     For each qubit, prepares |0⟩ and |1⟩ states and measures readout
-    accuracy. Returns confusion matrices characterizing measurement errors.
+    accuracy. Each preparation registers wires 0 through its target so counts
+    retain absolute qubit positions. Returns confusion matrices characterizing
+    measurement errors.
 
     Args:
         executor: Quantum executor to run circuits on.
@@ -89,14 +91,20 @@ async def spam_benchmark(
     counts_prep_1: dict[int, dict[str, int]] = {}
 
     for qubit in qubits:
-        # Prepare |0⟩ on target qubit (X·X = identity, registers the qubit)
         circuit_0 = Circuit()
+        circuit_1 = Circuit()
+        # Register lower wires so absolute indices match returned bit positions.
+        # The target itself is registered by its preparation gates below.
+        for wire in range(qubit):
+            circuit_0.x(wire).x(wire)
+            circuit_1.x(wire).x(wire)
+
+        # Prepare |0⟩ on target qubit (X·X = identity).
         circuit_0.x(qubit).x(qubit)
         result_0 = await executor.execute(circuit_0, shots=shots)
         counts_prep_0[qubit] = result_0.counts
 
         # Prepare |1⟩ on target qubit (X gate then measure)
-        circuit_1 = Circuit()
         circuit_1.x(qubit)
         result_1 = await executor.execute(circuit_1, shots=shots)
         counts_prep_1[qubit] = result_1.counts
@@ -184,7 +192,9 @@ def apply_spam_correction(
     """Apply SPAM correction to measurement counts.
 
     Multiplies the correction matrix by the counts vector, clamps negative
-    values to zero, and re-normalizes to preserve total shot count.
+    values to zero, and re-normalizes to preserve total shot count. Shorter
+    bitstrings are left-padded to the longest key's width; equivalent padded
+    outcomes are combined before correction.
 
     Args:
         counts: Measurement counts keyed by bitstring.
@@ -199,9 +209,8 @@ def apply_spam_correction(
     if not counts:
         return {}
 
-    # Determine qubit count from bitstring length
-    sample_key = next(iter(counts))
-    n_qubits = len(sample_key)
+    # Normalize to the longest bitstring, independent of insertion order.
+    n_qubits = max(len(key) for key in counts)
     dim = 2**n_qubits
 
     if correction.shape != (dim, dim):
@@ -215,8 +224,8 @@ def apply_spam_correction(
     # Build counts vector
     vec = np.zeros(dim)
     for bitstring, count in counts.items():
-        idx = int(bitstring, 2)
-        vec[idx] = count
+        idx = int(bitstring.zfill(n_qubits), 2)
+        vec[idx] += count
 
     # Apply correction
     corrected_vec = correction @ vec

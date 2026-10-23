@@ -525,3 +525,84 @@ class TestPlatformInfo:
             client.platform_info()
 
         mock_req.assert_called_once_with("GET", "/api/meta")
+
+
+# ---------------------------------------------------------------------------
+# Doc provenance pins (marqov-sdk#151)
+# ---------------------------------------------------------------------------
+
+
+class TestDocClaimsPinned:
+    """Pin the code behaviour that docs/platform-client and the docstrings describe.
+
+    The paid-backend guard is server-enforced (the transport maps the server's
+    ``analysis_required`` code); the client does no slug check of its own, and
+    ``backends()`` preserves the server's response order.  If either changes,
+    the prose in docs/platform-client/*.md and marqov/platform/errors.py must be
+    edited deliberately alongside it.
+    """
+
+    def test_submit_has_no_client_side_paid_backend_guard(self):
+        """A 200 answer for any slug returns a Job; nothing is raised client-side."""
+        client = _make_client()
+        with patch.object(
+            client._transport, "request", return_value={"job_id": "j-1"}
+        ) as req:
+            job = client.submit("print(1)", backend="some-paid-qpu", framework="marqov")
+        assert isinstance(job, Job)
+        assert req.call_args.kwargs["json"]["backend"] == "some-paid-qpu"
+
+    def test_server_analysis_required_maps_to_paid_backend_error(self):
+        """The real transport maps 422 analysis_required to PaidBackendNotSupportedYet."""
+        from marqov.platform._transport import Transport
+
+        transport = Transport(api_key="marqey_test_x", base_url="http://test.invalid")
+        resp = MagicMock()
+        resp.status_code = 422
+        resp.reason = "Unprocessable Entity"
+        resp.headers = {}
+        resp.json.return_value = {
+            "error": {"code": "analysis_required", "message": "analysis needed", "status": 422}
+        }
+        with pytest.raises(PaidBackendNotSupportedYet) as exc_info:
+            transport._raise_for_response(resp)
+        assert exc_info.value.code == "analysis_required"
+
+    def test_backends_preserves_server_response_order_and_keeps_display_order(self):
+        """No client-side sort; an unmapped displayOrder field lands in Backend.extra."""
+        raw = [
+            {"slug": "c", "name": "C", "displayOrder": 1},
+            {"slug": "a", "name": "A", "displayOrder": 3},
+            {"slug": "b", "name": "B", "displayOrder": 2},
+        ]
+        client = _make_client()
+        with _patch_transport_request(client, {"backends": raw, "updatedAt": "t"}):
+            result = client.backends()
+        assert [b.slug for b in result] == ["c", "a", "b"]
+        assert [b.extra["displayOrder"] for b in result] == [1, 3, 2]
+
+
+# ---------------------------------------------------------------------------
+# Session lifecycle (marqov-sdk#150)
+# ---------------------------------------------------------------------------
+
+
+class TestSessionLifecycle:
+    """MarqovClient closes its HTTP session via close() or a with block."""
+
+    def test_context_manager_closes_session_once(self):
+        """The with form closes the session exactly once; a later close() is safe."""
+        client = _make_client()
+        with patch.object(client._transport._session, "close") as mock_close:
+            with client as entered:
+                assert entered is client
+                assert mock_close.call_count == 0
+            assert mock_close.call_count == 1
+            client.close()
+        assert mock_close.call_count == 1
+
+    def test_close_delegates_to_transport(self):
+        client = _make_client()
+        with patch.object(client._transport, "close") as mock_close:
+            client.close()
+        mock_close.assert_called_once_with()

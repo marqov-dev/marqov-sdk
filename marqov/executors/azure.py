@@ -37,6 +37,7 @@ Example (Cirq):
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import time
 from dataclasses import dataclass
@@ -44,10 +45,17 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from marqov.executors._blocking import BlockingCalls
-from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
+from marqov.executors.base import (
+    BaseExecutor,
+    DeviceStatus,
+    ExecutionResult,
+    reject_unsupported_options,
+)
 
 if TYPE_CHECKING:
     from marqov.circuits import Circuit
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -225,7 +233,7 @@ class AzureQuantumExecutor(BaseExecutor):
         Args:
             circuit: The quantum circuit to execute.
             shots: Number of measurement shots.
-            **kwargs: Additional backend-specific options.
+            **kwargs: Unsupported; any option raises TypeError.
 
         Returns:
             ExecutionResult with measurement counts and metadata.
@@ -233,14 +241,16 @@ class AzureQuantumExecutor(BaseExecutor):
         Raises:
             RuntimeError: If job fails or device is unavailable.
             NotImplementedError: If framework is not supported.
+            TypeError: If any keyword option is supplied.
         """
+        reject_unsupported_options("AzureQuantumExecutor.execute()", kwargs)
         circuit = self._validate_circuit(circuit)
 
         loop = asyncio.get_running_loop()
         start_time = time.perf_counter()
 
         if self.config.framework == "qiskit":
-            result = await self._execute_qiskit(circuit, shots, **kwargs)
+            result = await self._execute_qiskit(circuit, shots, start_time=start_time, **kwargs)
         elif self.config.framework == "cirq":
             result = await self._execute_cirq(circuit, shots, **kwargs)
         else:
@@ -248,8 +258,8 @@ class AzureQuantumExecutor(BaseExecutor):
 
         wall_time = time.perf_counter() - start_time
 
-        # Add wall time to metadata
-        result.metadata["wall_time_ms"] = wall_time * 1000
+        # Add wall time to metadata (the Qiskit path records its own)
+        result.metadata.setdefault("wall_time_ms", wall_time * 1000)
 
         return result
 
@@ -257,6 +267,7 @@ class AzureQuantumExecutor(BaseExecutor):
         self,
         circuit: Circuit,
         shots: int,
+        start_time: float | None = None,
         **kwargs: Any,
     ) -> ExecutionResult:
         """Execute circuit using Qiskit framework.
@@ -264,6 +275,8 @@ class AzureQuantumExecutor(BaseExecutor):
         Args:
             circuit: The circuit to execute.
             shots: Number of shots.
+            start_time: ``time.perf_counter()`` origin for wall time;
+                defaults to the start of result retrieval.
             **kwargs: Additional options.
 
         Returns:
@@ -299,7 +312,7 @@ class AzureQuantumExecutor(BaseExecutor):
                 identity["job_id"] = job.job_id()
                 identity["submission_status"] = "submitted"
                 self._current_job_id = identity["job_id"]  # Tracking only.
-                return await self._qiskit_result(job, calls, shots, timeout, identity)
+                return await self._qiskit_result(job, calls, shots, timeout, identity, start_time)
             except (Exception, asyncio.CancelledError) as error:
                 self._retain_job_identity(error, identity)
                 raise
@@ -324,7 +337,10 @@ class AzureQuantumExecutor(BaseExecutor):
         shots: int,
         timeout: float | None,
         identity: dict[str, Any],
+        start_time: float | None = None,
     ) -> ExecutionResult:
+        if start_time is None:
+            start_time = time.perf_counter()
         result_call = job.result if timeout is None else partial(job.result, timeout=timeout)
         result = await calls.wait(
             result_call, job.cancel, job_id=identity["job_id"], timeout=timeout,
@@ -350,18 +366,24 @@ class AzureQuantumExecutor(BaseExecutor):
 
         metadata = dict(identity)
 
-        # Try to get cost and timing info
+        # Cost and timing live on the vendor job's JobDetails. Unknown
+        # provider timing stays None and execution_time_ms falls back to
+        # local wall time, as in the Braket executor.
+        metadata["quantum_time_ms"] = None
         try:
-            # Azure job metadata may have cost information
-            job_metadata = await calls.call(job.properties)
-            if hasattr(job_metadata, "cost_estimate"):
-                metadata["cost_estimate"] = job_metadata.cost_estimate
-            if hasattr(job_metadata, "execution_time"):
-                metadata["quantum_time_ms"] = job_metadata.execution_time * 1000
+            await calls.call(job.refresh)
+            details = job._azure_job.details
+            if details.cost_estimate is not None:
+                metadata["cost_estimate"] = details.cost_estimate
+            begin, end = details.begin_execution_time, details.end_execution_time
+            if begin is not None and end is not None:
+                metadata["quantum_time_ms"] = (end - begin).total_seconds() * 1000
         except Exception:
-            pass
+            logger.debug("Optional Azure job details lookup failed after result retrieval", exc_info=True)
 
-        execution_time_ms = metadata.get("quantum_time_ms", 0.0)
+        metadata["wall_time_ms"] = (time.perf_counter() - start_time) * 1000
+        quantum_time_ms = metadata["quantum_time_ms"]
+        execution_time_ms = quantum_time_ms if quantum_time_ms is not None else metadata["wall_time_ms"]
 
         return ExecutionResult(
             counts=counts,
@@ -439,15 +461,7 @@ class AzureQuantumExecutor(BaseExecutor):
             return job.results(timeout_seconds=budget)
         # Azure's IonQ wrapper returns provider results rather than cirq.Result.
         target_wrapper = service.get_target(name=target)
-        try:
-            result = job.results(timeout_seconds=budget)
-        except RuntimeError as error:
-            # Preserve the legacy provider polling error mapped by service.run().
-            if "Job was not completed successful. Instead had status: " in str(error):
-                raise TimeoutError(
-                    f"The wait time has exceeded {budget} seconds. Job status: '{job.status()}'."
-                ) from error
-            raise
+        result = job.results(timeout_seconds=budget)
         return target_wrapper._to_cirq_result(
             result=result, param_resolver=cirq.ParamResolver({}), seed=None,
         )
@@ -517,35 +531,55 @@ class AzureQuantumExecutor(BaseExecutor):
     _AZURE_STATUS_MAP = {
         "Available": "online",
         "Degraded": "maintenance",
+        "Unavailable": "offline",
+        "Unknown": "maintenance",
     }
 
     async def get_status(self) -> DeviceStatus:
-        """Get live device status from Azure Quantum."""
+        """Get live device status from Azure Quantum.
+
+        A failed lookup (credentials, network, target not found) reports
+        ``maintenance`` rather than ``offline``: the state could not be read.
+        When the workspace is reachable but has no target with the configured
+        name, a warning logs the configured name and the names it returned.
+        """
         try:
-            raw_status = await self.get_device_status()
-            status = self._AZURE_STATUS_MAP.get(raw_status, "offline")
-            return DeviceStatus(status=status, queue_depth=None, queue_time_seconds=None)
+            raw_status = await self._read_device_status()
         except Exception:
-            return DeviceStatus(status="maintenance", queue_depth=None, queue_time_seconds=None)
+            raw_status = "Unknown"
+        status = self._AZURE_STATUS_MAP.get(raw_status, "maintenance")
+        return DeviceStatus(status=status, queue_depth=None, queue_time_seconds=None)
+
+    async def _read_device_status(self) -> str:
+        """Read ``current_availability`` for the target; raises on any failure."""
+        workspace = await self._get_workspace()
+        loop = asyncio.get_running_loop()
+
+        def get_status_sync():
+            targets = list(workspace.get_targets())
+            for target in targets:
+                if target.name == self.config.target:
+                    return target.current_availability
+            logger.warning(
+                "Azure target %r not found in workspace %r; available targets: %s",
+                self.config.target,
+                self.config.workspace_name,
+                sorted(str(target.name) for target in targets),
+            )
+            return None
+
+        status = await loop.run_in_executor(None, get_status_sync)
+        return status or "Unknown"
 
     async def get_device_status(self) -> str:
         """Get current device status.
 
         Returns:
-            Device status string (e.g., "Available", "Unavailable").
+            Azure's ``current_availability`` ("Available", "Degraded" or
+            "Unavailable"), or "Unknown" if it could not be read.
         """
         try:
-            workspace = await self._get_workspace()
-            loop = asyncio.get_running_loop()
-
-            def get_status_sync():
-                targets = workspace.get_targets()
-                for target in targets:
-                    if target.name == self.config.target:
-                        return target.current_availability
-
-            status = await loop.run_in_executor(None, get_status_sync)
-            return status or "Unknown"
+            return await self._read_device_status()
         except Exception:
             return "Unknown"
 
@@ -553,7 +587,8 @@ class AzureQuantumExecutor(BaseExecutor):
         """Check if device is available for execution.
 
         Returns:
-            True if device is available, False otherwise.
+            True only when Azure reports "Available". "Degraded",
+            "Unavailable" and an unreadable status all return False.
         """
         status = await self.get_device_status()
-        return "available" in status.lower() if status else False
+        return status.strip().lower() == "available"

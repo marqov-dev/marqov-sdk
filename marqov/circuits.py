@@ -247,10 +247,20 @@ class Circuit:
     def to_qiskit(self):
         """Convert to IBM Qiskit circuit.
 
+        The circuit is built on one register named ``q``, as
+        ``qiskit.QuantumCircuit(n)`` would, so repeated exports are identical.
+
         Returns:
             Qiskit QuantumCircuit object.
         """
-        return qf.transpile(self._qf, output_format="qiskit")
+        from qiskit import QuantumCircuit, QuantumRegister
+
+        # The converter leaves the register unnamed, so Qiskit names it from a
+        # process-global counter (q0, q1, ...); move the gates onto "q".
+        exported = qf.transpile(self._qf, output_format="qiskit")
+        circuit = QuantumCircuit(QuantumRegister(exported.num_qubits, "q"))
+        circuit.compose(exported, qubits=range(exported.num_qubits), inplace=True)
+        return circuit
 
     def to_cirq(self):
         """Convert to Google Cirq circuit.
@@ -260,13 +270,56 @@ class Circuit:
         """
         return qf.transpile(self._qf, output_format="cirq")
 
+    # QuantumFlow gate name -> Quil gate name. The fork's map spells two of
+    # these wrong ("PhaseShift", "CHPHASE10"), which pyQuil cannot interpret.
+    _QF_TO_QUIL: dict[str, str] = {
+        **{qf_name: quil_name for quil_name, qf_name in qf.xforest.QUIL_TO_QF.items()},
+        "PhaseShift": "PHASE",
+        "CPhase10": "CPHASE10",
+    }
+
     def to_pyquil(self):
         """Convert to Rigetti PyQuil program.
 
+        Gates outside the Quil-native set (for example Braket's ``V``, ``XY``
+        or ``CY``) are first translated into Quil-native gates, so the program
+        equals the circuit up to a global phase (Quil has no global-phase
+        gate). Every parameter is exported as a float.
+
         Returns:
             PyQuil Program object.
+
+        Raises:
+            ImportError: If PyQuil is not installed.
+            NotImplementedError: If a translated gate has no Quil name.
+            ValueError: If a gate parameter is unbound (symbolic) or not a
+                real number.
         """
-        return qf.transpile(self._qf, output_format="pyquil")
+        try:
+            from pyquil import Program
+        except ImportError:
+            raise ImportError(
+                "PyQuil is required for Circuit.to_pyquil(). "
+                "Install with: pip install marqov[pyquil]"
+            )
+
+        method = "Circuit.to_pyquil()"
+        for index, op in enumerate(self._qf._elements):
+            for param in op.params:
+                self._bound_angle(param, op.name, index, method)
+
+        # Translation leaves sympy expressions such as `pi/2` in parameters,
+        # which pyQuil rejects, so cast them to floats.
+        program = Program()
+        for index, op in enumerate(qf.xforest.translate_to_pyquil(self._qf)):
+            quil_name = self._QF_TO_QUIL.get(op.name)
+            if quil_name is None:
+                raise NotImplementedError(
+                    f"{method}: gate {op.name!r} at position {index} has no Quil equivalent."
+                )
+            params = [self._bound_angle(param, op.name, index, method) for param in op.params]
+            program.gate(quil_name, params, list(op.qubits))
+        return program
 
     def to_pytket(self):
         """Convert to pytket Circuit.
@@ -386,18 +439,20 @@ class Circuit:
         return qml.tape.QuantumScript(operations)
 
     @staticmethod
-    def _bound_angle(value: Any, gate: str, index: int) -> float:
+    def _bound_angle(
+        value: Any, gate: str, index: int, method: str = "Circuit.to_pennylane()"
+    ) -> float:
         """Return a gate angle as a float, refusing unbound or non-real values."""
         try:
             numeric = complex(value)
         except (TypeError, ValueError) as exc:
             raise ValueError(
-                f"Circuit.to_pennylane(): gate '{gate}' at position {index} has an "
+                f"{method}: gate '{gate}' at position {index} has an "
                 f"unbound parameter {value!r}. Bind every angle to a number first."
             ) from exc
         if numeric.imag != 0:
             raise ValueError(
-                f"Circuit.to_pennylane(): gate '{gate}' at position {index} has a "
+                f"{method}: gate '{gate}' at position {index} has a "
                 f"non-real angle {value!r}."
             )
         return float(numeric.real)
@@ -421,6 +476,11 @@ class Circuit:
         Instruction-level controls and non-default powers are unsupported.
         Use explicit gates such as ``cnot`` or decompose modified instructions
         before importing; their modifiers would be lost by the converter.
+        Terminal measurements (nothing after them touches the measured qubit)
+        are skipped; as in ``from_qiskit``, a qubit that only a measurement
+        touches is not part of the returned circuit. Result types (e.g.
+        ``probability()``) are not imported: the returned circuit carries
+        gates only.
 
         Args:
             braket_circuit: Braket Circuit to import.
@@ -430,12 +490,40 @@ class Circuit:
 
         Raises:
             NotImplementedError: If an instruction has controls or a power
-                other than one. The message identifies its gate and index.
+                other than one, or is a non-gate operator other than a
+                terminal measurement (noise, compiler directives such as
+                verbatim boxes). The message identifies its operator and
+                index. A mid-circuit measurement raises with its qubits.
         """
         circuit = cls()
         require_braket()
+        from braket import circuits as braket_circuits
+        from braket.circuits.measure import Measure
+
+        instructions = list(braket_circuit.instructions)
+        gate_instructions = []
         # Validate the entire input before the converter can strip modifiers.
-        for index, instruction in enumerate(braket_circuit.instructions):
+        for index, instruction in enumerate(instructions):
+            if isinstance(instruction.operator, Measure):
+                measured_qubits = {int(q) for q in instruction.target}
+                if any(
+                    measured_qubits & {int(q) for q in later.target}
+                    for later in instructions[index + 1 :]
+                ):
+                    raise NotImplementedError(
+                        f"Circuit.from_braket() does not support mid-circuit measurement "
+                        f"(qubits {sorted(measured_qubits)}): a later instruction touches "
+                        "these qubits, so dropping the measurement would silently change "
+                        "what the circuit computes."
+                    )
+                continue
+            if not isinstance(instruction.operator, braket_circuits.Gate):
+                raise NotImplementedError(
+                    f"Circuit.from_braket(): unsupported operator "
+                    f"'{instruction.operator.name}' at index {index}. Only gates "
+                    "and terminal measurements are supported."
+                )
+            gate_instructions.append(instruction)
             if instruction.control or instruction.power != 1:
                 raise NotImplementedError(
                     f"Circuit.from_braket(): unsupported modifiers for gate "
@@ -445,7 +533,7 @@ class Circuit:
                     f"power={instruction.power}. Use explicit supported gates "
                     "or decompose modified instructions before importing."
                 )
-        circuit._qf = qf.braket_to_circuit(braket_circuit)
+        circuit._qf = qf.braket_to_circuit(braket_circuits.Circuit(gate_instructions))
         return circuit
 
     # Qiskit gate name -> Circuit fluent method mapping.
@@ -1187,7 +1275,14 @@ class Circuit:
         header = re.match(r"OPENQASM\s+(\d+)\b", stripped[header_start:])
         version = 3 if header is not None and header.group(1) == "3" else 2
         try:
-            qiskit_circuit = (qasm3 if version == 3 else qasm2).loads(stripped)
+            if version == 3:
+                qiskit_circuit = qasm3.loads(stripped)
+            else:
+                # Qiskit's QASM 2 exporter writes gates such as `swap` as if
+                # qelib1.inc defined them; the legacy set lets us read them back.
+                qiskit_circuit = qasm2.loads(
+                    stripped, custom_instructions=qasm2.LEGACY_CUSTOM_INSTRUCTIONS
+                )
         except ImportError:
             # Missing optional parser dependencies are installation errors.
             raise

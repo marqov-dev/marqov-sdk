@@ -20,12 +20,12 @@ message.
 |-----------|-------------------|--------|
 | `AuthenticationError` | API key is missing, invalid, or has been revoked — raised at construction if no key is found, or on HTTP 401 | No — fix the key first |
 | `PermissionTierError` | Your plan does not permit access to the requested resource (HTTP 403) | No — upgrade plan or contact support |
-| `PaidBackendNotSupportedYet` | The backend requires a pre-run cost analysis (paid backends); v1.0 only routes free backends | No — choose a free backend (e.g. `dwave-sim`) |
+| `PaidBackendNotSupportedYet` | The server rejected the backend with `analysis_required` because it requires a pre-run cost analysis (paid backends); the client does not check the slug itself | No — choose a free backend (e.g. `dwave-sim`) |
 | `BackendUnavailable` | The requested backend is known but currently offline or unrecognised | Maybe — retry with back-off or choose another backend |
 | `InvalidProgram` | The submitted program was rejected by the server (bad QASM, unsupported gates, too many qubits, malformed body) | No — fix the program |
 | `JobFailed` | The job reached the `failed` or `dispatch_failed` terminal state | Depends — inspect `message`, but see caveat below |
 | `RateLimited` | HTTP 429 — too many requests | Yes — back off by `retry_after` seconds |
-| `TransportError` | Low-level network failure: connection refused, TLS error, or unrecognised non-2xx with no structured error body | Yes for reads; conditional for writes (see below) |
+| `TransportError` | Low-level network failure: connection refused, TLS error, unrecognised non-2xx with no structured error body, or a success response (any status below 400, so an unfollowed redirect too) whose body is not JSON, for example a captive portal answering with HTML; not retried | Yes for reads; conditional for writes (see below) |
 | `MarqovPlatformError` | Any other structured server error not mapped to a subclass above | Depends on `code` |
 
 ---
@@ -113,12 +113,33 @@ client falls back to its own backoff and hands you the parsed value on
 `RateLimited.retry_after`. Pinned by
 `tests/test_platform_transport.py::TestRetryableStatusCodes::test_429_retry_after_beyond_budget_falls_back_to_default_backoff`.
 
+`RateLimited.retry_after` is never negative: a negative delta-seconds value
+and an HTTP-date in the past both become `0`, so it is always safe to pass to
+`time.sleep()`. Pinned by
+`tests/test_platform_transport.py::TestRetryAfterClamp::test_429_with_negative_retry_after_surfaces_zero`.
+
 ---
 
 ## Timeout behaviour of `result()`
 
 `job.result(timeout=300.0)` raises `TimeoutError` if the job has not reached
 a terminal state within the specified wall-clock budget.
+
+Within a status poll, every HTTP attempt's timeout is capped at the time left
+in the budget, and once the deadline has passed the client starts no further
+retry and sleeps no further backoff. If a poll fails with a `TransportError`
+once the deadline has passed, you get `TimeoutError` (with the
+`TransportError` as its `__cause__`); a transport failure before the deadline
+is raised as is. Pinned by
+`tests/test_platform_job.py::TestJobResultDeadline::test_hanging_poll_raises_timeout_error_within_budget`,
+`tests/test_platform_job.py::TestJobResultDeadline::test_fast_failures_stop_at_deadline`
+and
+`tests/test_platform_job.py::TestJobResultDeadline::test_transport_failure_inside_deadline_propagates`.
+
+The deadline is not a hard wall-clock limit on a single attempt: `requests`
+applies a timeout to the connection and to each socket read separately, so a
+server that sends its response slowly can still hold one attempt past the
+deadline.
 
 **The job continues running on the server.** The client does not cancel the
 job when a timeout occurs. Reconnect to it later:

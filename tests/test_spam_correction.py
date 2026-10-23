@@ -127,6 +127,21 @@ class TestApplySpamCorrection:
         with pytest.raises(ValueError, match="does not match"):
             apply_spam_correction(counts, correction)
 
+    @pytest.mark.parametrize("counts", [{"0": 10, "10": 5}, {"10": 5, "0": 10}])
+    def test_mixed_width_identity_is_order_independent(self, counts: dict[str, int]) -> None:
+        assert apply_spam_correction(counts, np.eye(4)) == {"00": 10, "10": 5}
+
+    @pytest.mark.parametrize("counts", [{"0": 10, "10": 5}, {"10": 5, "0": 10}])
+    def test_mixed_width_dimension_mismatch_is_clear(self, counts: dict[str, int]) -> None:
+        with pytest.raises(ValueError, match="does not match 2-qubit state space"):
+            apply_spam_correction(counts, np.eye(2))
+
+    def test_zero_padding_aliases_accumulate_without_losing_shots(self) -> None:
+        counts = {"0": 10, "00": 3, "10": 5}
+        result = apply_spam_correction(counts, np.eye(4))
+        assert result == {"00": 13, "10": 5}
+        assert sum(result.values()) == sum(counts.values())
+
     def test_zero_count_entries_filtered(self) -> None:
         """Entries with zero counts are not in output."""
         correction = np.eye(2)

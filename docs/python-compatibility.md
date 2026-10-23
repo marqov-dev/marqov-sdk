@@ -1,24 +1,33 @@
 # Python compatibility: core SDK and provider integrations
 
-Qualification snapshot: **October 13, 2026**. Python 3.13 checks passed for
-**17 profiles on Linux x86_64** and **16 on macOS arm64**. Rigetti, pyQuil and
-`[all]` failed installation on both. CUDA-Q native execution is Linux-only.
+Qualification snapshot: **October 17, 2026** (Linux) and **October 13, 2026**
+(macOS). Python 3.13 checks passed for **17 profiles on Linux x86_64** and
+**16 on macOS arm64**. Rigetti, pyQuil and `[all]` failed installation on both.
+CUDA-Q native execution is Linux-only.
 
 ## Which SDK was tested?
 
 These are **development/release-candidate results**, not qualification of the
-published PyPI 0.9.0 package. Linux used a freshly built 0.9.0-labelled development
-wheel containing the fixes after v0.9.0; macOS used the hash-verified 0.9.1
-TestPyPI release candidate from `b5e718be7ec217e9d77cc268378f301949297f93`.
-The runtime code is based on `81682d3a9d677603e5d8c1af742fd4468fd32f5f`;
-this qualification changes no SDK runtime or dependency constraints.
-Both wheels require exactly `marqov-quantumflow==1.0.2`.
+published PyPI package. Linux used a wheel built by CI from `main` at
+`b289b8fed3f93547d3211b832f7f6e4eae72cb87` (after the 0.9.1 release and the
+October review fixes); macOS used the hash-verified 0.9.1 TestPyPI release
+candidate from `b5e718be7ec217e9d77cc268378f301949297f93`. The Linux commit is
+on `main` and can be checked out to reproduce the evidence; the macOS commit
+was the head of the squash-merged release-candidate branch and is no longer on
+a branch, so its reproducible pointer is the TestPyPI 0.9.1 wheel and its
+SHA-256 in the record. This qualification changes no SDK runtime or dependency
+constraints. Both wheels require exactly `marqov-quantumflow==1.0.2`.
 
 The [machine-readable record](qualification/python313.json) identifies each
 wheel SHA-256, tested source commit, Python patch version and exact installed
 package versions. Linux used CPython 3.13.16; macOS used CPython 3.13.13.
 OS and Python patch versions differ, so these are measured combinations rather
 than an experiment isolating operating-system effects.
+
+The frozen requirements files under `docs/qualification/` are evidence of what
+was installed during qualification, not dependency manifests. Dependabot alerts
+against the pinned versions in them are expected and are not acted on by
+editing the files.
 
 ## Python 3.13 matrix
 
@@ -29,21 +38,21 @@ probes; others include real local execution and selected regression tests.
 
 | Integration | Linux x86_64 | macOS arm64 | Linux check scope |
 |---|---|---|---|
-| Core / LocalExecutor | Checks pass | Checks pass | 38 workflow/sampling tests + local execution |
+| Core / LocalExecutor | Checks pass | Checks pass | 73 workflow/sampling tests + local execution |
 | Braket | Checks pass | Checks pass | 149 tests + circuit conversion |
 | Qiskit | Checks pass | Checks pass | Circuit conversion probe |
 | Cirq | Checks pass | Checks pass | Circuit conversion probe |
-| PennyLane / Lightning | Checks pass | Checks pass | 59 passed, 3 Kokkos skips + Lightning tests |
-| Lightning Kokkos | Checks pass | Checks pass | 62 tests + real Kokkos execution |
-| CUDA-Q | Checks pass | Native unavailable | 38 tests + real CPU execution on Linux |
+| PennyLane / Lightning | Checks pass | Checks pass | 60 passed, 3 Kokkos skips + Lightning tests |
+| Lightning Kokkos | Checks pass | Checks pass | 63 tests + real Kokkos execution |
+| CUDA-Q | Checks pass | Native unavailable | 41 tests + real CPU execution on Linux |
 | QuTiP | Checks pass | Checks pass | 13 solver/record tests |
 | pytket | Checks pass | Checks pass | Unitary export probe |
 | Quantinuum | Checks pass | Checks pass | Unitary export + vendor import |
 | OpenQASM | Checks pass | Checks pass | QASM round-trip probe |
 | IBM Runtime | Checks pass | Checks pass | 28 channel tests + vendor import/conversion |
-| Azure Quantum | Checks pass | Checks pass | 46 adapter tests + vendor imports/conversion |
-| IonQ | Checks pass | Checks pass | 59 adapter tests + conversion |
-| QiliSDK / SpeQtrum | Checks pass | Checks pass | 68 tests + local execution |
+| Azure Quantum | Checks pass | Checks pass | 47 adapter tests + vendor imports/conversion |
+| IonQ | Checks pass | Checks pass | 64 adapter tests + conversion |
+| QiliSDK / SpeQtrum | Checks pass | Checks pass | 93 tests + local execution |
 | Alice & Bob | Checks pass | Checks pass | Local vendor model + adapter tests |
 | QB remote | Checks pass | Checks pass | SDK payload construction probe |
 | pyQuil | Install fails | Install fails | Installation failed; tests not run |
@@ -107,12 +116,14 @@ install other integrations). It checks distribution ownership and saves package
 versions, probe output, pytest totals and failure logs, then removes each test
 environment. A failed install or probe exits nonzero; it is never called a pass.
 
-[Linux qualification run](https://github.com/marqov-dev/marqov-sdk/actions/runs/38446150113)
-contains downloadable `python313-<profile>` evidence artifacts. The 17 qualified
-Linux profiles now feed the required `CI Success` gate. Rigetti, pyQuil and
-`[all]` retain separate advisory jobs with visible failure evidence. If upstream
-compatibility changes, rerun the isolated checks, review the results, update this
-snapshot and promote newly qualified profiles into the required gate.
+[Linux qualification run](https://github.com/marqov-dev/marqov-sdk/actions/runs/39059594315)
+(the `CI` run for `main` at `b289b8f`) contains downloadable
+`python313-<profile>` evidence artifacts; every push to `main` produces a
+fresh set. The 17 qualified Linux profiles now feed the required `CI Success`
+gate. Rigetti, pyQuil and `[all]` retain separate advisory jobs with visible
+failure evidence. If upstream compatibility changes, rerun the isolated checks,
+review the results, update this snapshot and promote newly qualified profiles
+into the required gate.
 
 A platform runtime needs its own Python/SDK/vendor/image qualification. No
 managed image, deployed service or live provider job was changed or qualified

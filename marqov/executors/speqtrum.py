@@ -12,14 +12,16 @@ import hashlib
 import json
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any, cast
 from urllib.parse import urlsplit
 
 import requests
 from requests.adapters import HTTPAdapter
 
+from marqov.executors._blocking import BlockingCalls
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 from marqov.executors.qilisdk import QiliSDKExecutor
 
@@ -277,11 +279,17 @@ class SpeQtrumExecutor(BaseExecutor):
         self.config = config
         self._client = SpeQtrumHTTPClient(config)
         self.last_job: SpeQtrumJob | None = None
+        self._require_qilisdk()
 
     @staticmethod
     def _require_qilisdk() -> None:
-        if version("qilisdk") != "0.3.0":
-            raise ImportError("SpeQtrum adapter requires qilisdk==0.3.0")
+        message = "SpeQtrum adapter requires qilisdk==0.3.0. Install with: pip install qilisdk==0.3.0"
+        try:
+            installed = version("qilisdk")
+        except PackageNotFoundError as exc:
+            raise ImportError(message) from exc
+        if installed != "0.3.0":
+            raise ImportError(message)
 
     async def execute(self, circuit: Any, shots: int = 1000, **kwargs: Any) -> ExecutionResult:
         if kwargs:
@@ -292,9 +300,7 @@ class SpeQtrumExecutor(BaseExecutor):
         circuit = self._validate_circuit(circuit)
         # Conversion is shared; do not construct the local simulator.
         functional = DigitalPropagation(circuit=QiliSDKExecutor._to_qilisdk_circuit(circuit))
-        return await asyncio.to_thread(
-            self._run, functional, "digital_propagation", shots, circuit.num_qubits
-        )
+        return await self._run(functional, "digital_propagation", shots, circuit.num_qubits)
 
     async def execute_analog(
         self, schedule: Any, shots: int = 1000, initial_state: Any = None, **kwargs: Any
@@ -312,11 +318,32 @@ class SpeQtrumExecutor(BaseExecutor):
             schedule=schedule,
             initial_state=initial_state if initial_state is not None else InitialState.UNIFORM,
         )
-        return await asyncio.to_thread(
-            self._run, functional, "analog_evolution", shots, schedule.nqubits
-        )
+        return await self._run(functional, "analog_evolution", shots, schedule.nqubits)
 
-    def _run(self, functional: Any, kind: str, shots: int, width: int) -> ExecutionResult:
+    async def _run(self, functional: Any, kind: str, shots: int, width: int) -> ExecutionResult:
+        deadline = time.monotonic() + self.config.timeout_seconds
+        with BlockingCalls() as calls:
+            job, token = await calls.submit_owned(
+                self._submit,
+                functional,
+                kind,
+                shots,
+                width,
+                deadline,
+                label="SpeQtrum job",
+                job_id_of=lambda sent: sent[0].job_id,
+            )
+            return cast(ExecutionResult, await calls.call(self._readback, job, token, deadline))
+
+    def _submit(
+        self,
+        functional: Any,
+        kind: str,
+        shots: int,
+        width: int,
+        deadline: float,
+        claim: Callable[[], None],
+    ) -> tuple[SpeQtrumJob, str]:
         from qilisdk.readout import Readout
         from qilisdk.utils.serialization import serialize
 
@@ -335,7 +362,6 @@ class SpeQtrumExecutor(BaseExecutor):
         }
         payload[kind + "_payload"] = {kind: serialize(functional), "readout": serialize(readout)}
         wire_payload = json.dumps(payload, separators=(",", ":"))
-        deadline = time.monotonic() + self.config.timeout_seconds
         token = self._client.login(deadline)
         self._device(token, deadline, kind, width)
         body: dict[str, Any] = {
@@ -345,6 +371,7 @@ class SpeQtrumExecutor(BaseExecutor):
             "meta": {},
         }
         # There is no server idempotency guarantee. Any failure after POST begins is unknown.
+        claim()
         self.last_job = None
         try:
             reply = self._client.request("POST", "/execute", deadline, token=token, body=body)
@@ -365,7 +392,7 @@ class SpeQtrumExecutor(BaseExecutor):
             width,
         )
         self.last_job = job
-        return self._readback(job, token, deadline)
+        return job, token
 
     def _device(
         self, token: str, deadline: float, kind: str | None = None, width: int = 0
@@ -490,7 +517,10 @@ class SpeQtrumExecutor(BaseExecutor):
             raise SpeQtrumExecutionError(job.job_id) from None
 
     async def get_status(self) -> DeviceStatus:
-        return await asyncio.to_thread(self._status)
+        try:
+            return await asyncio.to_thread(self._status)
+        except Exception:  # noqa: BLE001 - unreachable or invalid status reads as maintenance
+            return DeviceStatus(status="maintenance", queue_depth=None, queue_time_seconds=None)
 
     def _status(self) -> DeviceStatus:
         deadline = time.monotonic() + self.config.timeout_seconds

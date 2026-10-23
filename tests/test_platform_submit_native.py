@@ -530,6 +530,23 @@ def test_unreadable_success_response_is_reported_as_unknown_outcome_with_the_key
     _no_secrets(info.value)
 
 
+def test_unreadable_unfollowed_redirect_is_reported_as_unknown_outcome():
+    """``resp.ok`` holds below 400, so an unfollowed 302 with HTML is unreadable too."""
+    from marqov.platform.errors import TransportError
+
+    def moved(api, method, url, **kwargs):
+        resp = FakeHostedApi._resp(302, {})
+        resp.ok = True
+        resp.json.side_effect = ValueError("Expecting value: line 1 column 1")
+        return resp
+
+    client, keys = _recording(moved)
+    with pytest.raises(TransportError) as info:
+        client.submit_native(source=SOURCE, **BASE)
+    assert info.value.code == "submission_outcome_unknown"
+    assert info.value.idempotency_key == keys[0]
+
+
 @pytest.mark.parametrize("receipt, code", [
     ({"job_id": JOB}, "invalid_receipt"),
     ({"protocol_version": "marqov.funded-admission-receipt/v1", "job_id": JOB, "submission_id": JOB,

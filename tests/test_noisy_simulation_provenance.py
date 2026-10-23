@@ -1,14 +1,16 @@
 """Validate actual noisy-backend limits and result provenance without native jobs."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import numpy as np
 import pytest
 
 from marqov import Circuit
 from marqov.simulation.config import SimulationConfig
 from marqov.simulation.executor import SimulationExecutor, _validate_qubit_limit
-from marqov.simulation.noise import NoiseModel
+from marqov.simulation.noise import Depolarizing, NoiseModel
 
 
 class NativeSession:
@@ -126,3 +128,55 @@ async def test_actual_backend_boundary_preserves_allowed_requests(monkeypatch, n
     assert session.acc_history == [actual]
     assert session.qn == width
     assert result.counts == {"0" * width: 100}
+
+
+async def _aer_record(monkeypatch, noise):
+    install_native_fake(monkeypatch, 2, 100)
+    config = SimulationConfig(backend_id="aer", backend_type="noisy", noise_model=noise, seed=7)
+    result = await SimulationExecutor(config).execute(Circuit().h(0).cnot(0, 1), shots=100)
+    return result.metadata["reproducibility"]
+
+
+@pytest.mark.asyncio
+async def test_record_distinguishes_noisy_from_noiseless_aer(monkeypatch):
+    noiseless = await _aer_record(monkeypatch, None)
+    noisy = await _aer_record(monkeypatch, NoiseModel.depolarizing_uniform(p=0.01, num_qubits=2))
+    assert noiseless["noise_model"] is None
+    assert noisy["noise_model"] is not None
+    assert noiseless["program_sha256"] == noisy["program_sha256"]
+    assert noiseless["inputs_sha256"] != noisy["inputs_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_record_distinguishes_different_noise_models(monkeypatch):
+    low = await _aer_record(monkeypatch, NoiseModel.depolarizing_uniform(p=0.01, num_qubits=2))
+    high = await _aer_record(monkeypatch, NoiseModel.depolarizing_uniform(p=0.02, num_qubits=2))
+    assert low["program_sha256"] == high["program_sha256"]
+    assert low["noise_model"] != high["noise_model"]
+    assert low["inputs_sha256"] != high["inputs_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_record_inputs_are_deterministic(monkeypatch):
+    first = await _aer_record(monkeypatch, NoiseModel.depolarizing_uniform(p=0.01, num_qubits=2))
+    second = await _aer_record(monkeypatch, NoiseModel.depolarizing_uniform(p=0.01, num_qubits=2))
+    assert first["noise_model"] == second["noise_model"]
+    assert first["program_sha256"] == second["program_sha256"]
+    assert first["inputs_sha256"] == second["inputs_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_record_accepts_numpy_typed_noise_inputs(monkeypatch):
+    plain = NoiseModel()
+    plain.add(Depolarizing(0.25), qubits=[0, 1])
+    plain.add(Depolarizing(0.5), qubits=[1])
+    numpy_typed = NoiseModel()
+    numpy_typed.add(Depolarizing(np.float64(0.25)), qubits=list(np.arange(2)))
+    numpy_typed.add(Depolarizing(np.float32(0.5)), qubits=[np.int64(1)])
+
+    expected = await _aer_record(monkeypatch, plain)
+    record = await _aer_record(monkeypatch, numpy_typed)
+
+    json.dumps(record)
+    assert record["noise_model"] == expected["noise_model"]
+    assert record["inputs_sha256"] == expected["inputs_sha256"]

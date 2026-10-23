@@ -132,3 +132,127 @@ def test_removed_output_rejected_and_graph_context_restored():
     with pytest.raises(ValueError, match="different graph"):
         invalid()
     assert get_active_graph() is previous
+
+
+# ---------------------------------------------------------------------------
+# Result decoding through a real Temporal worker (time-skipping environment)
+# ---------------------------------------------------------------------------
+
+
+@task
+def produce_numpy_scalar():
+    import numpy as np
+
+    return np.int64(3)
+
+
+@task
+def produce_nested_numpy():
+    import numpy as np
+
+    return {
+        "mean": np.float64(0.5),
+        "stats": {"n": np.int64(4), "ok": np.bool_(True), "seq": [np.int32(1), 2]},
+        "label": "ok",
+    }
+
+
+@task
+def produce_dataclass():
+    from dataclasses import dataclass
+
+    @dataclass
+    class Summary:
+        name: str
+        shots: int
+
+    return Summary("bell", 100)
+
+
+@workflow
+def numpy_scalar_workflow():
+    return produce_numpy_scalar()
+
+
+@workflow
+def nested_numpy_workflow():
+    return produce_nested_numpy()
+
+
+@workflow
+def dataclass_workflow():
+    return produce_dataclass()
+
+
+@pytest.mark.asyncio
+async def test_run_returns_decoded_task_outputs():
+    """run() and run_with_ids() hand back Python values, never a cloudpickle envelope."""
+    import dataclasses
+
+    from temporalio.testing import WorkflowEnvironment
+    from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+
+    from marqov.workflows.activity import execute_task, prepare_node_inputs
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="marqov-workflows",
+            workflows=[JobWorkflow],
+            activities=[execute_task, prepare_node_inputs],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            scalar = await numpy_scalar_workflow().run(env.client)
+            nested = await nested_numpy_workflow().run(env.client)
+            record = await dataclass_workflow().run(env.client)
+            enriched, _, _ = await dataclass_workflow().run_with_ids(env.client)
+
+    assert scalar == 3 and type(scalar) is int
+
+    assert nested == {
+        "mean": 0.5,
+        "stats": {"n": 4, "ok": True, "seq": [1, 2]},
+        "label": "ok",
+    }
+    assert type(nested["mean"]) is float
+    assert type(nested["stats"]["n"]) is int
+    assert type(nested["stats"]["ok"]) is bool
+    assert type(nested["stats"]["seq"][0]) is int
+
+    assert dataclasses.is_dataclass(record)
+    assert (record.name, record.shots) == ("bell", 100)
+
+    assert "_workflow_metadata" in enriched
+    assert dataclasses.is_dataclass(enriched["result"])
+    assert enriched["result"].shots == 100
+
+
+@task
+def produce_int_key_dict():
+    return {0: 0.3, 1: 0.7}
+
+
+@workflow
+def int_key_dict_workflow():
+    return produce_int_key_dict()
+
+
+@pytest.mark.asyncio
+async def test_run_returns_non_str_key_dict_with_its_keys():
+    from temporalio.testing import WorkflowEnvironment
+    from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+
+    from marqov.workflows.activity import execute_task, prepare_node_inputs
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="marqov-workflows",
+            workflows=[JobWorkflow],
+            activities=[execute_task, prepare_node_inputs],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            result = await int_key_dict_workflow().run(env.client)
+
+    assert result == {0: 0.3, 1: 0.7}
+    assert all(type(k) is int for k in result)

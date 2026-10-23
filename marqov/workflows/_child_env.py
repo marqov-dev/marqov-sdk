@@ -6,13 +6,20 @@ time.  If unset (SDK used standalone, tests), a documented minimal-safe
 fallback is used — a small, secret-free set of variables only.
 
 The only way a credential enters the child env is through ``provider_env``.
+
+Each task gets its own scratch directory (``new_task_workdir``), inside a
+private per-worker parent, which ``execute_task`` removes once the task has
+finished unless ``MARQOV_KEEP_TASK_WORKDIR`` is set. Tasks share the worker's
+uid, so these directories are not an isolation boundary between tasks.
 """
 
 from __future__ import annotations
 
+import atexit
 import logging
 import os
 import tempfile
+import threading
 from pathlib import Path
 
 _log = logging.getLogger("marqov.workflows")
@@ -34,6 +41,14 @@ _MINIMAL_SAFE_DEFAULT: tuple[str, ...] = (
 _ALLOWLIST_ENV_VAR = "MARQOV_SCRUB_ALLOWLIST"
 
 _TMP_ROOT = Path(tempfile.gettempdir())
+
+# Debug escape hatch: when truthy, execute_task keeps each task's workdir.
+_KEEP_WORKDIR_ENV_VAR = "MARQOV_KEEP_TASK_WORKDIR"
+
+# Per-process parent directory for task workdirs (see _worker_parent).
+_worker_parent_lock = threading.Lock()
+_worker_parent_dir: Path | None = None
+_worker_parent_pid: int | None = None
 
 
 def _read_allowlist() -> tuple[str, ...]:
@@ -94,13 +109,62 @@ def build_child_env(
     return env
 
 
-def new_task_workdir(node_id: str) -> Path:
-    """Create an isolated per-task scratch directory.
+def _remove_worker_parent_if_empty(parent: Path) -> None:
+    """atexit hook: drop this process's worker parent once it holds nothing."""
+    try:
+        parent.rmdir()
+    except OSError:
+        pass
 
-    The directory name is prefixed ``marqov_task_`` so a host runner's
-    stale-scratch sweep can clean it up.
+
+def _worker_parent() -> Path:
+    """Return this process's private parent for task workdirs, creating it lazily.
+
+    One parent per worker process, made by ``tempfile.mkdtemp`` (mode ``0700``
+    on POSIX) and prefixed ``marqov_worker_``. A forked process, or a parent
+    removed from under us, gets a fresh one.
+    """
+    global _worker_parent_dir, _worker_parent_pid
+    with _worker_parent_lock:
+        parent = _worker_parent_dir
+        if parent is None or _worker_parent_pid != os.getpid() or not parent.is_dir():
+            parent = Path(tempfile.mkdtemp(prefix="marqov_worker_", dir=_TMP_ROOT))
+            _worker_parent_dir = parent
+            _worker_parent_pid = os.getpid()
+            atexit.register(_remove_worker_parent_if_empty, parent)
+        return parent
+
+
+def new_task_workdir(node_id: str) -> Path:
+    """Create a per-task scratch directory.
+
+    The directory is created inside a per-worker-process parent directory
+    (``marqov_worker_*``, mode ``0700``) rather than directly in the system
+    temp root, so a task's workdir no longer sits beside the workdirs of every
+    other process sharing that root. The child is told only its own workdir
+    (``MARQOV_TASK_WORKDIR``), never the parent path.
+
+    This is hardening, not an isolation boundary: task children run as the
+    same uid as the worker, so filesystem permissions do not separate tasks
+    on the same worker, and a task that derives the parent path from its own
+    workdir can still list the workdirs of tasks running concurrently in the
+    same worker process.
+
+    ``execute_task`` removes the directory once the task has finished. The
+    ``marqov_task_`` prefix remains so a stale-scratch sweep can recognise
+    anything a crashed worker left behind.
     """
     # Sanitise node_id for use in a path prefix (keep alphanumeric + dash).
     safe = "".join(c if c.isalnum() or c == "-" else "_" for c in node_id)[:32]
-    wd = Path(tempfile.mkdtemp(prefix=f"marqov_task_{safe}_", dir=_TMP_ROOT))
+    wd = Path(tempfile.mkdtemp(prefix=f"marqov_task_{safe}_", dir=_worker_parent()))
     return wd
+
+
+def keep_task_workdir_requested() -> bool:
+    """Whether ``MARQOV_KEEP_TASK_WORKDIR`` asks to keep task workdirs (debug aid).
+
+    Read per call. Truthy values are ``1``, ``true``, ``yes`` and ``on``
+    (case-insensitive); unset or anything else means remove.
+    """
+    raw = os.environ.get(_KEEP_WORKDIR_ENV_VAR, "")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}

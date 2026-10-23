@@ -94,3 +94,21 @@ class TestQiliSDKExecutorAnalog:
 
         assert result.backend == "qilisdk-qutip"
         assert result.counts == {"00": 100}
+
+
+@pytest.mark.asyncio
+async def test_analog_bit_order_qubit_zero_leftmost() -> None:
+    """Real QiliSim: ket(1, 0) puts qubit 0 in |1>, and it is the leftmost key char."""
+    from qilisdk.core.qtensor import ket
+
+    executor = QiliSDKExecutor()
+    schedule = Schedule.constant(
+        Hamiltonian({(PauliZ(0), PauliZ(1)): 1.0}), total_time=1.0, dt=0.1
+    )
+    for state, expected in ((ket(1, 0), "10"), (ket(0, 1), "01")):
+        result = await executor.execute_analog(schedule, shots=20, initial_state=state)
+        assert result.counts == {expected: 20}
+        assert (
+            result.metadata["reproducibility"]["bit_order"]
+            == "QiliSDK sampling order; qubit 0 leftmost"
+        )

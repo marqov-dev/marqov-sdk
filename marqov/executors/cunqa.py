@@ -64,13 +64,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import numbers
+import threading
 import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
+from marqov.executors._blocking import BlockingCalls
+from marqov.executors.base import (
+    BaseExecutor,
+    DeviceStatus,
+    ExecutionResult,
+    reject_unsupported_options,
+)
 
 if TYPE_CHECKING:
     from marqov.circuits import Circuit
@@ -179,10 +188,14 @@ class CUNQAExecutorConfig:
             have anything to enforce. Default is a conservative guess for a
             handful of qubits, not CESGA's 15GB default — right-size after
             observing real usage on a live cluster.
-        startup_timeout_s: Max seconds to wait for all n_qpus vQPUs to
-            register after ``qraise`` before raising TimeoutError.
+        startup_timeout_s: One budget, in seconds, covering both the
+            ``qraise`` call and the wait for all n_qpus vQPUs to register
+            after it. TimeoutError is raised once it is spent. Must be a
+            finite real number > 0 (not bool); NumPy numeric types are
+            accepted and stored as float. ValueError otherwise.
         poll_interval_s: Seconds between readiness polls. Clamped so the
-            final poll never sleeps past startup_timeout_s.
+            final poll never sleeps past startup_timeout_s. Same rules as
+            startup_timeout_s: finite, > 0, not bool, stored as float.
         seed: Reserved for Phase 1 (deterministic seeding). NOT wired into
             ``run()`` yet — CUNQA's run() has no documented seed kwarg.
     """
@@ -198,6 +211,36 @@ class CUNQAExecutorConfig:
     poll_interval_s: float = 1.0
     seed: int = 0
 
+    def __post_init__(self) -> None:
+        _validate_n_qpus(self.n_qpus)
+        self.n_qpus = int(self.n_qpus)
+        self.startup_timeout_s = _validate_seconds("startup_timeout_s", self.startup_timeout_s)
+        self.poll_interval_s = _validate_seconds("poll_interval_s", self.poll_interval_s)
+
+
+def _validate_n_qpus(n_qpus: object) -> None:
+    # bool is an int subclass but never a valid vQPU count; NumPy integers are
+    # accepted, as for shots elsewhere in the SDK.
+    if isinstance(n_qpus, bool) or not isinstance(n_qpus, numbers.Integral):
+        raise ValueError(f"n_qpus must be an int, got {n_qpus!r}")
+    if n_qpus < 1:
+        raise ValueError(f"n_qpus must be >= 1, got {n_qpus}")
+
+
+def _validate_seconds(name: str, value: object) -> float:
+    # A zero poll interval busy-polls get_QPUs, and a non-positive or NaN
+    # timeout fails before qraise can return, so both must be finite and > 0.
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise ValueError(f"{name} must be a real number of seconds, got {value!r}")
+    try:
+        seconds = float(value)
+    except OverflowError:
+        # An int too large for a float (e.g. 10**400) is not a usable timeout.
+        raise ValueError(f"{name} must be finite and > 0, got {value!r}") from None
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError(f"{name} must be finite and > 0, got {value!r}")
+    return seconds
+
 
 class CUNQAExecutor(BaseExecutor):
     """Runs circuits distributed across CUNQA vQPUs on a Slurm cluster.
@@ -212,13 +255,21 @@ class CUNQAExecutor(BaseExecutor):
         self._client = client if client is not None else _CunqaModuleClient()
 
     async def execute(self, circuit: "Circuit", shots: int = 1000, **kwargs: Any) -> ExecutionResult:
+        reject_unsupported_options("CUNQAExecutor.execute()", kwargs)
         circuit = self._validate_circuit(circuit)
         cfg = self._config
 
+        # Re-checked here: the config is mutable after construction.
+        _validate_n_qpus(cfg.n_qpus)
+        _validate_seconds("startup_timeout_s", cfg.startup_timeout_s)
+        _validate_seconds("poll_interval_s", cfg.poll_interval_s)
+        if isinstance(shots, bool) or not isinstance(shots, numbers.Integral) or shots < 1:
+            raise ValueError(f"CUNQA shots must be a positive integer, got {shots!r}")
+        shots = int(shots)
         if shots % cfg.n_qpus != 0:
             raise ValueError(
                 f"shots ({shots}) must be evenly divisible by n_qpus ({cfg.n_qpus}) "
-                f"for Phase 0's shot-parallel split — remainder handling is not yet built"
+                f"for Phase 0's shot-parallel split (remainder handling is not yet built)"
             )
         shots_per_qpu = shots // cfg.n_qpus
 
@@ -236,45 +287,22 @@ class CUNQAExecutor(BaseExecutor):
         # kwarg makes this available regardless of whether qraise itself
         # completes in time.
         family = f"marqov-{uuid.uuid4().hex[:12]}"
+        # One budget for qraise plus vQPU registration, not one each.
+        deadline = time.monotonic() + cfg.startup_timeout_s
         start = time.monotonic()
-        try:
+        # A private pool, so a qraise thread abandoned on timeout does not
+        # gate asyncio.run()'s shutdown of the loop's default executor.
+        # Interpreter exit may still join it (see BlockingCalls).
+        with BlockingCalls() as calls:
             try:
-                await asyncio.wait_for(
-                    asyncio.to_thread(
-                        self._client.qraise,
-                        cfg.n_qpus,
-                        cfg.walltime,
-                        simulator=cfg.simulator,
-                        co_located=cfg.co_located,
-                        classical_comm=cfg.classical_comm,
-                        quantum_comm=cfg.quantum_comm,
-                        mem_per_qpu=cfg.mem_per_qpu_gb,
-                        family=family,
-                    ),
-                    timeout=cfg.startup_timeout_s,
-                )
-            except asyncio.TimeoutError as e:
-                # asyncio.wait_for abandoning the future does NOT stop the
-                # underlying thread — the real qraise() call may still be
-                # running in the background, polling squeue forever, if
-                # the Slurm job never reaches RUNNING. Best-effort cleanup
-                # via _teardown (below) at least issues qdrop for this
-                # family; the orphaned thread itself is a known, accepted
-                # residual gap (see _teardown's docstring for the same
-                # pattern applied to cancellation).
-                raise TimeoutError(
-                    f"qraise did not return within {cfg.startup_timeout_s}s "
-                    f"for family {family!r} — the underlying call may still "
-                    f"be running in the background"
-                ) from e
-
-            qpus = await self._wait_for_qpus_ready(family, cfg)
-            circuits = [qiskit_circuit.copy() for _ in qpus]
-            jobs = await asyncio.to_thread(self._client.run, circuits, qpus, shots=shots_per_qpu)
-            results = await asyncio.to_thread(self._client.gather, jobs)
-        finally:
-            await self._teardown(family)
-        elapsed_ms = (time.monotonic() - start) * 1000
+                await self._raise_family(calls, family, cfg, deadline)
+                qpus = await self._wait_for_qpus_ready(calls, family, cfg, deadline)
+                circuits = [qiskit_circuit.copy() for _ in qpus]
+                jobs = await calls.call(self._client.run, circuits, qpus, shots=shots_per_qpu)
+                results = await calls.call(self._client.gather, jobs)
+                elapsed_ms = (time.monotonic() - start) * 1000
+            finally:
+                await self._teardown(calls, family)
 
         merged_counts: Counter[str] = Counter()
         per_qpu_counts: list[dict[str, int]] = []
@@ -304,7 +332,72 @@ class CUNQAExecutor(BaseExecutor):
             },
         )
 
-    async def _teardown(self, family: str) -> None:
+    async def _raise_family(
+        self,
+        calls: BlockingCalls,
+        family: str,
+        cfg: CUNQAExecutorConfig,
+        deadline: float,
+    ) -> None:
+        """Run ``qraise`` within what is left of the startup budget.
+
+        ``asyncio.wait`` is used instead of ``asyncio.wait_for`` so that our
+        own deadline expiring is told apart from a ``TimeoutError`` raised by
+        qraise itself (on Python 3.11+ ``asyncio.TimeoutError`` is the builtin
+        ``TimeoutError``); the latter propagates with its own message.
+
+        Abandoning the call (deadline or cancellation) does NOT stop the
+        underlying thread: the real qraise() may still be running, polling
+        squeue. The qdrop that ``_teardown`` issues next would then be a
+        no-op if the sbatch job has not been submitted yet, so the thread
+        issues a second qdrop itself once qraise eventually returns.
+        """
+        abandoned = threading.Event()
+
+        def raise_then_drop_if_abandoned() -> None:
+            try:
+                self._client.qraise(
+                    cfg.n_qpus,
+                    cfg.walltime,
+                    simulator=cfg.simulator,
+                    co_located=cfg.co_located,
+                    classical_comm=cfg.classical_comm,
+                    quantum_comm=cfg.quantum_comm,
+                    mem_per_qpu=cfg.mem_per_qpu_gb,
+                    family=family,
+                )
+            finally:
+                if abandoned.is_set():
+                    logger.warning(
+                        "qraise for family %s finished after it was abandoned; issuing qdrop again",
+                        family,
+                    )
+                    try:
+                        self._client.qdrop(family)
+                    except Exception:
+                        logger.exception(
+                            "late qdrop failed for family %s; allocation may be stranded",
+                            family,
+                        )
+
+        task = asyncio.ensure_future(calls.call(raise_then_drop_if_abandoned))
+        try:
+            done, _ = await asyncio.wait({task}, timeout=max(0.0, deadline - time.monotonic()))
+        except asyncio.CancelledError:
+            abandoned.set()
+            task.cancel()
+            raise
+        if not done:
+            abandoned.set()
+            task.cancel()
+            raise TimeoutError(
+                f"qraise did not return within {cfg.startup_timeout_s}s "
+                f"for family {family!r}; the underlying call may still "
+                f"be running in the background"
+            )
+        task.result()
+
+    async def _teardown(self, calls: BlockingCalls, family: str) -> None:
         # Teardown must happen on the failure AND cancellation path.
         #
         # In plain asyncio a single cancel() delivers CancelledError once;
@@ -331,7 +424,7 @@ class CUNQAExecutor(BaseExecutor):
         # an Exception — a bare `except Exception` does NOT catch it,
         # which is why it needs its own clause, separate from the generic
         # log-and-swallow handler below.
-        drop = asyncio.ensure_future(asyncio.to_thread(self._client.qdrop, family))
+        drop = asyncio.ensure_future(calls.call(self._client.qdrop, family))
         try:
             await asyncio.shield(drop)
         except asyncio.CancelledError:
@@ -347,15 +440,25 @@ class CUNQAExecutor(BaseExecutor):
                 "qdrop failed for family %s; allocation may be stranded", family
             )
 
-    async def _wait_for_qpus_ready(self, family: str, cfg: CUNQAExecutorConfig) -> list[Any]:
-        deadline = time.monotonic() + cfg.startup_timeout_s
-        qpus: list[Any] = []
-        while time.monotonic() < deadline:
-            qpus = await asyncio.to_thread(self._client.get_QPUs, cfg.co_located, family)
+    async def _wait_for_qpus_ready(
+        self,
+        calls: BlockingCalls,
+        family: str,
+        cfg: CUNQAExecutorConfig,
+        deadline: float,
+    ) -> list[Any]:
+        # Polls at least once: qraise returning inside the budget may leave
+        # none of it for registration, and the vQPUs may already be up.
+        while True:
+            qpus: list[Any] = await calls.call(self._client.get_QPUs, cfg.co_located, family)
             if len(qpus) >= cfg.n_qpus:
-                return qpus
+                # Use exactly the requested vQPUs: one circuit per returned
+                # vQPU at shots // n_qpus each, so extras would add shots.
+                return qpus[: cfg.n_qpus]
             remaining = deadline - time.monotonic()
-            await asyncio.sleep(min(cfg.poll_interval_s, max(0.0, remaining)))
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(cfg.poll_interval_s, remaining))
         raise TimeoutError(
             f"{len(qpus)}/{cfg.n_qpus} vQPUs registered within {cfg.startup_timeout_s}s "
             f"for family {family!r}"

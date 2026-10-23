@@ -1,5 +1,7 @@
 """Tests for marqov.executors module."""
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -111,6 +113,97 @@ class TestLocalExecutor:
 
         assert "simulator" in result.metadata
         assert result.metadata["simulator"] == "quantumflow"
+
+    @pytest.mark.asyncio
+    async def test_execute_records_seed_for_replay(self) -> None:
+        """The reproducibility record carries the seed, and replaying it reproduces counts."""
+        result = await LocalExecutor(LocalExecutorConfig(seed=123)).execute(bell_state(), shots=100)
+
+        record = result.metadata["reproducibility"]
+        assert record["record_version"] == 1
+        assert record["seed"] == 123
+        assert record["shots"] == 100 == sum(result.counts.values())
+        assert record["bit_order"] == "qubit_0_first"
+        assert set(record["packages"]) == {"marqov-quantumflow", "numpy"}
+        expected = hashlib.sha256(
+            json.dumps(result.counts, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        assert record["counts_sha256"] == expected
+
+        replay = await LocalExecutor(LocalExecutorConfig(seed=record["seed"])).execute(
+            bell_state(), shots=100
+        )
+        assert replay.counts == result.counts
+
+    @pytest.mark.asyncio
+    async def test_execute_records_none_seed_when_unseeded(self) -> None:
+        """An unseeded executor records seed None rather than omitting it."""
+        result = await LocalExecutor().execute(Circuit().x(0), shots=10)
+
+        assert result.metadata["reproducibility"]["seed"] is None
+        assert result.metadata["simulator"] == "quantumflow"
+
+    @pytest.mark.asyncio
+    async def test_package_versions_looked_up_once_per_process(self) -> None:
+        """Package versions are read from distribution metadata once, not per execute."""
+        from importlib.metadata import version as real_version
+
+        import marqov.executors.local as local_module
+
+        calls: list[str] = []
+
+        def counting_version(name: str) -> str:
+            calls.append(name)
+            return real_version(name)
+
+        local_module._package_versions.cache_clear()
+        try:
+            with patch("marqov.executors.local.version", counting_version):
+                executor = LocalExecutor(LocalExecutorConfig(seed=7))
+                for _ in range(3):
+                    await executor.execute(bell_state(), shots=10)
+        finally:
+            local_module._package_versions.cache_clear()
+
+        assert sorted(calls) == ["marqov-quantumflow", "numpy"]
+
+    @pytest.mark.asyncio
+    async def test_missing_package_metadata_records_none(self) -> None:
+        """Absent distribution metadata records None instead of failing execute."""
+        from importlib.metadata import PackageNotFoundError
+
+        import marqov.executors.local as local_module
+
+        def missing_version(name: str) -> str:
+            raise PackageNotFoundError(name)
+
+        local_module._package_versions.cache_clear()
+        try:
+            with patch("marqov.executors.local.version", missing_version):
+                result = await LocalExecutor(LocalExecutorConfig(seed=7)).execute(
+                    bell_state(), shots=10
+                )
+        finally:
+            local_module._package_versions.cache_clear()
+
+        assert sum(result.counts.values()) == 10
+        assert result.metadata["reproducibility"]["packages"] == {
+            "marqov-quantumflow": None,
+            "numpy": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_package_versions_dict_is_fresh_per_result(self) -> None:
+        """Each result gets its own packages dict, so mutating one cannot affect another."""
+        executor = LocalExecutor()
+        first = await executor.execute(bell_state(), shots=10)
+        second = await executor.execute(bell_state(), shots=10)
+
+        first_packages = first.metadata["reproducibility"]["packages"]
+        second_packages = second.metadata["reproducibility"]["packages"]
+        assert first_packages is not second_packages
+        first_packages["numpy"] = "mutated"
+        assert second_packages["numpy"] != "mutated"
 
     @pytest.mark.asyncio
     async def test_execute_timing(self) -> None:
@@ -865,7 +958,7 @@ class TestAzureExecutorGetStatus:
             workspace_name="ws", location="eastus", target="ionq.simulator",
         )
         executor = AzureQuantumExecutor(config)
-        with patch.object(executor, 'get_device_status', new_callable=AsyncMock, return_value="Available"):
+        with patch.object(executor, '_read_device_status', new_callable=AsyncMock, return_value="Available"):
             status = await executor.get_status()
             assert status.status == "online"
             assert status.queue_depth is None
@@ -877,7 +970,7 @@ class TestAzureExecutorGetStatus:
             workspace_name="ws", location="eastus", target="ionq.simulator",
         )
         executor = AzureQuantumExecutor(config)
-        with patch.object(executor, 'get_device_status', new_callable=AsyncMock, return_value="Degraded"):
+        with patch.object(executor, '_read_device_status', new_callable=AsyncMock, return_value="Degraded"):
             status = await executor.get_status()
             assert status.status == "maintenance"
 
@@ -888,7 +981,7 @@ class TestAzureExecutorGetStatus:
             workspace_name="ws", location="eastus", target="ionq.simulator",
         )
         executor = AzureQuantumExecutor(config)
-        with patch.object(executor, 'get_device_status', new_callable=AsyncMock, return_value="Unavailable"):
+        with patch.object(executor, '_read_device_status', new_callable=AsyncMock, return_value="Unavailable"):
             status = await executor.get_status()
             assert status.status == "offline"
 
@@ -899,7 +992,7 @@ class TestAzureExecutorGetStatus:
             workspace_name="ws", location="eastus", target="ionq.simulator",
         )
         executor = AzureQuantumExecutor(config)
-        with patch.object(executor, 'get_device_status', new_callable=AsyncMock, side_effect=Exception("API error")):
+        with patch.object(executor, '_read_device_status', new_callable=AsyncMock, side_effect=Exception("API error")):
             status = await executor.get_status()
             assert status.status == "maintenance"
             assert status.queue_depth is None
@@ -995,13 +1088,21 @@ class TestExecutorFactory:
             f"duplicate provider(s) in get_supported_providers(): {providers}")
 
     def test_supported_providers_matches_the_registered_executors(self) -> None:
-        """The list must be exactly the providers create_executor() dispatches to — so a new
-        executor added without updating the list (or vice versa) trips this."""
-        assert set(ExecutorFactory.get_supported_providers()) == {
-            "Local", "AWS Braket", "IBM Quantum", "Quantinuum",
-            "Azure Quantum", "IonQ Direct", "Rigetti QCS", "Quantum Brilliance",
-            "CUDA-Q", "Qilimanjaro", "PennyLane Lightning",
-        }
+        """The list must be exactly the providers create_executor() dispatches to, so a new
+        executor added without updating the list (or vice versa) trips this. The expected
+        set is read from the factory's own ``provider == "<name>"`` branches."""
+        import inspect
+        import re
+
+        from marqov.executors import factory
+
+        dispatched = set(re.findall(r'provider == "([^"]+)"', inspect.getsource(factory)))
+        assert dispatched, "no provider dispatch branches found; update this test's pattern"
+        assert set(ExecutorFactory.get_supported_providers()) == dispatched
+
+    def test_alice_bob_is_a_supported_provider(self) -> None:
+        """Alice & Bob is dispatched by the factory, so the pre-check must accept it."""
+        assert ExecutorFactory.is_provider_supported("Alice & Bob")
 
     def test_unsupported_provider_error_lists_all_supported_providers(self) -> None:
         """Regression (#85): the error message is built from get_supported_providers() at
@@ -1039,3 +1140,165 @@ class TestProviderListDocSync:
 
         for provider in ExecutorFactory.get_supported_providers():
             assert provider in table, f"{provider!r} missing from README Supported Backends table"
+
+    def test_every_readme_backend_row_is_a_supported_provider(self) -> None:
+        """Reverse direction (marqov-sdk#139): a README row with no provider behind it must fail.
+
+        Matches on a provider name appearing in the row's first cell, because the
+        status cells carry install caveats and the first cells carry parentheticals.
+        """
+        readme_path = Path(__file__).resolve().parent.parent / "README.md"
+        readme = readme_path.read_text()
+
+        start = readme.index("## Supported Backends")
+        end = readme.index("\n---", start)
+        rows = [
+            line for line in readme[start:end].splitlines()
+            if line.startswith("|") and not line.startswith("|---") and not line.startswith("| Backend ")
+        ]
+        assert rows, "no rows parsed from the README Supported Backends table"
+
+        # Row labels that differ from the registry's provider key.
+        aliases = {
+            "Local (QuantumFlow simulator)": "Local",
+            "CESGA CUNQA": "CUNQA",
+        }
+        providers = ExecutorFactory.get_supported_providers()
+        for row in rows:
+            first_cell = row.split("|")[1].strip()
+            matched = [
+                p for p in providers
+                if p in first_cell or any(k in first_cell and v == p for k, v in aliases.items())
+            ]
+            assert matched, f"README row {first_cell!r} has no provider in get_supported_providers()"
+
+    def test_factory_module_docstring_mentions_every_provider(self) -> None:
+        """marqov-sdk#139: the factory module docstring enumerates every returned provider."""
+        import marqov.executors.factory as factory_module
+
+        doc = factory_module.__doc__ or ""
+        for provider in ExecutorFactory.get_supported_providers():
+            assert provider in doc, f"{provider!r} missing from factory.py module docstring"
+
+    def test_get_supported_providers_docstring_example_matches_return(self) -> None:
+        """marqov-sdk#139: the docstring example is compared to the real return value."""
+        import ast
+
+        doc = ExecutorFactory.get_supported_providers.__doc__ or ""
+        marker = ">>> ExecutorFactory.get_supported_providers()\n"
+        after = doc.split(marker, 1)[1]
+        example = ast.literal_eval(after.strip().splitlines()[0].strip())
+        assert example == ExecutorFactory.get_supported_providers()
+
+
+class TestCUNQAFactoryDispatch:
+    """marqov-sdk#139: CUNQA is reachable through ExecutorFactory.create_executor."""
+
+    def test_create_executor_carries_config_values_and_defaults(self) -> None:
+        from marqov.executors import CUNQAExecutor
+
+        with patch("marqov.executors.cunqa._CunqaModuleClient", MagicMock()):
+            executor = ExecutorFactory.create_executor(
+                "cunqa",
+                {
+                    "provider": "CUNQA",
+                    "n_qpus": 8,
+                    "walltime": "00:30:00",
+                    "co_located": False,
+                    "mem_per_qpu_gb": 2,
+                },
+            )
+        assert isinstance(executor, CUNQAExecutor)
+        cfg = executor._config
+        assert (cfg.n_qpus, cfg.walltime, cfg.co_located, cfg.mem_per_qpu_gb) == (
+            8, "00:30:00", False, 2,
+        )
+        # Omitted keys fall back to the dataclass defaults.
+        assert (cfg.simulator, cfg.classical_comm, cfg.quantum_comm) == ("Aer", False, False)
+        assert (cfg.startup_timeout_s, cfg.poll_interval_s) == (60.0, 1.0)
+
+    def test_provider_is_listed(self) -> None:
+        assert "CUNQA" in ExecutorFactory.get_supported_providers()
+
+    def test_importing_factory_does_not_import_cunqa(self) -> None:
+        """Method: fresh subprocess; assert the cunqa package is absent from sys.modules."""
+        import subprocess
+        import sys
+
+        code = (
+            "import sys; import marqov.executors.factory; "
+            "sys.exit(1 if 'cunqa' in sys.modules else 0)"
+        )
+        assert subprocess.run([sys.executable, "-c", code]).returncode == 0
+
+
+class TestCUNQAFactoryConfigValidation:
+    """CUNQA config values are type-checked in the factory, naming the bad key."""
+
+    @pytest.mark.parametrize(
+        ("key", "value", "received"),
+        [
+            ("n_qpus", "4", "str"),
+            ("n_qpus", True, "bool"),
+            ("n_qpus", 4.0, "float"),
+            ("mem_per_qpu_gb", "4", "str"),
+            ("startup_timeout_s", "60", "str"),
+            ("poll_interval_s", None, "NoneType"),
+            ("poll_interval_s", True, "bool"),
+            ("co_located", "true", "str"),
+            ("classical_comm", 1, "int"),
+            ("simulator", 3, "int"),
+            ("walltime", 600, "int"),
+        ],
+    )
+    def test_bad_value_raises_naming_key_and_type(self, key: str, value: Any, received: str) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            ExecutorFactory.create_executor("cunqa", {"provider": "CUNQA", key: value})
+        message = str(exc_info.value)
+        assert repr(key) in message
+        assert received in message
+
+    @pytest.mark.parametrize("dtype", ["int64", "int32"])
+    def test_numpy_integer_n_qpus_accepted_like_config(self, dtype: str) -> None:
+        import numpy as np
+
+        value = getattr(np, dtype)(4)
+        with patch("marqov.executors.cunqa._CunqaModuleClient", MagicMock()):
+            executor = ExecutorFactory.create_executor("cunqa", {"provider": "CUNQA", "n_qpus": value})
+        assert executor._config.n_qpus == 4 and type(executor._config.n_qpus) is int
+
+    @pytest.mark.parametrize("value", [0, -2])
+    def test_non_positive_n_qpus_rejected_naming_key(self, value: int) -> None:
+        with pytest.raises(ValueError, match=rf"'n_qpus'.*n_qpus must be >= 1, got {value}"):
+            ExecutorFactory.create_executor("cunqa", {"provider": "CUNQA", "n_qpus": value})
+
+    @pytest.mark.parametrize("key", ["startup_timeout_s", "poll_interval_s"])
+    @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
+    def test_non_positive_or_non_finite_timing_rejected(self, key: str, value: float) -> None:
+        with pytest.raises(ValueError, match=rf"{key} must be"):
+            ExecutorFactory.create_executor("cunqa", {"provider": "CUNQA", key: value})
+
+    @pytest.mark.parametrize("key", ["startup_timeout_s", "poll_interval_s"])
+    def test_numpy_float32_timing_accepted_like_config(self, key: str) -> None:
+        import numpy as np
+
+        with patch("marqov.executors.cunqa._CunqaModuleClient", MagicMock()):
+            executor = ExecutorFactory.create_executor(
+                "cunqa", {"provider": "CUNQA", key: np.float32(2.5)}
+            )
+        value = getattr(executor._config, key)
+        assert value == 2.5 and type(value) is float
+
+    def test_int_accepted_for_float_fields(self) -> None:
+        with patch("marqov.executors.cunqa._CunqaModuleClient", MagicMock()):
+            executor = ExecutorFactory.create_executor(
+                "cunqa", {"provider": "CUNQA", "startup_timeout_s": 30, "poll_interval_s": 2}
+            )
+        assert executor._config.startup_timeout_s == 30
+        assert executor._config.poll_interval_s == 2
+
+    def test_seed_key_is_rejected_because_it_is_not_applied(self) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            ExecutorFactory.create_executor("cunqa", {"provider": "CUNQA", "seed": 7})
+        assert "'seed'" in str(exc_info.value)
+        assert "omit" in str(exc_info.value)

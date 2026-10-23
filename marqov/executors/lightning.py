@@ -471,6 +471,11 @@ class LightningExecutor(BaseExecutor):
 
         name = self.config.device
         dtype = np.complex128 if self.config.precision == "double" else np.complex64
+        if name not in _SEEDED_DEVICES | {"lightning.tensor"}:
+            raise NotImplementedError(
+                f"{name} is outside the supported Lightning devices "
+                f"{', '.join(sorted(_SEEDED_DEVICES | {'lightning.tensor'}))}. Not running it."
+            )
         try:
             if name == "lightning.tensor":
                 if seed is not None:
@@ -482,11 +487,6 @@ class LightningExecutor(BaseExecutor):
             raise LightningDeviceUnavailableError(
                 f"{name} is unavailable in this environment: {type(exc).__name__}: {exc}"
             ) from exc
-        if name not in _SEEDED_DEVICES | {"lightning.tensor"}:
-            raise NotImplementedError(
-                f"{name} is outside the supported Lightning devices "
-                f"{', '.join(sorted(_SEEDED_DEVICES | {'lightning.tensor'}))}. Not running it."
-            )
         if getattr(dev, "name", None) != name:
             raise RuntimeError(
                 f"Requested {name} but PennyLane constructed {getattr(dev, 'name', dev)!r}; "

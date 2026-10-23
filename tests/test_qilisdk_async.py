@@ -152,3 +152,56 @@ async def test_cancellation_stops_waiting_but_not_simulator(local_executor, mode
         if not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["digital", "analog"])
+@pytest.mark.parametrize(
+    "bad",
+    [{"0": 6}, {"0": 8}, {"0": 3, "2": 4}, {"0": 4, "1": -1, "": 4}, {"0": 3.0, "1": 4}],
+)
+async def test_miscounted_or_malformed_samples_raise(local_executor, mode, bad):
+    local_executor.samples.clear()
+    local_executor.samples.update(bad)
+    with pytest.raises(RuntimeError, match="invalid counts or shot accounting"):
+        await run_program(local_executor, mode)
+
+
+@pytest.mark.asyncio
+async def test_digital_key_width_must_match_circuit(local_executor):
+    local_executor.samples.clear()
+    local_executor.samples.update({"00": 7})
+    with pytest.raises(RuntimeError, match="invalid counts or shot accounting"):
+        await run_program(local_executor, "digital")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["digital", "analog"])
+async def test_provenance_shots_is_observed_total_and_bit_order(local_executor, mode):
+    local_executor.samples.clear()
+    local_executor.samples.update({"0": 3, "1": 4})
+    result = await run_program(local_executor, mode)
+    record = result.metadata["reproducibility"]
+    assert record["shots"] == sum(result.counts.values()) == result.shots == 7
+    assert record["bit_order"] == "QiliSDK sampling order; qubit 0 leftmost"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["digital", "analog"])
+async def test_numpy_integer_counts_are_accepted_as_plain_ints(local_executor, mode):
+    import numpy as np
+
+    local_executor.samples.clear()
+    local_executor.samples.update({"0": np.int64(3), "1": np.int64(4)})
+    result = await run_program(local_executor, mode)
+    assert result.counts == {"0": 3, "1": 4}
+    assert all(type(v) is int for v in result.counts.values())
+    assert result.metadata["reproducibility"]["shots"] == 7
+
+
+@pytest.mark.asyncio
+async def test_bool_counts_are_refused(local_executor):
+    local_executor.samples.clear()
+    local_executor.samples.update({"0": True, "1": 6})
+    with pytest.raises(RuntimeError, match="invalid counts or shot accounting"):
+        await run_program(local_executor, "digital")

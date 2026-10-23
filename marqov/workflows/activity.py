@@ -21,6 +21,7 @@ import asyncio
 import base64
 import json
 import os
+import shutil
 import signal
 import sys
 from collections import deque
@@ -30,7 +31,11 @@ from typing import Any
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from marqov.workflows._child_env import build_child_env, new_task_workdir
+from marqov.workflows._child_env import (
+    build_child_env,
+    keep_task_workdir_requested,
+    new_task_workdir,
+)
 
 # Heartbeat interval for execute_task. Temporal throttles forwarding to 80%
 # of heartbeat_timeout (48s for 60s timeout), so the send interval just needs
@@ -135,8 +140,10 @@ def _deserialize_value(value: Any) -> Any:
 
     Handles cloudpickle-encoded complex objects.
 
-    NOTE: This function is used only by prepare_node_inputs (proxy resolution)
-    and by tests.  execute_task MUST NOT call it — results are forwarded opaquely.
+    NOTE: This function is called client-side by WorkflowDispatch.run() and
+    run_with_ids() (the caller owns the pickled bytes) and by tests.
+    execute_task and prepare_node_inputs MUST NOT call it: results are
+    forwarded opaquely through the worker.
     """
     import cloudpickle
 
@@ -152,28 +159,57 @@ def _deserialize_value(value: Any) -> Any:
         return value
 
 
+def _unbox_numpy_scalar(value: Any) -> Any:
+    """Unbox NumPy bool/integer/float scalars without narrowing extended precision.
+
+    Mirrored in _task_child._unbox_numpy_scalar; keep the two in sync.
+    """
+    np = sys.modules.get("numpy")
+    if np is not None and isinstance(value, (np.bool_, np.integer, np.floating)):
+        scalar = value.item()
+        if type(scalar) in (bool, int, float):
+            return scalar
+    return value
+
+
+def _cloudpickle_envelope(value: Any) -> dict[str, Any]:
+    """Wrap a non-JSON-native value in the ``__cloudpickle__`` transport envelope.
+
+    Used for task results (``_serialize_value``; ``_task_child`` keeps its own
+    copy of the same shape) and for task arguments (``decorators._transport_arg``),
+    so both directions use one envelope shape.
+    """
+    import cloudpickle
+
+    return {
+        "__cloudpickle__": True,
+        "data": base64.b64encode(cloudpickle.dumps(value)).decode("utf-8"),
+    }
+
+
 def _serialize_value(value: Any) -> Any:
     """Serialize a value for JSON transport.
 
     Uses cloudpickle for complex objects, JSON-compatible types pass through.
-    """
-    import cloudpickle
+    NumPy bool/integer/float scalars are unboxed to Python bool/int/float.
+    A dict with any non-str key is pickled whole so it keeps its keys (JSON
+    would turn them into strings).
 
+    Mirrored in _task_child._serialize_value; keep the two in sync.
+    """
+    value = _unbox_numpy_scalar(value)
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     elif isinstance(value, (list, tuple)):
         return [_serialize_value(item) for item in value]
-    elif isinstance(value, dict):
+    elif isinstance(value, dict) and all(isinstance(k, str) for k in value):
         # Check for our special marker types
         if value.get("__cloudpickle__"):
             return value
         return {k: _serialize_value(v) for k, v in value.items()}
     else:
         # Complex object - use cloudpickle
-        return {
-            "__cloudpickle__": True,
-            "data": base64.b64encode(cloudpickle.dumps(value)).decode("utf-8"),
-        }
+        return _cloudpickle_envelope(value)
 
 
 def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
@@ -181,6 +217,9 @@ def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
 
     ``start_new_session=True`` makes pgid == pid, so grandchildren die with it
     instead of lingering (mirrors dwave_executor._kill_process_group).
+    Safe to call after the child has exited: a group with no members left
+    raises ProcessLookupError, and ``proc.kill()`` on a reaped child is a no-op
+    or raises ProcessLookupError, both of which are swallowed.
     """
     try:
         os.killpg(proc.pid, signal.SIGKILL)
@@ -208,6 +247,17 @@ async def execute_task(
     and validated here (shape plus node_id), because the child owns its
     workdir and must not be able to name a different node.
 
+    When the child exits, its whole process group is killed, so a process the
+    task body left running does not outlive the task. The task's workdir is
+    then removed (in a thread, off the event loop) once the output has been
+    read, whether the task succeeded, failed or was cancelled (a Temporal
+    timeout arrives as a cancellation, and a further cancellation during the
+    removal does not cut it short). Heartbeats continue until the removal has
+    finished, so a slow removal cannot trip the heartbeat timeout and retry a
+    task that has already completed. Setting ``MARQOV_KEEP_TASK_WORKDIR``
+    to ``1``, ``true``, ``yes`` or ``on`` keeps it and logs its path, as a
+    debugging aid.
+
     Args:
         node_id: Unique identifier for this node.
         func_ref: Base64-encoded cloudpickle of the function.
@@ -216,6 +266,9 @@ async def execute_task(
         provider_env: Optional provider credentials to inject into the child env
             (e.g. AWS keys for a Braket task).  Never inherited from the parent
             process env — only what is explicitly passed here enters the child.
+            ``JobWorkflow`` never passes it, so a task dispatched through
+            ``WorkflowDispatch`` runs with no provider credentials. A host
+            runner that invokes this activity itself must supply them.
 
     Returns:
         JSON-encoded result with node_id and opaque result blob.
@@ -226,6 +279,82 @@ async def execute_task(
             or whose ``node_id`` does not match this activity's ``node_id``.
     """
     workdir = new_task_workdir(node_id)
+    # One heartbeat loop spans the child run AND the workdir removal: a large
+    # workdir can take longer to remove than the heartbeat timeout, and a
+    # timeout there would retry a task that already finished.
+    heartbeat_task = asyncio.create_task(_heartbeat_loop(node_id))
+    try:
+        try:
+            return await _run_task_in_workdir(
+                workdir, node_id, func_ref, args_json, kwargs_json, provider_env
+            )
+        finally:
+            if keep_task_workdir_requested():
+                activity.logger.info("Keeping workdir for node %s: %s", node_id, workdir)
+            else:
+                await _remove_task_workdir(workdir)
+    finally:
+        heartbeat_task.cancel()
+        # asyncio.wait does not raise the loop's own outcome, so a cancellation
+        # of execute_task itself that lands here still propagates instead of
+        # being mistaken for the loop's.
+        await asyncio.wait({heartbeat_task})
+        if not heartbeat_task.cancelled():
+            # Already reported by _heartbeat_loop; retrieve it so it does not
+            # mask the activity's own outcome (result, child error, or
+            # cancellation) or log as never retrieved.
+            heartbeat_task.exception()
+
+
+async def _heartbeat_loop(node_id: str) -> None:
+    """Send heartbeats to Temporal until cancelled."""
+    try:
+        while True:
+            await asyncio.sleep(_HEARTBEAT_INTERVAL_S)
+            activity.heartbeat(f"executing {node_id}")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Heartbeating has stopped. Without this log the operator would see
+        # only a Temporal heartbeat timeout, never the actual cause.
+        activity.logger.exception("Heartbeat loop failed for node %s", node_id)
+        raise
+
+
+async def _remove_task_workdir(workdir: Path) -> None:
+    """Remove ``workdir`` off the event loop, finishing even if cancelled meanwhile.
+
+    The removal runs in a thread so a large workdir does not stall the event
+    loop, and ``execute_task`` keeps heartbeating until it has finished.
+    It is shielded, and a cancellation that arrives while it runs is held
+    back until the removal has finished, then re-raised.
+    """
+    removal = asyncio.ensure_future(
+        asyncio.to_thread(shutil.rmtree, workdir, ignore_errors=True)
+    )
+    cancelled = False
+    while not removal.done():
+        try:
+            await asyncio.shield(removal)
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
+
+
+async def _run_task_in_workdir(
+    workdir: Path,
+    node_id: str,
+    func_ref: str,
+    args_json: str,
+    kwargs_json: str,
+    provider_env: dict[str, str] | None,
+) -> str:
+    """Body of ``execute_task``: run the child in ``workdir`` and read its output.
+
+    Heartbeats are sent by ``execute_task``, which keeps them going until the
+    workdir has been removed.
+    """
     result_path = workdir / "result.json"
 
     # Write inputs for the child.  func_ref is base64-encoded; write the text
@@ -249,21 +378,6 @@ async def execute_task(
         start_new_session=True,
     )
 
-    async def _heartbeat_loop() -> None:
-        """Send heartbeats to Temporal until cancelled."""
-        try:
-            while True:
-                await asyncio.sleep(_HEARTBEAT_INTERVAL_S)
-                activity.heartbeat(f"executing {node_id}")
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            # Heartbeating has stopped. Without this log the operator would see
-            # only a Temporal heartbeat timeout, never the actual cause.
-            activity.logger.exception("Heartbeat loop failed for node %s", node_id)
-            raise
-
-    heartbeat_task = asyncio.create_task(_heartbeat_loop())
     child_task = asyncio.create_task(proc.wait())
 
     # Drain the child's stderr for the whole of its lifetime.  asyncio's
@@ -277,6 +391,10 @@ async def execute_task(
 
     try:
         await child_task
+        # Anything the task body left running in its process group (a
+        # grandchild) dies now, before the output is read and the workdir is
+        # removed, so it cannot rewrite either afterwards.
+        _kill_process_group(proc)
         if stderr_task is not None:
             # The child has exited; let the reader reach EOF so the tail is
             # complete before it is used in an error message.
@@ -294,15 +412,6 @@ async def execute_task(
         activity.logger.warning("Activity cancelled for node %s — child killed", node_id)
         raise
     finally:
-        heartbeat_task.cancel()
-        try:
-            await heartbeat_task
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            # Already reported by _heartbeat_loop; do not let it mask the
-            # activity's own outcome (result, child error, or cancellation).
-            pass
         if stderr_task is not None:
             stderr_task.cancel()
             try:

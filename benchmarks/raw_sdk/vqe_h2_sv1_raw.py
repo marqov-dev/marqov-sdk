@@ -3,7 +3,7 @@
 VQE H₂ benchmark using raw Braket SDK.
 
 Implements Variational Quantum Eigensolver for H₂ ground state energy.
-Uses 4-qubit circuit with UCCSD-inspired ansatz, COBYLA optimizer, 50 iterations.
+Uses a 4-qubit hardware-efficient ansatz (Ry layers with CNOTs), COBYLA optimizer, at most 20 iterations.
 """
 
 import os
@@ -54,8 +54,11 @@ H2_COEFFICIENTS = {
     'y0y1x2x3': -0.0453,
 }
 
-# Known ground state energy for H₂ at this geometry (for validation)
-H2_GROUND_STATE_ENERGY = -1.1372  # Hartree
+# Lowest eigenvalue of H2_COEFFICIENTS above (numpy eigvalsh: -1.851499).
+# This is an electronic energy. The literature value -1.1372 Ha is the total
+# energy, which adds the nuclear repulsion (about 0.714 Ha at this geometry)
+# that these coefficients do not include.
+H2_GROUND_STATE_ENERGY = -1.8515  # Hartree
 
 
 def create_ansatz(params: np.ndarray) -> Circuit:

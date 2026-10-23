@@ -60,14 +60,18 @@ def create_ansatz(theta: float) -> dict:
     """
     Create ansatz circuit specification for H₂ VQE.
 
-    Implements the Unitary Coupled Cluster (UCC) ansatz from O'Malley et al. 2016:
-        |ϕ(θ)⟩ = exp(-iθ X₀Y₁) |01⟩
+    Implements the Unitary Coupled Cluster (UCC) ansatz from O'Malley et al. 2016.
+    With Rz(θ) = exp(-iθZ/2), the gates below prepare
+        |ϕ(θ)⟩ = exp(-i(θ/2) Y₀X₁) |10⟩ = exp(+i(θ/2) X₀Y₁) |10⟩
+
+    Kets are written qubit 0 first, matching Braket bitstrings (bitstring[0]
+    is qubit 0), so |10⟩ is the Hartree-Fock reference with qubit 0 occupied.
 
     Circuit matches O'Malley Figure 1 (page 2):
-        1. X(q0) - prepare Hartree-Fock state |01⟩
-        2. Basis rotations: Ry(π/2, q1), Rx(-π/2, q0)
+        1. X(q0) - prepare Hartree-Fock state |10⟩
+        2. Basis rotations: Ry(π/2, q1) maps X₁ to Z₁, Rx(-π/2, q0) maps Y₀ to Z₀
         3. CNOT(q1 → q0) - entangle
-        4. Rz(θ, q0) - apply rotation
+        4. Rz(θ, q0) - with steps 3 and 5, applies exp(-i(θ/2) Z₀Z₁)
         5. CNOT(q1 → q0) - disentangle
         6. Inverse basis rotations: Ry(-π/2, q1), Rx(π/2, q0)
 
@@ -82,9 +86,9 @@ def create_ansatz(theta: float) -> dict:
         'qubits': 2,
         'theta': theta,
         'gates': [
-            ('x', 0),                       # Prepare |01⟩ HF reference
-            ('ry', 1, np.pi/2),            # Basis rotation Y→Z
-            ('rx', 0, -np.pi/2),           # Basis rotation X→Z
+            ('x', 0),                       # Prepare |10⟩ HF reference
+            ('ry', 1, np.pi/2),            # Basis rotation X→Z
+            ('rx', 0, -np.pi/2),           # Basis rotation Y→Z
             ('cnot', 1, 0),                # Entangle (control=q1, target=q0)
             ('rz', 0, theta),              # Apply rotation
             ('cnot', 1, 0),                # Disentangle
@@ -203,35 +207,46 @@ def compute_h2_energy(
 
 
 def run_vqe_optimization(
-    measure_pauli: Callable[[str, float], dict[str, int]],
+    measure_pauli: Callable[..., dict[str, int]],
     shots: int = DEFAULT_SHOTS,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
     initial_theta: float = 0.0,
     verbose: bool = True,
+    seed: int | None = None,
 ) -> dict[str, Any]:
     """
     Run VQE optimization to find H₂ ground state energy.
 
     Args:
         measure_pauli: Function that measures a Pauli string and returns counts.
-                      Signature: measure_pauli(pauli_string, theta) -> counts
+                      Signature: measure_pauli(pauli_string, theta) -> counts,
+                      or measure_pauli(pauli_string, theta, seed=...) -> counts
+                      when a seed is given
         shots: Number of shots per measurement
         max_iterations: Maximum optimizer iterations
         initial_theta: Initial variational parameter
         verbose: Print progress
+        seed: Optional run seed. When set, each measure_pauli call receives a
+              per-circuit seed derived deterministically from it, which the
+              callback can pass to a seedable executor. A callback for a
+              backend without seeding should accept and ignore it. The seed
+              is recorded in the returned dict either way.
 
     Returns:
         Dict with optimization results
     """
     iteration_data = []
     circuit_count = [0]
+    seed_rng = np.random.default_rng(seed) if seed is not None else None
 
     def objective(params):
         theta = params[0]
 
         def counted_measure(pauli, t):
             circuit_count[0] += 1
-            return measure_pauli(pauli, t)
+            if seed_rng is None:
+                return measure_pauli(pauli, t)
+            return measure_pauli(pauli, t, seed=int(seed_rng.integers(2**32)))
 
         energy, exp_vals = compute_h2_energy(theta, counted_measure, shots)
 
@@ -271,13 +286,37 @@ def run_vqe_optimization(
         'optimizer_message': result.message,
         'iteration_data': iteration_data,
         'hamiltonian': H2_HAMILTONIAN,
+        'seed': seed,
     }
+
+
+def build_braket_ansatz(theta: float) -> Any:
+    """
+    Build the create_ansatz UCC circuit as a Braket Circuit.
+
+    Args:
+        theta: Variational parameter
+
+    Returns:
+        braket.circuits.Circuit
+    """
+    from braket.circuits import Circuit  # type: ignore[import-untyped]
+
+    circuit = Circuit()
+    # Each gate tuple is (name, *qubits_and_angle), matching Braket's
+    # Circuit.<name>(target, angle) and Circuit.cnot(control, target)
+    for name, *args in create_ansatz(theta)['gates']:
+        getattr(circuit, name)(*args)
+    return circuit
 
 
 # Convenience function for building Braket circuits
 def build_braket_circuit(theta: float, pauli_string: str):
     """
     Build a Braket Circuit for measuring a Pauli expectation value.
+
+    Translates the gate lists from create_ansatz and create_measurement_circuit,
+    so the circuit the benchmarks run is the documented UCC ansatz.
 
     Args:
         theta: Variational parameter
@@ -286,22 +325,10 @@ def build_braket_circuit(theta: float, pauli_string: str):
     Returns:
         braket.circuits.Circuit
     """
-    from braket.circuits import Circuit
-
-    circuit = Circuit()
-
-    # Build ansatz
-    circuit.x(1)                    # HF reference |01⟩
-    circuit.ry(0, theta)            # Excitation
-    circuit.ry(1, -theta)
-    circuit.cnot(0, 1)
-
-    # Add basis rotations for measurement
-    for i, pauli in enumerate(pauli_string):
-        if pauli == 'x':
-            circuit.h(i)
-        elif pauli == 'y':
-            circuit.rx(i, -np.pi/2)
+    circuit = build_braket_ansatz(theta)
+    spec = create_measurement_circuit(create_ansatz(theta), pauli_string)
+    for name, *args in spec['basis_rotations']:
+        getattr(circuit, name)(*args)
 
     return circuit
 

@@ -45,9 +45,13 @@ explicit `disable_qubit_rewiring` value unchanged. Without that option the
 executor continues omitting it (provider default), while `MarqovDevice.run`
 continues forwarding False. With `preserve_qubit_labels=False`, ordinary logical
 conversion, ordinary verbatim validation and result return types remain
-unchanged. Non-Braket legacy backend kwargs handling is unchanged; physical
-intent can no longer be silently ignored there. Unrecognized kwargs remain the
-separate marqov-sdk#77 audit.
+unchanged.
+
+Both entry points accept only `verbatim` and `disable_qubit_rewiring` as extra
+options. Any other option raises `TypeError` naming it, before provider
+initialization or submission. `MarqovDevice.run` on the local, `marqov-sim`, IBM
+and Azure paths applies no extra options, so any option there, `verbatim=True`
+included, raises `TypeError` instead of being ignored (marqov-sdk#77).
 
 Preserved source/provider labels and submitted directives are not executed
 hardware mapping evidence. The result provenance introduced in marqov-sdk#206
@@ -58,7 +62,7 @@ qualification evidence. `MarqovDevice.run` still returns counts alone.
 ## Offline qualification seam
 
 Run `python -m pytest -q tests/test_braket_native.py` in the SDK environment with
-published marqov-quantumflow 1.0.1. Tests use real Braket circuits and fake
+published marqov-quantumflow 1.0.2 (the pinned version). Tests use real Braket circuits and fake
 provider tasks: replace `BraketExecutor._get_device` with an `AsyncMock` and
 `MarqovDevice._get_provider_device` with a fake provider, then inspect
 `device.run` arguments. No AWS/provider call is needed. Sparse [7,1] targets,

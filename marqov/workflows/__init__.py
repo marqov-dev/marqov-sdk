@@ -21,6 +21,17 @@ Example:
     >>> dispatch = vqe_step(0.5)
     >>> result = await dispatch.run(client)
 
+Provider credentials: every task body runs in a child process whose
+environment is built from an allowlist, so host secrets are not inherited.
+The only way a credential enters it is the ``provider_env`` argument of the
+``execute_task`` activity, and ``JobWorkflow`` never passes it, so a task
+dispatched through ``WorkflowDispatch`` (``run``, ``run_with_ids``,
+``start_with_ids``, ``dispatch``) runs with no provider credentials. A host
+runner that needs them must invoke ``execute_task`` itself.
+``@task(executor=...)`` is reserved: it is recorded on the graph and not
+consulted when dispatching, so it neither selects a backend nor supplies
+credentials. The task's display ``name`` is likewise graph-local.
+
 For native Temporal access, you can also use the underlying
 workflow and activity classes directly:
     >>> from marqov.workflows import JobWorkflow, create_worker

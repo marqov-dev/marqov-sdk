@@ -4,12 +4,20 @@ on:
   # Previously `push: branches: ["**"]` + `pull_request:` ran CI TWICE on every
   # PR commit (once per event) and also ran on every throwaway branch push.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     branches: [main]
   push:
     branches: [main]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   watch-ui:
     name: Watch terminal viewer
+    needs: ci-scope
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft != true) && needs.ci-scope.outputs.run_code == 'true' }}
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -24,7 +32,25 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo test --locked
       - run: cargo clippy --locked --all-targets -- -D warnings
+  ci-scope:
+    # Drafts allocate no runner. Marking ready emits ready_for_review below.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_code: ${{ steps.scope.outputs.run_code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: scope
+        name: Classify documentation-only changes
+        run: python3 .github/scripts/ci_scope.py
+
   test:
+    needs: ci-scope
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft != true) && needs.ci-scope.outputs.run_code == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,6 +77,8 @@ jobs:
   # skips test_real_cudaq_bell_state. This job installs [cudaq] on Linux so that
   # real CUDA-Q run actually executes (on the qpp-cpu target; no GPU required).
   test-cudaq:
+    needs: ci-scope
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft != true) && needs.ci-scope.outputs.run_code == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,6 +92,8 @@ jobs:
         run: pytest tests/test_cudaq_executor.py -q
 
   lint:
+    needs: ci-scope
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft != true) && needs.ci-scope.outputs.run_code == 'true' }}
     name: Lint (advisory)
     # Existing findings are visible without weakening required test gates.
     continue-on-error: true
@@ -84,9 +114,13 @@ jobs:
         run: mypy marqov
 
   python313-qualified:
+    needs: ci-scope
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft != true) && needs.ci-scope.outputs.run_code == 'true' }}
     uses: ./.github/workflows/python-compatibility.yml
 
   python313-unsupported:
+    needs: ci-scope
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft != true) && needs.ci-scope.outputs.run_code == 'true' }}
     name: Python 3.13 / ${{ matrix.profile }} (advisory)
     # These installs currently fail upstream. Retain each restriction visibly;
     # they must not prevent testing the independently qualified integrations.
@@ -120,23 +154,36 @@ jobs:
   # Single required status check — the ruleset requires only "CI Success", so the
   # required context stays stable if the job set ever changes.
   #
-  # INVARIANT: every blocking job must be listed in `needs:` here (test,
-  # test-cudaq and python313-qualified). Lint and python313-unsupported are
+  # INVARIANT: the scope planner and every blocking job must be listed in
+  # `needs:` here (test, test-cudaq and python313-qualified). Lint and python313-unsupported are
   # advisory and excluded by name.
   # Add new blocking jobs to `needs:` in the same PR.
   #
-  # `if: always()` runs this even when an upstream job fails; the step then fails
-  # unless EVERY needed result is 'success'. A naive `success()` gate would go
-  # GREEN when an upstream job was skipped.
+  # Always evaluate non-draft results: require code jobs to succeed, or to
+  # skip deliberately after a successful documentation-only scope decision.
+  # Planner failures and unexpected skips must never satisfy this gate.
   ci-success:
     name: CI Success
-    if: always()
-    needs: [test, test-cudaq, python313-qualified]
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft != true) }}
+    needs: [ci-scope, test, test-cudaq, python313-qualified, watch-ui]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Fail unless every required job succeeded
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+      - name: Require successful code checks or deliberate documentation skips
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
-          echo "::error::A required job did not succeed — results: ${{ join(needs.*.result, ', ') }}"
-          exit 1
+          python3 - <<'PY_GATE'
+          import json, os
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          scope = needs.pop("ci-scope")
+          if scope["result"] != "success":
+              raise SystemExit("Scope planner did not succeed")
+          run_code = scope["outputs"].get("run_code")
+          if run_code not in {"true", "false"}:
+              raise SystemExit("Scope planner returned no valid decision")
+          expected = "success" if run_code == "true" else "skipped"
+          unexpected = {name: job["result"] for name, job in needs.items() if job["result"] != expected}
+          if unexpected:
+              raise SystemExit(f"Required jobs must be {expected}: {unexpected}")
+          PY_GATE

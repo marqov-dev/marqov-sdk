@@ -49,18 +49,214 @@ _NO_CAPTURE_RESULT = object()
 
 
 def _serialize_arg(arg: Any) -> Any:
-    """Serialize an argument for transport.
+    """Serialize an argument for the transport graph.
 
-    Converts TaskProxy objects to placeholder dicts.
+    Converts TaskProxy objects to placeholder dicts inside lists, tuples
+    (namedtuples keep their type) and dict values. Other objects are kept
+    as-is in the graph; ``_transport_arg`` encodes them for Temporal.
     """
     if isinstance(arg, TaskProxy):
         return {"__proxy__": True, "node_id": arg.node_id}
-    elif isinstance(arg, (list, tuple)):
-        return type(arg)(_serialize_arg(item) for item in arg)
+    elif isinstance(arg, list):
+        return [_serialize_arg(item) for item in arg]
+    elif isinstance(arg, tuple):
+        items = [_serialize_arg(item) for item in arg]
+        if type(arg) is not tuple and hasattr(type(arg), "_make"):
+            return type(arg)._make(items)
+        return tuple(items)
     elif isinstance(arg, dict):
         return {k: _serialize_arg(v) for k, v in arg.items()}
     else:
         return arg
+
+
+def _is_marker(value: Any) -> bool:
+    """Return True for a ``__proxy__`` placeholder or a ``__cloudpickle__`` envelope."""
+    return isinstance(value, dict) and bool(value.get("__proxy__") or value.get("__cloudpickle__"))
+
+
+def _contains_placeholder(value: Any) -> bool:
+    """Return True if a ``__proxy__`` placeholder sits anywhere inside ``value``."""
+    if isinstance(value, dict):
+        return bool(value.get("__proxy__")) or any(
+            _contains_placeholder(item) for item in value.values()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_contains_placeholder(item) for item in value)
+    return False
+
+
+def _hides_task_proxy(value: Any) -> bool:
+    """Return True if a TaskProxy is reachable inside a value about to be pickled.
+
+    Walks lists, tuples, sets, frozensets and dict keys and values, plus the
+    attributes (``vars()``) of objects one level deep. Graph building does not
+    record a proxy in those places as a dependency, so pickling it would hand
+    the task a TaskProxy instead of the upstream result.
+    """
+    seen: set[int] = set()
+
+    def visit(item: Any, look_inside_objects: bool) -> bool:
+        if isinstance(item, TaskProxy):
+            return True
+        if isinstance(item, (list, tuple, set, frozenset, dict)):
+            if id(item) in seen:
+                return False
+            seen.add(id(item))
+            items = [*item.keys(), *item.values()] if isinstance(item, dict) else item
+            return any(visit(i, look_inside_objects) for i in items)
+        if look_inside_objects:
+            try:
+                attributes = vars(item)
+            except TypeError:
+                return False
+            return any(visit(i, False) for i in list(attributes.values()))
+        return False
+
+    return visit(value, True)
+
+
+def _transport_arg(value: Any) -> Any:
+    """Encode a graph argument as JSON data for the Temporal workflow input.
+
+    The same envelope as task results (``activity._serialize_value``): JSON values
+    pass through, NumPy bool/integer/float scalars are unboxed, lists and
+    tuples become lists, and any other object travels in the
+    ``__cloudpickle__`` envelope, which only the task child decodes. A
+    ``__proxy__`` placeholder or an existing envelope passes through unchanged
+    and is never pickled, because ``prepare_node_inputs`` resolves placeholders
+    by that marker. A namedtuple (or other tuple subclass) is pickled whole, so
+    it arrives as the same type, unless it holds a placeholder, in which case
+    it arrives as a list like a plain tuple. A dict with any non-str key is
+    pickled whole too, so it arrives with its original keys rather than the
+    strings JSON would turn them into; such a dict may not hold a placeholder.
+
+    Raises:
+        TypeError: If a value cannot be cloudpickled, if a TaskProxy is
+            reachable inside a value that would be pickled (a set, a
+            frozenset, an object attribute), or if a dict with a non-str key
+            holds a placeholder.
+    """
+    from marqov.workflows.activity import _cloudpickle_envelope, _unbox_numpy_scalar
+
+    value = _unbox_numpy_scalar(value)
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    elif isinstance(value, list) or (
+        isinstance(value, tuple) and (type(value) is tuple or _contains_placeholder(value))
+    ):
+        return [_transport_arg(item) for item in value]
+    elif isinstance(value, dict):
+        if _is_marker(value):
+            return value
+        if all(isinstance(k, str) for k in value):
+            return {k: _transport_arg(v) for k, v in value.items()}
+        if _contains_placeholder(value):
+            raise TypeError(
+                "a task result is a value in a dict with non-str keys; such a dict "
+                "is pickled whole to keep its keys, so the result could not be "
+                "resolved; use str keys or pass the result separately"
+            )
+    if _hides_task_proxy(value):
+        raise TypeError(
+            f"a task result is nested inside a {type(value).__qualname__}, where it "
+            f"is not resolved before the task runs; pass it directly or inside a "
+            f"list, tuple or dict value"
+        )
+    try:
+        return _cloudpickle_envelope(value)
+    except Exception as exc:
+        raise TypeError(
+            f"value of type {type(value).__module__}.{type(value).__qualname__} cannot "
+            f"be serialized with cloudpickle: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
+def _encoded_size(encoded: Any) -> int:
+    """Return the JSON byte size of an encoded argument.
+
+    ``__cloudpickle__`` payloads are base64 (ASCII, never escaped), so they are
+    counted by length rather than dumped a second time.
+    """
+    import json
+
+    payload_bytes = 0
+
+    def strip(item: Any) -> Any:
+        nonlocal payload_bytes
+        if isinstance(item, list):
+            return [strip(i) for i in item]
+        if isinstance(item, dict):
+            data = item.get("data")
+            is_envelope = set(item) == {"__cloudpickle__", "data"} and item["__cloudpickle__"] is True
+            if is_envelope and isinstance(data, str):
+                payload_bytes += len(data)
+                return {"__cloudpickle__": True, "data": ""}
+            return {k: strip(i) for k, i in item.items()}
+        return item
+
+    return len(json.dumps(strip(encoded)).encode("utf-8")) + payload_bytes
+
+
+def _transport_input(func_name: str, label: str, value: Any) -> tuple[Any, int]:
+    """Encode one argument, naming the task and argument on failure.
+
+    The encoded argument's JSON is capped at ``activity.MAX_RESULT_BYTES``, the
+    same limit the result side applies to a task's ``result.json``.
+
+    Returns:
+        The encoded argument and its JSON size in bytes.
+    """
+    from marqov.workflows.activity import MAX_RESULT_BYTES
+
+    try:
+        encoded = _transport_arg(value)
+        size = _encoded_size(encoded)
+    except TypeError as exc:
+        raise TypeError(
+            f"Task {func_name!r}: {label} cannot be sent to the task: {exc}"
+        ) from exc
+    if size > MAX_RESULT_BYTES:
+        raise ValueError(
+            f"Task {func_name!r}: {label} encodes to {size} bytes, over the "
+            f"{MAX_RESULT_BYTES}-byte limit (the task result limit, aligned with "
+            f"Temporal's ~4 MiB gRPC payload limit). Pass large data by reference."
+        )
+    return encoded, size
+
+
+def _transport_inputs(
+    func_name: str, args: list[Any], kwargs: dict[str, Any]
+) -> tuple[list[Any], dict[str, Any]]:
+    """Encode one node's arguments, naming the task and argument on failure.
+
+    Each argument, and the node's args and kwargs together, are capped at
+    ``activity.MAX_RESULT_BYTES``.
+    """
+    import json
+
+    from marqov.workflows.activity import MAX_RESULT_BYTES
+
+    encoded_args: list[Any] = []
+    # Byte counts follow json.dumps' default separators: "[", "]", "{", "}"
+    # and ", " between items, ": " after each key.
+    total = 2 + 2 + 2 * max(len(args) - 1, 0) + 2 * max(len(kwargs) - 1, 0)
+    for position, arg in enumerate(args):
+        encoded, size = _transport_input(func_name, f"positional argument {position}", arg)
+        encoded_args.append(encoded)
+        total += size
+    encoded_kwargs: dict[str, Any] = {}
+    for key, value in kwargs.items():
+        encoded, size = _transport_input(func_name, f"keyword argument {key!r}", value)
+        encoded_kwargs[key] = encoded
+        total += len(json.dumps(key).encode("utf-8")) + 2 + size
+    if total > MAX_RESULT_BYTES:
+        raise ValueError(
+            f"Task {func_name!r}: its arguments together encode to {total} bytes, "
+            f"over the {MAX_RESULT_BYTES}-byte limit (the task result limit, aligned "
+            f"with Temporal's ~4 MiB gRPC payload limit). Pass large data by reference."
+        )
+    return encoded_args, encoded_kwargs
 
 
 @overload
@@ -92,17 +288,29 @@ def task(
     return a proxy that registers the call in the transport graph.
 
     When called outside a workflow, the wrapper just calls the decorated
-    function directly (`fn(*args, **kwargs)`) — it does not special-case
+    function directly (`fn(*args, **kwargs)`); it does not special-case
     coroutine functions. For a sync function that means "executes normally
     and returns its result." For an `async def` function it does NOT await
-    it: calling it bare returns an unawaited coroutine and nothing runs. If
-    you need to call an async @task outside a workflow, drive it yourself
-    with `asyncio.run(...)` (see the second example below).
+    it: the call returns a coroutine, and nothing runs until you await it.
+    A coroutine that is never awaited is dropped silently, apart from a
+    ``RuntimeWarning: coroutine ... was never awaited`` when it is garbage
+    collected::
+
+        result = measure(circuit)        # wrong: nothing runs
+        result = await measure(circuit)  # right, inside async code
+        result = asyncio.run(measure(circuit))  # right, from sync code
 
     Args:
         func: The function to decorate.
-        name: Display name for the task. Defaults to function name.
-        executor: Which executor to use ("local", "braket").
+        name: Display name for the task. Defaults to function name. Recorded
+            on the graph's ``TaskConfig`` only; it is not sent to Temporal,
+            which sees the function name.
+        executor: Reserved. Recorded on the graph's ``TaskConfig`` for
+            introspection but not consulted when dispatching: the Temporal
+            workflow input carries no executor and ``execute_task`` has no
+            executor parameter, so every task runs the same way whatever
+            this says. It does not select a backend or supply credentials;
+            see ``marqov.workflows`` for how provider credentials reach a task.
         retries: Number of retry attempts on failure.
         timeout: Maximum execution time in seconds.
 
@@ -117,12 +325,12 @@ def task(
         >>> # Outside workflow: executes normally
         >>> result = add(1, 2)  # Returns 3
         >>>
-        >>> @task(executor="braket", timeout=600)
+        >>> @task(timeout=600)
         ... async def measure(circuit):
         ...     return await executor.run(circuit)
         >>>
-        >>> # Outside workflow, an async @task must be driven explicitly —
-        >>> # measure(circuit) alone would return an unawaited coroutine.
+        >>> # Outside workflow, an async @task must be awaited or driven
+        >>> # explicitly: measure(circuit) alone returns a coroutine.
         >>> import asyncio
         >>> result = asyncio.run(measure(circuit))
     """
@@ -264,24 +472,35 @@ class WorkflowDispatch:
 
         This pre-computes execution levels and serializes all node data
         so the workflow only receives primitive types (no marqov imports needed).
+        Task arguments are encoded by ``_transport_arg``: non-JSON values (a
+        ``Circuit``, an array) travel as ``__cloudpickle__`` envelopes that
+        only the task child unpickles.
 
         Returns:
             Dictionary with nodes, execution_levels, and output_nodes.
-        """
-        import json
 
+        Raises:
+            TypeError: If a task argument cannot be cloudpickled, or hides a
+                task result inside a set, frozenset or object attribute; the
+                message names the task and the argument position or keyword.
+            ValueError: If an encoded task argument's JSON, or a node's args
+                and kwargs together, exceed ``activity.MAX_RESULT_BYTES``
+                (3 MiB); the message names the task, and the argument position
+                or keyword or the total.
+        """
         # Get execution levels (parallel groups)
         execution_levels = self.graph.get_execution_order()
 
         # Serialize all nodes as dicts
         nodes: dict[str, dict[str, Any]] = {}
         for node_id, node in self.graph.nodes.items():
+            args, kwargs = _transport_inputs(node.func_name, node.args, node.kwargs)
             nodes[node_id] = {
                 "node_id": node.id,
                 "func_name": node.func_name,
                 "func_ref": node.func_ref,
-                "args": node.args,
-                "kwargs": node.kwargs,
+                "args": args,
+                "kwargs": kwargs,
                 "retries": node.config.retries,
                 "timeout_seconds": node.config.timeout_seconds,
                 "dependencies": node.dependencies,
@@ -301,11 +520,21 @@ class WorkflowDispatch:
             task_queue: Temporal task queue name.
 
         Returns:
-            The result of the workflow execution.
+            The workflow's output, decoded in this process: a single output
+            node yields that task's return value, several output nodes yield a
+            dict keyed by node ID, and a workflow with no output nodes yields
+            a dict of every node's result. JSON values (None, bool, int,
+            float, str, list, dict with str keys) come back as-is, with tuples
+            (namedtuples included) as lists and NumPy bool/integer/float
+            scalars as Python bool/int/float. Any other return value (a
+            dataclass, an ``ExecutionResult``, an array, a dict with a
+            non-str key) travels as cloudpickle bytes and is unpickled here,
+            so the classes it needs must be importable by the caller.
         """
         import json
         import uuid
 
+        from marqov.workflows.activity import _deserialize_value
         from marqov.workflows.temporal_workflow import JobWorkflow
 
         # Prepare pure JSON input (no marqov objects)
@@ -329,8 +558,8 @@ class WorkflowDispatch:
         # Deserialize result — unwrap enriched format for backward compat
         parsed = json.loads(result_json)
         if isinstance(parsed, dict) and "result" in parsed and "_workflow_metadata" in parsed:
-            return parsed["result"]
-        return parsed
+            return _deserialize_value(parsed["result"])
+        return _deserialize_value(parsed)
 
     async def start_with_ids(self, client: Any, task_queue: str = "marqov-workflows") -> tuple[Any, str, str]:
         """Start workflow and return handle with IDs, without waiting for result.
@@ -377,8 +606,12 @@ class WorkflowDispatch:
 
         Returns:
             Tuple of (result, workflow_id, run_id) for tracking and debugging.
+            ``result`` is the enriched dict, ``{"result": ..., "_workflow_metadata": ...}``,
+            with ``result["result"]`` decoded as described in :meth:`run`.
         """
         import json
+
+        from marqov.workflows.activity import _deserialize_value
 
         handle, workflow_id, run_id = await self.start_with_ids(client, task_queue)
 
@@ -387,6 +620,8 @@ class WorkflowDispatch:
 
         # Deserialize result — return full enriched dict (metadata included)
         parsed = json.loads(result_json)
+        if isinstance(parsed, dict) and "result" in parsed and "_workflow_metadata" in parsed:
+            parsed["result"] = _deserialize_value(parsed["result"])
 
         return parsed, workflow_id, run_id
 

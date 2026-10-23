@@ -639,3 +639,109 @@ class TestJobResultIntegration:
             outcome = job.result()
 
         assert isinstance(outcome, PlatformResult)
+
+
+# ---------------------------------------------------------------------------
+# result(): deadline is honoured inside a poll (marqov-sdk#150)
+# ---------------------------------------------------------------------------
+
+
+class TestJobResultDeadline:
+    """A hanging poll cannot overrun the result() deadline by the transport timeout."""
+
+    def test_per_request_timeout_bounded_by_remaining_budget(self):
+        """Each poll passes min(transport.timeout, remaining) as its timeout."""
+        t = _make_transport(timeout=30.0)
+        t.request.return_value = _status_payload(
+            "completed", result={"counts": {"0": 1}}
+        )
+        job = _make_job(t)
+
+        with patch("marqov.platform.job.time.monotonic") as mock_mono:
+            mock_mono.side_effect = [0.0, 0.0]
+            job.result(timeout=10.0)
+
+        kwargs = t.request.call_args.kwargs
+        assert kwargs["timeout"] == 10.0
+        # The server-side hold stays strictly below the per-request timeout.
+        assert kwargs["wait"] is not None
+        assert kwargs["wait"] < kwargs["timeout"]
+        assert kwargs["wait"] == 10 - _WAIT_MARGIN_SECONDS
+
+    def test_hanging_poll_raises_timeout_error_within_budget(self):
+        """A GET that hangs for its full timeout surfaces as TimeoutError, promptly."""
+        import threading
+
+        import requests
+
+        from marqov.platform.errors import TransportError
+
+        budget = 0.3
+        # Stands in for the 30 s default: on the old code each of the
+        # transport's attempts would wait this long.
+        transport = Transport(
+            api_key="marqey_test_x", base_url="http://test", timeout=2.0
+        )
+        seen_timeouts: list[float] = []
+
+        def hang(method, url, **kwargs):
+            seen_timeouts.append(kwargs["timeout"])
+            threading.Event().wait(kwargs["timeout"])
+            raise requests.exceptions.ReadTimeout("read timed out")
+
+        job = Job(transport, "job-abc", rng=random.Random(0))
+        start = time.monotonic()
+        # Real sleeps: the transport's backoff must not run past the deadline.
+        with patch.object(transport._session, "request", side_effect=hang):
+            with pytest.raises(TimeoutError) as exc_info:
+                job.result(timeout=budget)
+        elapsed = time.monotonic() - start
+
+        assert not isinstance(exc_info.value, TransportError)
+        assert isinstance(exc_info.value.__cause__, TransportError)
+        assert "did not complete within" in str(exc_info.value)
+        # One attempt used the whole budget; no retry starts after it.
+        assert len(seen_timeouts) == 1, seen_timeouts
+        assert seen_timeouts[0] <= budget
+        # Before: 3 attempts x 2.0 s plus 1.5 s backoff.
+        assert elapsed < budget + 0.3, f"elapsed {elapsed:.2f}s on a {budget}s budget"
+
+    def test_fast_failures_stop_at_deadline(self):
+        """Failures that return at once are retried only until the deadline."""
+        import requests
+
+        budget = 0.3
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        job = Job(transport, "job-abc", rng=random.Random(0))
+        start = time.monotonic()
+        with patch.object(
+            transport._session,
+            "request",
+            side_effect=requests.exceptions.ConnectionError("refused"),
+        ):
+            with pytest.raises(TimeoutError):
+                job.result(timeout=budget)
+        elapsed = time.monotonic() - start
+
+        # Before: the 0.5 s + 1.0 s backoff ran in full.
+        assert elapsed < budget + 0.3, f"elapsed {elapsed:.2f}s on a {budget}s budget"
+
+    def test_transport_failure_inside_deadline_propagates(self):
+        """A transport failure well before the deadline is not converted."""
+        import requests
+
+        from marqov.platform.errors import TransportError
+
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        job = Job(transport, "job-abc", rng=random.Random(0))
+
+        with patch.object(
+            transport._session,
+            "request",
+            side_effect=requests.exceptions.ConnectionError("refused"),
+        ):
+            with patch("marqov.platform._transport.time.sleep"):
+                with pytest.raises(TransportError) as exc_info:
+                    job.result(timeout=300.0)
+
+        assert not isinstance(exc_info.value, TimeoutError)

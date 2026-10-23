@@ -116,6 +116,8 @@ class TestQiliSDKExecutor:
             json.dumps(result.counts, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
         assert record["seed"] is None
+        assert record["shots"] == sum(result.counts.values())
+        assert record["bit_order"] == "QiliSDK sampling order; qubit 0 leftmost"
         assert "no hardware execution" in record["scope"]
 
     def test_unsupported_simulator_raises(self) -> None:
@@ -319,3 +321,152 @@ class TestSpeQtrumDirect:
         assert result.counts == {'10': 32}
         assert executor.last_job.execute_type == 'analog_evolution'
         assert calls.count(('POST', '/execute')) == 1
+
+    @staticmethod
+    async def _cancel_during(executor, block_path, hold):
+        import asyncio
+        import threading
+        reached, calls = threading.Event(), []
+
+        class Client:
+            def login(self, deadline):
+                calls.append('login')
+                if block_path == 'login':
+                    reached.set()
+                    hold()
+                return 'fixture-token'
+
+            def request(self, method, path, deadline, **kwargs):
+                calls.append(path)
+                if path == '/devices':
+                    return {'items': [{'code': 'fixture-device', 'nqubits': 2,
+                                       'type': 'simulator', 'status': 'online'}]}
+                assert path == '/execute'
+                reached.set()
+                hold()
+                return {'id': 42}
+
+        executor._client = Client()
+        task = asyncio.ensure_future(executor.execute(Circuit().x(0).x(1).x(1), shots=32))
+        await asyncio.to_thread(reached.wait, 5)
+        task.cancel()
+        return task, calls
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_post_keeps_answered_job_identity(self):
+        import asyncio
+        import time
+
+        from marqov.executors.speqtrum import SpeQtrumExecutor
+        executor = SpeQtrumExecutor(self.config())
+        task, calls = await self._cancel_during(executor, '/execute', lambda: time.sleep(0.2))
+        with pytest.raises(asyncio.CancelledError) as error:
+            await task
+        assert executor.last_job is not None and executor.last_job.job_id == 42
+        assert any('SpeQtrum job 42' in note for note in error.value.__notes__)
+        assert calls == ['login', '/devices', '/execute']
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_unanswered_post_stays_cancelled(self, monkeypatch, caplog):
+        import asyncio
+        import logging
+        import threading
+
+        from marqov.executors.speqtrum import SpeQtrumExecutor
+        monkeypatch.setattr('marqov.executors._blocking._CANCEL_WAIT_SECONDS', 0.05)
+        executor = SpeQtrumExecutor(self.config())
+        release = threading.Event()
+        with caplog.at_level(logging.WARNING, logger='marqov.executors._blocking'):
+            try:
+                task, calls = await self._cancel_during(executor, '/execute', lambda: release.wait(5))
+                with pytest.raises(asyncio.CancelledError) as error:
+                    await task
+                assert task.cancelled() and error.value.acceptance_unknown
+                assert any('acceptance unknown' in note for note in error.value.__notes__)
+                assert calls.count('/execute') == 1 and executor.last_job is None
+            finally:
+                release.set()
+            for _ in range(100):
+                if 'SpeQtrum job 42' in caplog.text:
+                    break
+                await asyncio.sleep(0.02)
+        # A reply after the caller stopped waiting is logged, never replayed.
+        assert 'SpeQtrum job 42' in caplog.text and calls.count('/execute') == 1
+
+    @pytest.mark.asyncio
+    async def test_wait_for_timeout_during_unanswered_post_surfaces_timeout(self, monkeypatch):
+        import asyncio
+        import threading
+
+        from marqov.executors.speqtrum import SpeQtrumExecutor
+        monkeypatch.setattr('marqov.executors._blocking._CANCEL_WAIT_SECONDS', 0.05)
+        circuit = Circuit().x(0).x(1).x(1)
+        QiliSDKExecutor._to_qilisdk_circuit(circuit)  # warm vendor imports before the timer starts
+        executor = SpeQtrumExecutor(self.config())
+        release = threading.Event()
+
+        class Client:
+            def login(self, deadline):
+                return 'fixture-token'
+
+            def request(self, method, path, deadline, **kwargs):
+                if path == '/devices':
+                    return {'items': [{'code': 'fixture-device', 'nqubits': 2,
+                                       'type': 'simulator', 'status': 'online'}]}
+                release.wait(5)
+                return {'id': 42}
+
+        executor._client = Client()
+        try:
+            with pytest.raises(TimeoutError) as error:
+                await asyncio.wait_for(executor.execute(circuit, shots=32), 0.3)
+        finally:
+            release.set()
+        interruption = error.value.__cause__
+        assert isinstance(interruption, asyncio.CancelledError) and interruption.acceptance_unknown
+        assert any('acceptance unknown' in note for note in interruption.__notes__)
+
+    @pytest.mark.asyncio
+    async def test_cancel_before_post_sends_nothing(self):
+        import asyncio
+        import time
+
+        from marqov.executors.speqtrum import SpeQtrumExecutor
+        executor = SpeQtrumExecutor(self.config())
+        task, calls = await self._cancel_during(executor, 'login', lambda: time.sleep(0.1))
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.3)
+        assert '/execute' not in calls and executor.last_job is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('failure', ['login', 'devices', 'status'])
+    async def test_get_status_failure_returns_maintenance(self, failure):
+        from marqov.executors.base import DeviceStatus
+        from marqov.executors.speqtrum import SpeQtrumExecutor
+
+        class Client:
+            def login(self, deadline):
+                if failure == 'login':
+                    raise RuntimeError('SpeQtrum HTTP request unsuccessful or unresolved')
+                return 'fixture-token'
+
+            def request(self, method, path, deadline, **kwargs):
+                if failure == 'devices':
+                    raise RuntimeError('SpeQtrum HTTP request unsuccessful or unresolved')
+                return {'items': [{'code': 'fixture-device', 'status': 'unknown'}]}
+
+        executor = SpeQtrumExecutor(self.config())
+        executor._client = Client()
+        assert await executor.get_status() == DeviceStatus('maintenance', None, None)
+
+    def test_missing_qilisdk_fails_at_factory_construction_with_install_line(self, monkeypatch):
+        from importlib.metadata import PackageNotFoundError
+
+        def missing(name):
+            raise PackageNotFoundError(name)
+        monkeypatch.setattr('marqov.executors.speqtrum.version', missing)
+        config = {'provider': 'Qilimanjaro', 'access_path': 'speqtrum', 'device_code': 'fixture-device',
+                  'username': 'fixture-account', 'api_key': 'fixture-secret'}
+        with pytest.raises(ImportError, match=r'pip install qilisdk==0\.3\.0'):
+            ExecutorFactory.create_executor('explicit-speqtrum', config)

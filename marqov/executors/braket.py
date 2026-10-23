@@ -36,11 +36,16 @@ except ModuleNotFoundError as error:
         raise
     boto3 = AwsDevice = AwsSession = BraketCircuit = None
 
-from marqov._braket_native import prepare_braket, validate_options
+from marqov._braket_native import SUPPORTED_EXECUTE_OPTIONS, prepare_braket, validate_options
 from marqov.executors._blocking import BlockingCalls
 from marqov.executors._braket_provenance import measurement_provenance
 from marqov.executors._counts import allocate_counts
-from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
+from marqov.executors.base import (
+    BaseExecutor,
+    DeviceStatus,
+    ExecutionResult,
+    reject_unsupported_options,
+)
 
 if TYPE_CHECKING:
     from marqov.circuits import Circuit
@@ -222,18 +227,21 @@ class BraketExecutor(BaseExecutor):
             **kwargs: Braket options verbatim and disable_qubit_rewiring must be
                 bools. Explicit rewiring is forwarded; omission preserves the
                 provider default. Physical placement/capability is unqualified.
+                Any other option raises TypeError before device initialization.
 
         Returns:
             ExecutionResult with measurement counts and metadata.
 
         Raises:
             RuntimeError: If task fails or device is unavailable.
+            TypeError: If an option other than verbatim or disable_qubit_rewiring is supplied.
         """
         circuit = self._validate_circuit(circuit)
 
         start_time = time.perf_counter()
 
         validate_options(preserve_qubit_labels, kwargs, self.config.device_arn)
+        reject_unsupported_options("BraketExecutor.execute()", kwargs, SUPPORTED_EXECUTE_OPTIONS)
         braket_circuit = prepare_braket(
             circuit, preserve_qubit_labels=preserve_qubit_labels, options=kwargs,
             device_arn=self.config.device_arn, circuit_factory=BraketCircuit,
@@ -248,30 +256,71 @@ class BraketExecutor(BaseExecutor):
                 self.config.poll_interval_seconds, self.config.timeout_seconds
             )
 
+        s3_location = f"s3://{self.config.s3_bucket}/{self.config.s3_prefix}"
+        identity = {
+            "provider": "AWS Braket",
+            "device_arn": self.config.device_arn,
+            "task_arn": None,
+            "s3_location": s3_location,
+            "submission_status": "unknown",
+        }
         with BlockingCalls() as calls:
-            task = await calls.call(
-                device.run,
-                braket_circuit,
-                s3_destination_folder=(self.config.s3_bucket, self.config.s3_prefix),
-                shots=shots,
-                **run_options,
-            )
-            task_arn = task.id
-            self._current_task_arn = task_arn  # Tracking only, never cleanup ownership.
-            result = await calls.wait(
-                partial(self._task_result_sync, task),
-                partial(self._cancel_task_sync, task_arn),
-                job_id=task_arn,
-                timeout=self.config.timeout_seconds,
-            )
-
-            wall_time = time.perf_counter() - start_time
-
-            # Auxiliary metadata cannot invalidate a successfully retrieved result.
             try:
-                await calls.call(task.metadata, use_cached_value=True)
-            except Exception:
-                logger.debug("Optional Braket task metadata lookup failed after result retrieval", exc_info=True)
+                task = await calls.call(
+                    device.run,
+                    braket_circuit,
+                    s3_destination_folder=(self.config.s3_bucket, self.config.s3_prefix),
+                    shots=shots,
+                    **run_options,
+                )
+            except (Exception, asyncio.CancelledError) as error:
+                self._retain_task_identity(error, identity)
+                raise
+            try:
+                identity["task_arn"] = task.id
+                identity["submission_status"] = "submitted"
+                self._current_task_arn = task.id  # Tracking only, never cleanup ownership.
+                return await self._task_execution_result(task, device, calls, shots, start_time, s3_location)
+            except (Exception, asyncio.CancelledError) as error:
+                self._retain_task_identity(error, identity)
+                raise
+
+    @staticmethod
+    def _retain_task_identity(error: BaseException, identity: dict[str, Any]) -> None:
+        """Keep recovery context without changing the original exception type."""
+        error.remote_job = dict(identity)  # type: ignore[attr-defined]
+        if identity["task_arn"] is None:
+            error.add_note("Braket submission acceptance is unknown; do not replay automatically.")
+        else:
+            error.add_note(
+                f"Braket task {identity['task_arn']!r} remains recoverable on device "
+                f"{identity['device_arn']!r}; interruption does not confirm provider cancellation."
+            )
+
+    async def _task_execution_result(
+        self,
+        task: Any,
+        device: Any,
+        calls: BlockingCalls,
+        shots: int,
+        start_time: float,
+        s3_location: str,
+    ) -> ExecutionResult:
+        task_arn = task.id
+        result = await calls.wait(
+            partial(self._task_result_sync, task),
+            partial(self._cancel_task_sync, task_arn),
+            job_id=task_arn,
+            timeout=self.config.timeout_seconds,
+        )
+
+        wall_time = time.perf_counter() - start_time
+
+        # Auxiliary metadata cannot invalidate a successfully retrieved result.
+        try:
+            await calls.call(task.metadata, use_cached_value=True)
+        except Exception:
+            logger.debug("Optional Braket task metadata lookup failed after result retrieval", exc_info=True)
 
         execution_duration_ms = _simulator_execution_duration_ms(result)
         # Local wall time includes conversion, polling and download, so its
@@ -304,7 +353,7 @@ class BraketExecutor(BaseExecutor):
                 ),
                 "task_arn": task.id,
                 "device_name": device.name,
-                "s3_location": f"s3://{self.config.s3_bucket}/{self.config.s3_prefix}",
+                "s3_location": s3_location,
                 "execution_duration_ms": execution_duration_ms,
                 "queue_time_ms": queue_time_ms,
                 "wall_time_ms": wall_time * 1000,

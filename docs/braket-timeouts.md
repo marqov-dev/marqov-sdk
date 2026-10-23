@@ -14,7 +14,9 @@ cancellation request for that invocation's task ARN. Another concurrent call's
 last-task tracking cannot replace this ID. Cleanup is given at most one second
 of additional waiting. Failure, a slow request, or repeated caller cancellation
 preserves the original `TimeoutError` or `CancelledError`; a warning reports
-unconfirmed cleanup. The exception note includes the task ARN. A completed
+unconfirmed cleanup. The exception note includes the task ARN. `asyncio.run()`
+replaces the task's `CancelledError` with a bare `KeyboardInterrupt` on Ctrl+C,
+so there the task ARN is in the warning an interrupted result wait logs, not on the exception. A completed
 cancellation request is not proof that the provider stopped execution.
 
 Blocking submission, result and cached-metadata calls use a pool owned by the
@@ -32,6 +34,30 @@ can prevent cancellation.
 Device initialization and submission precede the result deadline; cancellation
 while submission is in flight can leave acceptance unresolved. Do not assume
 that a failed or interrupted submission is safe to replay.
+
+## Retained task identity
+
+Once `device.run` is called, every exception or cancellation leaving `execute`
+keeps its original type and carries a `remote_job` dict with `provider`,
+`device_arn`, `task_arn`, `s3_location` and `submission_status`, plus a note.
+The executor never requests cancellation for provider or result errors.
+
+- Submission error or cancellation while `device.run` is in flight:
+  `task_arn` is `None`, `submission_status` is `"unknown"`, and the note says
+  acceptance is unknown and not to replay automatically.
+- Result timeout or caller cancellation: `task_arn` is the submitted task's
+  ARN and `submission_status` is `"submitted"`. The exception carries the
+  best-effort cancellation note described above and a note naming the task as
+  recoverable without confirming provider cancellation.
+- Provider or result error (for example an S3 or `ClientError` from
+  `task.result()`, or a task that finished `FAILED` or `CANCELLED`): the same
+  submitted identity and recoverable-task note; no cancellation is requested.
+- Result-processing error after a result is retrieved (count or provenance
+  conversion): the same submitted identity and note; no cancellation is
+  requested.
+
+`executor._current_task_arn` is last-call tracking only and can be overwritten
+by a concurrent call; read the ARN from `remote_job` instead.
 
 Counts, raw results, provenance, metadata timing and no-timeout defaults are
 preserved for successful runs. A vendor result of `None` is treated as failure

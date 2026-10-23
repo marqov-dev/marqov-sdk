@@ -1,30 +1,50 @@
 """Azure Qiskit interruption and recovery identity through real execute paths."""
 
 import asyncio
+import logging
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from azure.quantum._client.models import CostEstimate, JobDetails
+from azure.quantum.job import Job as AzureJob
+from azure.quantum.qiskit.job import AzureQuantumJob
 
 from marqov.circuits import Circuit
 from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorConfig
 
 
-class Job:
-    def __init__(self, job_id, *, complete=False, cancel=None):
-        self.id = job_id
+BEGIN = datetime(2026, 10, 15, tzinfo=timezone.utc)
+TIMED = {
+    "begin_execution_time": BEGIN,
+    "end_execution_time": BEGIN + timedelta(milliseconds=12),
+    "cost_estimate": CostEstimate(currency_code="USD", estimated_total=0.25),
+}
+
+
+class Job(AzureQuantumJob):
+    """Real Azure Qiskit job around an offline vendor Job; only result() is offline."""
+
+    def __init__(self, job_id, *, complete=False, cancel=None, details=TIMED):
         self.started = threading.Event()
         self.release = threading.Event()
         self.finished = threading.Event()
         self.timeouts = []
-        self.cancel = cancel or Mock()
+        self.workspace = Mock()
+        if cancel is not None:
+            self.workspace.cancel_job.side_effect = cancel
+        native = AzureJob(self.workspace, JobDetails(
+            id=job_id, name=job_id, provider_id="ionq", target="ionq.simulator",
+            input_data_format="qir.v1", container_uri="https://offline/job", **details,
+        ))
+        self.workspace.get_job.return_value = native
+        backend = SimpleNamespace(provider=SimpleNamespace(get_workspace=lambda: self.workspace))
+        super().__init__(backend, azure_job=native)
         if complete:
             self.release.set()
-
-    def job_id(self):
-        return self.id
 
     def result(self, timeout=None):
         self.timeouts.append(timeout)
@@ -34,9 +54,6 @@ class Job:
             return SimpleNamespace(success=True, get_counts=lambda: {"001": 7})
         finally:
             self.finished.set()
-
-    def properties(self):
-        return SimpleNamespace(execution_time=0.012, cost_estimate="offline-estimate")
 
 
 def executor(jobs, *, timeout=0.03, run=None):
@@ -100,8 +117,8 @@ def test_asyncio_run_returns_without_joining_and_retains_identity(interruption):
         asyncio.run(run())
         assert time.perf_counter() - start < 0.4
         assert not job.finished.is_set()
-        job.cancel.assert_called_once_with()
-        assert_identity(errors[0], job.id)
+        job.workspace.cancel_job.assert_called_once_with(job._azure_job)
+        assert_identity(errors[0], job.job_id())
         assert job.timeouts == [ex.config.timeout_seconds]
     finally:
         job.release.set()
@@ -116,12 +133,12 @@ async def test_concurrent_completion_cannot_replace_interrupted_identity():
     try:
         await wait_event(slow.started)
         result = await ex.execute(Circuit().x(0), shots=7)
-        assert result.metadata["job_id"] == ex._current_job_id == fast.id
+        assert result.metadata["job_id"] == ex._current_job_id == fast.job_id()
         with pytest.raises(TimeoutError) as caught:
             await call
-        assert_identity(caught.value, slow.id)
-        slow.cancel.assert_called_once_with()
-        fast.cancel.assert_not_called()
+        assert_identity(caught.value, slow.job_id())
+        slow.workspace.cancel_job.assert_called_once_with(slow._azure_job)
+        fast.workspace.cancel_job.assert_not_called()
     finally:
         slow.release.set()
         await wait_event(slow.finished)
@@ -129,14 +146,14 @@ async def test_concurrent_completion_cannot_replace_interrupted_identity():
 
 @pytest.mark.asyncio
 async def test_failed_cleanup_keeps_timeout_and_identity(caplog):
-    job = Job("failed-cleanup", cancel=Mock(side_effect=RuntimeError("offline failure")))
+    job = Job("failed-cleanup", cancel=RuntimeError("offline failure"))
     ex = executor([job])
     try:
         with pytest.raises(TimeoutError) as caught:
             await ex.execute(Circuit().x(0))
-        assert_identity(caught.value, job.id)
+        assert_identity(caught.value, job.job_id())
         assert "not confirmed" in caplog.text
-        job.cancel.assert_called_once_with()
+        job.workspace.cancel_job.assert_called_once_with(job._azure_job)
     finally:
         job.release.set()
         await wait_event(job.finished)
@@ -146,11 +163,11 @@ async def test_failed_cleanup_keeps_timeout_and_identity(caplog):
 async def test_repeated_cancellation_keeps_first_error_and_identity(caplog):
     started, release = threading.Event(), threading.Event()
 
-    def cancel():
+    def cancel(native):
         started.set()
         release.wait(1)
 
-    job = Job("repeat", cancel=Mock(side_effect=cancel))
+    job = Job("repeat", cancel=cancel)
     ex = executor([job], timeout=None)
     call = asyncio.create_task(ex.execute(Circuit().x(0)))
     try:
@@ -160,8 +177,8 @@ async def test_repeated_cancellation_keeps_first_error_and_identity(caplog):
         call.cancel("second")
         with pytest.raises(asyncio.CancelledError, match="first") as caught:
             await call
-        assert_identity(caught.value, job.id)
-        job.cancel.assert_called_once_with()
+        assert_identity(caught.value, job.job_id())
+        job.workspace.cancel_job.assert_called_once_with(job._azure_job)
     finally:
         release.set()
         job.release.set()
@@ -175,9 +192,9 @@ async def test_vendor_timeout_retains_identity_and_requests_cancellation():
     ex = executor([job], timeout=1)
     with pytest.raises(TimeoutError, match="vendor budget exhausted") as caught:
         await ex.execute(Circuit().x(0))
-    assert_identity(caught.value, job.id)
+    assert_identity(caught.value, job.job_id())
     job.result.assert_called_once_with(timeout=1)
-    job.cancel.assert_called_once_with()
+    job.workspace.cancel_job.assert_called_once_with(job._azure_job)
 
 
 @pytest.mark.asyncio
@@ -187,8 +204,8 @@ async def test_result_failure_retains_identity_without_requesting_cancellation()
     ex = executor([job])
     with pytest.raises(RuntimeError, match="result unavailable") as caught:
         await ex.execute(Circuit().x(0))
-    assert_identity(caught.value, job.id)
-    job.cancel.assert_not_called()
+    assert_identity(caught.value, job.job_id())
+    job.workspace.cancel_job.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -198,13 +215,29 @@ async def test_success_preserves_counts_raw_timing_and_no_timeout_defaults():
     result = await ex.execute(Circuit().x(0).z(1).z(2), shots=7)
     assert result.counts == {"100": 7}
     assert result.raw_result.get_counts() == {"001": 7}
-    assert result.execution_time_ms == 12
-    assert result.metadata["cost_estimate"] == "offline-estimate"
+    assert result.execution_time_ms == result.metadata["quantum_time_ms"] == 12
+    assert result.metadata["cost_estimate"] == TIMED["cost_estimate"]
     assert result.metadata["workspace_name"] == "workspace"
-    assert result.metadata["job_id"] == job.id
+    assert result.metadata["job_id"] == job.job_id()
     assert result.metadata["wall_time_ms"] >= 0
-    job.cancel.assert_not_called()
+    job.workspace.cancel_job.assert_not_called()
     assert job.timeouts == [None]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup", ["no-timing-fields", "refresh-fails"])
+async def test_unknown_provider_timing_is_none_and_falls_back_to_wall_time(lookup, caplog):
+    job = Job("untimed", complete=True, details={})
+    if lookup == "refresh-fails":
+        job.workspace.get_job.side_effect = RuntimeError("details unavailable")
+    ex = executor([job], timeout=None)
+    with caplog.at_level(logging.DEBUG, logger="marqov.executors.azure"):
+        result = await ex.execute(Circuit().x(0), shots=7)
+    assert result.counts == {"100": 7}
+    assert result.metadata["quantum_time_ms"] is None
+    assert "cost_estimate" not in result.metadata
+    assert result.execution_time_ms == result.metadata["wall_time_ms"] > 0
+    assert ("details unavailable" in caplog.text) == (lookup == "refresh-fails")
 
 
 @pytest.mark.asyncio
@@ -231,7 +264,7 @@ async def test_interrupted_submission_is_explicitly_unknown_and_not_replayed():
         assert_identity(caught.value, None, status="unknown")
         assert "do not replay" in " ".join(caught.value.__notes__)
         submit.assert_called_once()
-        job.cancel.assert_not_called()
+        job.workspace.cancel_job.assert_not_called()
     finally:
         release.set()
         await wait_event(finished)
@@ -253,8 +286,8 @@ async def test_post_submission_result_processing_errors_keep_job(failure):
     ex = executor([job])
     with pytest.raises((RuntimeError, ValueError)) as caught:
         await ex.execute(Circuit().x(0))
-    assert_identity(caught.value, job.id)
-    job.cancel.assert_not_called()
+    assert_identity(caught.value, job.job_id())
+    job.workspace.cancel_job.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -264,21 +297,21 @@ async def test_slow_cleanup_is_bounded_and_preserves_identity(monkeypatch, caplo
     monkeypatch.setattr(_blocking, "_CANCEL_WAIT_SECONDS", 0.03)
     started, release = threading.Event(), threading.Event()
 
-    def cancel():
+    def cancel(native):
         started.set()
         release.wait(1)
 
-    job = Job("slow-cleanup", cancel=Mock(side_effect=cancel))
+    job = Job("slow-cleanup", cancel=cancel)
     ex = executor([job])
     start = time.perf_counter()
     try:
         with pytest.raises(TimeoutError) as caught:
             await ex.execute(Circuit().x(0))
-        assert_identity(caught.value, job.id)
+        assert_identity(caught.value, job.job_id())
         assert started.is_set()
         assert time.perf_counter() - start < 0.4
         assert "not confirmed" in caplog.text
-        job.cancel.assert_called_once_with()
+        job.workspace.cancel_job.assert_called_once_with(job._azure_job)
     finally:
         release.set()
         job.release.set()
@@ -306,7 +339,7 @@ async def test_recovery_identity_does_not_follow_mutated_config():
         ex.config.target = "different-target"
         with pytest.raises(TimeoutError) as caught:
             await call
-        assert_identity(caught.value, job.id)
+        assert_identity(caught.value, job.job_id())
     finally:
         job.release.set()
         await wait_event(job.finished)

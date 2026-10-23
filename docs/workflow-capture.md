@@ -46,6 +46,16 @@ the workflow again is a new capture, not recovery of an accepted task attempt.
 Graph/function/argument/result data must not be assumed safe to deserialize in a
 trusted process. Neither requested configuration nor a capture grants authority.
 
+Of the requested configuration, the legacy Temporal path (`run()`,
+`run_with_ids()`, `start_with_ids()`, `dispatch()`) uses only `retries` and
+`timeout`. `@task(executor=...)` is reserved: it is
+recorded on `TaskConfig` and never sent to Temporal, and `execute_task` has no
+executor parameter. The display `name` is also graph-local. Task bodies run in a
+child process with an allowlisted environment; the only way a provider
+credential enters it is `execute_task`'s `provider_env` argument, which
+`JobWorkflow` never passes, so a task dispatched through `WorkflowDispatch` has
+no provider credentials.
+
 Argument dependency extraction now traverses list/tuple/dictionary values as
 recursively as SDK argument serialization. Repeated predecessors appear once,
 in first-occurrence order. Cyclic argument containers raise `ValueError`.
@@ -64,9 +74,23 @@ An unresolved task proxy now raises `TypeError` if used as a boolean (for exampl
 This does not implement dynamic graph execution or all Python operations on
 unresolved results.
 
-The existing `run()`, `start()` and private legacy Temporal input builder retain
-their transport/result behavior. They do not consume the new return template;
-the shape-preserving contract is opt-in through `capture()`. A manually constructed
-`WorkflowDispatch` without a retained result refuses capture. SDK core remains
-independent of the optional hosted API client and requires no platform account to
-construct a capture.
+The existing `run()`, `run_with_ids()`, `start_with_ids()` and `dispatch()`
+methods and the private legacy Temporal input builder retain their result
+behavior. They do not consume the new return template; the
+shape-preserving contract is opt-in through `capture()`. The legacy builder
+encodes task arguments with the same envelope as task results: JSON values pass
+through (NumPy bool/integer/float scalars unboxed, tuples as lists), task
+references stay `__proxy__` placeholders, and any other object, such as a
+`Circuit`, an array, or a namedtuple or a dict with non-string keys holding no
+task reference, travels as a `__cloudpickle__` envelope that only the task
+child unpickles, so it arrives as the same type (a dict keeps its keys). An
+argument that cannot be cloudpickled, or that hides a task reference inside a
+set, a frozenset, an object attribute or a dict with non-string keys (where it
+would never be resolved), raises `TypeError` naming the task and argument. An
+argument whose encoded JSON exceeds 3 MiB (the same limit as a task result)
+raises `ValueError` naming the task and argument, and so does a task whose arguments together exceed it,
+naming the total. All of these are raised before anything is submitted. The
+graph and the capture keep the original argument objects. A manually
+constructed `WorkflowDispatch` without a retained result refuses capture. SDK
+core remains independent of the optional hosted API client and requires no
+platform account to construct a capture.

@@ -7,7 +7,7 @@ Marqov provides:
 - Temporal-backed workflow durability and scheduling
 - Multi-vendor execution (AWS Braket, IBM Quantum, Azure Quantum, IonQ Direct,
   Rigetti QCS, Quantinuum, CUDA-Q, Quantum Brilliance, Qilimanjaro,
-  PennyLane Lightning, Local)
+  PennyLane Lightning, Alice & Bob, CUNQA, Local)
 
 Quick Start with @task/@workflow:
     >>> from marqov import task, workflow, Circuit
@@ -35,7 +35,7 @@ Simple circuit execution:
     >>> result = await executor.execute(circuit, shots=1000)
 """
 
-__version__ = "0.9.1"
+__version__ = "0.10.1"
 
 # Re-export commonly used items for convenience
 from marqov.circuits import Circuit, bell_state, ghz_state

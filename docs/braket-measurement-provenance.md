@@ -59,7 +59,7 @@ versions or malformed records rather than treating the flag alone as sufficient.
 
 This record does not qualify physical addressing, verbatim compilation, hardware
 availability, pulse timing or overlap. Wire/export and option parity remain
-separate work in marqov-sdk#154, marqov-sdk#66 and marqov-sdk#77. Hosted transport
+separate work in marqov-sdk#154 and marqov-sdk#66. Hosted transport
 must preserve and verify this evidence separately; this local executor addition
 is not hosted or hardware qualification.
 

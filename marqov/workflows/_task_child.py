@@ -8,10 +8,11 @@ Protocol (file-based, never stdout):
 - Reads:  ``$WORKDIR/func_ref``   — raw bytes, base64-decoded cloudpickle of the fn
           ``$WORKDIR/args.json``  — JSON list of args (may contain __cloudpickle__ blobs)
           ``$WORKDIR/kwargs.json`` — JSON dict of kwargs
-- Writes: ``$WORKDIR/result.json`` — JSON: {"node_id": ..., "result": <serialized>}
-                                     or  {"node_id": ..., "error": <str>}
+- Writes: on success, ``$WORKDIR/result.json``: {"node_id": ..., "result": <serialized>}
+          on failure, ``$WORKDIR/error.json``:  {"node_id": ..., "error": <str>}
+          (``result.json`` is never written on failure)
 
-Exit codes: 0 = success, 1 = error (error written to result.json).
+Exit codes: 0 = success, 1 = error (error written to error.json).
 """
 
 from __future__ import annotations
@@ -41,15 +42,32 @@ def _deserialize_value(value: Any) -> Any:
         return value
 
 
+def _unbox_numpy_scalar(value: Any) -> Any:
+    """Unbox NumPy bool/integer/float scalars without narrowing extended precision.
+
+    Mirrored in activity._unbox_numpy_scalar; keep the two in sync.
+    """
+    np = sys.modules.get("numpy")
+    if np is not None and isinstance(value, (np.bool_, np.integer, np.floating)):
+        scalar = value.item()
+        if type(scalar) in (bool, int, float):
+            return scalar
+    return value
+
+
 def _serialize_value(value: Any) -> Any:
-    """Serialize a value for JSON transport (mirrors activity._serialize_value)."""
+    """Serialize a value for JSON transport (mirrors activity._serialize_value).
+
+    A dict with any non-str key is pickled whole so it keeps its keys.
+    """
     import cloudpickle
 
+    value = _unbox_numpy_scalar(value)
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     elif isinstance(value, (list, tuple)):
         return [_serialize_value(item) for item in value]
-    elif isinstance(value, dict):
+    elif isinstance(value, dict) and all(isinstance(k, str) for k in value):
         if value.get("__cloudpickle__"):
             return value
         return {k: _serialize_value(v) for k, v in value.items()}

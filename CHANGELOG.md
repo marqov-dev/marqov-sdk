@@ -14,6 +14,309 @@ release.
   The viewer builds from bundled locked Rust source on first launch; JSON and project
   listing modes work without Rust.
 
+## [0.10.1] - 2026-10-21
+
+A patch release of fixes found after 0.10.0. The platform client keeps its
+error contract on unreadable responses and honours the `result()` deadline,
+workflow task scratch directories are removed and kept out of the shared temp
+root, `NoiseModel.realistic_device` reproduces the T2 it is given, and the
+CUNQA executor stops over-counting shots and validates its inputs. The README
+on PyPI is current again.
+
+### Upgrading
+
+These are fixes, but they can change what existing code observes.
+
+- `NoiseModel.realistic_device` produces different simulated results: the
+  phase-damping rate no longer double counts T1, so coherence now decays at
+  the requested T2. It raises `ValueError` for non-positive `t1`, `t2` or
+  `gate_time` and for `t2 > 2 * t1`.
+- `Job.result()` reports a transport failure after its deadline as
+  `TimeoutError`, and stops retrying once the deadline passes. A response
+  below HTTP 400 whose body is not JSON raises `TransportError` instead of a
+  raw `requests` decode error; `submit_native()` and `submit_script()` still
+  report it as `submission_outcome_unknown` with the idempotency key.
+- Workflow task workdirs are deleted when the task finishes (set
+  `MARQOV_KEEP_TASK_WORKDIR=1` to keep them), and the task's process group is
+  killed when the task process exits, so a background process a task leaves
+  running no longer outlives it. Workdirs now sit one level down, in
+  `$TMPDIR/marqov_worker_*/marqov_task_*`: a host cleanup script that globbed
+  `$TMPDIR/marqov_task_*` for directories a killed worker left behind should
+  also sweep `marqov_worker_*` directories whose worker process has exited.
+- `CUNQAExecutor` raises `ValueError` for `n_qpus` below 1 or not an integer,
+  for `shots` below 1 or not an integer, and for a `startup_timeout_s` or
+  `poll_interval_s` that is not a finite number above 0, before any CUNQA
+  call. The two timing fields are stored as float.
+  `startup_timeout_s` is one budget across `qraise` and vQPU registration, so
+  slow starts time out sooner, and `execution_time_ms` no longer includes
+  teardown.
+- Calling an `async def` `@task` outside a workflow still returns a coroutine
+  that must be awaited. This is now documented; a future minor release may
+  change how direct invocation behaves.
+
+### Fixed
+
+- The platform client raises `TransportError` for a non-JSON response below
+  HTTP 400 and never retries it, clamps a negative `Retry-After` to 0, gains
+  `close()` and context-manager support on `MarqovClient` and the transport,
+  and bounds each `Job.result()` poll and retry by the remaining deadline.
+  (marqov-sdk#277, closes marqov-sdk#150)
+
+- `execute_task` removes each task's workdir after the task finishes, on
+  success, failure and cancellation, off the event loop; task workdirs live in
+  a private per-process parent (mode 0700) instead of the shared temp root.
+  (marqov-sdk#278, closes marqov-sdk#144)
+
+- `NoiseModel.realistic_device` derives phase damping from the pure dephasing
+  rate `1/T_phi = 1/T2 - 1/(2*T1)` and validates its inputs.
+  (marqov-sdk#279, closes marqov-sdk#158)
+
+- `LocalExecutor` records the seed in `metadata["reproducibility"]`, with the
+  same keys as the other executors' records. (marqov-sdk#276, closes
+  marqov-sdk#78)
+
+- `LocalExecutor` looks up the package versions for that record once per
+  process instead of on every call, which had made a small-circuit execute
+  about 40 times slower, and records `None` for a package without
+  distribution metadata instead of raising. (marqov-sdk#284)
+
+- `execute_task` keeps heartbeating until the task workdir has been removed,
+  so a slow removal cannot trip the activity's heartbeat timeout after the
+  task succeeded, and a cancellation that arrives while the heartbeat stops
+  now propagates. (marqov-sdk#285)
+
+- `CUNQAExecutor` uses only the requested number of vQPUs (extra
+  registrations multiplied the shots), validates `n_qpus` and `shots`, keeps a
+  `TimeoutError` raised by `qraise` itself, drops a family whose `qraise`
+  finishes after the timeout, and lets `asyncio.run()` return promptly after a
+  timeout. NumPy integers are accepted for both values. (marqov-sdk#281,
+  closes marqov-sdk#138)
+
+- `CUNQAExecutor` validates `startup_timeout_s` and `poll_interval_s` (a zero
+  poll interval busy-polled vQPU registration), and `ExecutorFactory` accepts
+  the same NumPy values for `n_qpus` and the timing fields as
+  `CUNQAExecutorConfig` does. (marqov-sdk#286)
+
+- The H2 VQE benchmarks build the documented UCC ansatz, which reaches the
+  exact ground energy (the previous circuit stopped 1.23 Ha short), take an
+  optional `seed`, and the raw-SDK scripts use the correct bit order and
+  ground-energy constant. Benchmark code is not in the wheel.
+  (marqov-sdk#280, closes marqov-sdk#160)
+
+### Documentation
+
+- The README, which is the PyPI project page, no longer names 0.7.0 as the
+  current release and uses absolute links so they work on PyPI.
+  (marqov-sdk#274)
+
+- The preflight module no longer claims mandatory server-side budget
+  enforcement; it states that `preflight()` performs no budget comparison.
+  (marqov-sdk#275, closes marqov-sdk#80)
+
+- The `@task` docstring and README document that an async task called outside
+  a workflow must be awaited, and the test suite fails on a never-awaited
+  coroutine. (marqov-sdk#282, closes marqov-sdk#103)
+
+## [0.10.0] — 2026-10-20
+
+A correctness release. A review of the 0.8.1 to 0.9.1 changes found
+twenty-one defects, and a second pass closed nine more open issues in the
+same vein. The common threads: remote executors keep the provider job
+identity on every exit after submission; provenance records report what was
+observed rather than what was requested; options and settings an executor
+cannot apply now fail loudly instead of being ignored; and workflow task
+arguments travel intact. A dependency ceiling on `qiskit` works around an
+upstream break on Linux.
+
+### Upgrading
+
+These changes can alter the behaviour of existing code; the entries below
+give the detail.
+
+- Options an entry point does not apply now raise `TypeError` instead of
+  being ignored: `MarqovDevice.run()` accepts `verbatim` and
+  `disable_qubit_rewiring` on the cloud Braket path and nothing on the
+  local, `marqov-sim`, IBM and Azure paths; `BraketExecutor.execute()`
+  accepts the same two; `LocalExecutor`, `CudaqExecutor`, `RigettiExecutor`,
+  `IonQExecutor`, `AzureQuantumExecutor` and `CUNQAExecutor` accept none;
+  `QuantinuumExecutor` accepts only the options pytket's `process_circuits`
+  reads (`max_cost`, `group`, `pytketpass`, `request_options` and per-call
+  `options` now raise; use the matching `QuantinuumExecutorConfig` fields).
+- `IBMExecutorConfig` raises `ValueError` at construction, including through
+  `ExecutorFactory`, for `resilience_level` other than 1 or
+  `poll_interval_seconds` other than 2.0; SamplerV2 cannot apply either.
+  Stored backend configs carrying other values must be edited.
+- `IBMExecutor.execute()` no longer wraps every post-submission failure in
+  `IBMExecutionError`. A result the SDK refuses after retrieving it raises
+  `ValueError` (shot accounting) or `NotImplementedError` (several classical
+  registers), each naming the job id. Code that re-polls on
+  `IBMExecutionError` should treat those two types as final.
+- `AzureQuantumExecutor.is_device_available()` returns False for Azure's
+  `Unavailable` (it was True); `get_status()` reports `maintenance` instead
+  of `offline` for an unreadable status, a missing target or an unknown
+  vocabulary value, and logs a warning naming a target the workspace does
+  not have.
+- `PreflightResult.dry_run_passed` is `bool | None` and `preflight()` returns
+  `None`, meaning no dry run was attempted; `if result.dry_run_passed:` is
+  now falsy by default. The no-cost warning text changed.
+- Workflow task arguments that are not JSON (a `Circuit`, an array, a
+  dataclass, a namedtuple, a dict with non-string keys, a set, a `datetime`)
+  now reach the task as the original objects instead of JSON-coerced forms;
+  a task result dict with non-string keys comes back from `run()` with its
+  keys intact. A task result hidden inside a set, frozenset, object attribute
+  or non-string-keyed dict, and any argument or node input over 3 MiB, now
+  fail at dispatch with `TypeError` or `ValueError` naming the task.
+  `WorkflowDispatch.run()` and `run_with_ids()` return decoded objects, not
+  the `{"__cloudpickle__": ...}` envelope.
+- `ExecutorFactory.get_supported_providers()` and `is_provider_supported()`
+  now include `"CUNQA"` and `create_executor` routes it; a CUNQA config with
+  a wrongly typed value or a `seed` key raises `ValueError`.
+- `QBRemoteExecutor.get_status()` and `SpeQtrumExecutor.get_status()` return a
+  `DeviceStatus` with status `maintenance` instead of raising;
+  `SpeQtrumExecutor` raises `ImportError` at construction without `qilisdk`.
+- Every extra that declares `qiskit` caps it below 2.6; the `[ibm]` and `[all]`
+  extras require `qiskit-ibm-runtime>=0.21.0`. Environments that pin
+  `qiskit>=2.6` cannot resolve this release until the cap is lifted.
+- `Circuit.to_openqasm()` and `to_qiskit()` always name the register `q`.
+
+### Fixed
+
+- SPAM calibration registers wires through each target before preparation,
+  preserving absolute bit positions and preventing false 0.5 readout fidelity
+  on noiseless qubits above zero. Correction accepts mixed-width bitstrings
+  independent of insertion order, combines equivalent padded outcomes and
+  reports matrix-width mismatches clearly. (marqov-sdk#159)
+
+- IBM execution releases the caller at `timeout_seconds` instead of holding the
+  script until the queued job finishes, and attaches `remote_job` identity with
+  a note to every error after submission, including cancellation. Multi-register
+  circuits and shot-accounting mismatches raise their own error types naming
+  the job instead of `IBMExecutionError`. A timeout still never cancels the IBM
+  job. (marqov-sdk#260)
+
+- Quantum Brilliance remote and SpeQtrum execution keep the job identity when
+  the awaiting task is cancelled during submission, so callers know whether a
+  job was accepted and avoid double submission. `get_status()` on both returns
+  a `maintenance` status on transport failure, as the other executors do, and
+  SpeQtrum raises a clear `ImportError` at construction when `qilisdk` is
+  missing. (marqov-sdk#258)
+
+- Circuit export and import: QASM 2 `swap` round-trips through
+  `from_openqasm`, `from_braket` accepts terminal measurements as the other
+  importers do, `to_pyquil` works for Braket-imported gates and raises
+  `NotImplementedError` for gates with no Quil equivalent, and `to_openqasm`
+  always names the register `q`, so repeated exports are byte-identical and
+  reproducibility hashes are stable across calls. (marqov-sdk#259)
+
+- Qristal simulation records the noise model and an `inputs_sha256` hash in the
+  reproducibility record, so noiseless and noisy runs, and runs with different
+  noise models, no longer produce identical records. NumPy-typed noise inputs
+  are accepted. (marqov-sdk#255)
+
+- QiliSDK validates sampler counts against the requested shots and the circuit
+  width, raising `RuntimeError` on mismatch, and records the observed shot total
+  and `bit_order` in the reproducibility record. (marqov-sdk#256)
+
+- Azure Qiskit runs report `cost_estimate` and provider execution time from the
+  job details; previously both were silently lost. Unknown provider timing is
+  `metadata["quantum_time_ms"] = None` with wall time in `execution_time_ms`.
+  The Cirq error mapping that could never match was removed. (marqov-sdk#257)
+
+- Braket retains the task identity (`remote_job` with the task ARN and a note)
+  on provider errors, result-processing errors and cancellation during
+  submission, matching the Azure and Rigetti executors. (marqov-sdk#252)
+
+- IonQ on the legacy v0.3 route attaches `remote_job` to errors, logs the job id
+  and sends a best-effort cancel when a wait is interrupted or the job reports
+  an unrecognised status, and raises the intended `RuntimeError` for a failed
+  job with `"failure": null`. (marqov-sdk#254)
+
+- Azure, Braket and Rigetti log a warning naming the job as soon as a blocking
+  result wait is interrupted, so the job id is recorded even when
+  `asyncio.run()` turns the cancellation into a bare `KeyboardInterrupt`.
+  (marqov-sdk#251)
+
+- `WorkflowDispatch.run()` and `run_with_ids()` return decoded task outputs
+  instead of the base64 cloudpickle envelope, and NumPy scalar outputs are
+  converted to Python values before serialisation. (marqov-sdk#253)
+
+- `IBMExecutor`, the Qristal `SimulationExecutor` and the platform client accept
+  NumPy integer shot counts. `LightningExecutor` now raises `NotImplementedError`
+  for an unsupported device name before constructing it. (marqov-sdk#250)
+
+- CUDA-Q execution raises `RuntimeError` when the sampled shot total differs
+  from the request, and its result carries `vendor`, `engine`, `access_path`
+  and a `reproducibility` record. (marqov-sdk#248)
+
+- `ExecutorFactory.get_supported_providers()` and `is_provider_supported()` now
+  include Alice & Bob, and the README provider table lists it. (marqov-sdk#249)
+
+- `MarqovDevice.run()` and every executor's `execute()` raise `TypeError`
+  for options they do not apply, naming the entry point, the option and the
+  supported set; `verbatim=True` can no longer vanish on a path that does not
+  implement it. (marqov-sdk#271, closes marqov-sdk#77)
+
+- `IBMExecutorConfig` rejects `resilience_level` and `poll_interval_seconds`
+  values the SamplerV2 path cannot apply instead of silently ignoring them.
+  (marqov-sdk#268, closes marqov-sdk#79)
+
+- Azure `is_device_available()` no longer reports an `Unavailable` target as
+  available, `get_status()` reports an unreadable status as `maintenance`
+  rather than `offline`, and a target missing from the workspace is logged.
+  (marqov-sdk#267, closes marqov-sdk#132)
+
+- `preflight()` no longer reports a dry run it never attempted or implies a
+  budget check; `experiment_config` key names are logged at debug level,
+  never values. (marqov-sdk#270, closes marqov-sdk#163)
+
+- Workflow task arguments that are not JSON travel in the same cloudpickle
+  envelope as results, with NumPy scalars unboxed, so the documented
+  `Circuit`-argument example dispatches; each argument and each node's input
+  are capped at 3 MiB before submission; a task result the worker cannot
+  resolve is refused at dispatch; non-string dict keys survive in both
+  directions. (marqov-sdk#272, closes marqov-sdk#142)
+
+- `ExecutorFactory` routes the `"CUNQA"` provider and validates its config
+  values. (marqov-sdk#269, closes marqov-sdk#139)
+
+### Changed
+
+- The lockfile (`uv.lock`, dev and CI only) upgrades urllib3, pyjwt, pillow,
+  oauthlib, anyio and pyasn1 past their advisories; the cryptography and
+  setuptools advisories remain open, pinned by azure-quantum and
+  amazon-braket. Nothing a PyPI user installs changes. (marqov-sdk#266,
+  marqov-sdk#186)
+
+- The `[ibm]` and `[all]` extras require `qiskit-ibm-runtime>=0.21.0`, the first
+  release that ships `SamplerV2`, which `IBMExecutor` imports. (marqov-sdk#247)
+
+- Every extra that declares `qiskit` now caps it below 2.6. qiskit 2.6.0 breaks
+  `pennylane-lightning` 0.45.0 on Linux x86_64 (every `lightning.qubit`
+  construction fails with a static TLS allocation error once qiskit is loaded
+  first). Lift the cap when pennylane-lightning or qiskit ships a fix for the
+  TLS allocation. (marqov-sdk#262)
+
+### Documentation
+
+- Corrected 0.9.x documentation drift: the marqov-quantumflow pin in
+  `docs/braket-native-labels.md`, the versions the IBM qualification receipt
+  records, the Rigetti `cancel` docstring, and the squash-merge note in
+  `RELEASING.md`. The four timeouts docs now say where the job id is logged
+  when a wait is interrupted. (marqov-sdk#250, marqov-sdk#251)
+
+- The Python 3.13 qualification record is regenerated from a `main` commit
+  (the previous Linux record cited a pull-request merge ref that no branch
+  reaches), and the per-profile test counts in `docs/python-compatibility.md`
+  match it again. (marqov-sdk#263)
+
+- `SECURITY.md` lists the supported minor (pinned by a test), CONTRIBUTING
+  documents `DeviceStatus.execution_windows` and the current quilc/qvm flags,
+  the platform-client docs describe the paid-backend error and `backends()`
+  ordering as the code behaves, and `@task(executor=...)` is documented as
+  reserved with `provider_env` not wired for dispatched tasks.
+  (marqov-sdk#269, marqov-sdk#272, closes marqov-sdk#167, marqov-sdk#151,
+  marqov-sdk#145)
+
 ## [0.9.1] — 2026-10-10
 
 ### Changed

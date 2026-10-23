@@ -28,6 +28,8 @@ rather than a failure, but the first upload of a version is still one-way.
       a dated entry with no tag never shipped; fold it in.
 - [ ] Credit contributors: `git shortlog -sne vLAST..main`.
 - [ ] Bump `__version__` in `marqov/__init__.py` (single source; pyproject is `dynamic`).
+      In the same commit, move the supported row in `SECURITY.md` to the new
+      minor: `tests/test_version.py` pins the table to the current minor.
 - [ ] No stale version strings: `git grep '<previous-version>'`.
 
 ## 2. Pre-flight
@@ -39,7 +41,8 @@ rather than a failure, but the first upload of a version is still one-way.
 - [ ] Local full suite green, right extras + fresh metadata:
       ```
       uv sync --extra qiskit --extra cirq --extra pennylane --extra pytket \
-              --extra pyquil --extra braket --extra dev --reinstall-package marqov
+              --extra pyquil --extra braket --extra azure --extra dev \
+              --reinstall-package marqov
       uv run pytest -q          # incl. test_version (source == installed)
       ```
       Traps: use SEPARATE `--extra` flags (a comma-list is read as one nonexistent
@@ -121,7 +124,9 @@ Dependencies resolve from real PyPI; it does not upload anything.
 ### ⚠️ The tag is the point of no return
 Pushing a `v*` tag publishes to real PyPI, and **a PyPI version can never be
 reused or unpublished.** Tag the exact SHA you validated on TestPyPI, and only
-after CI is green on it:
+after CI is green on it. Under squash-merge the PyPI wheel is rebuilt from the
+merge commit and will differ from the TestPyPI wheel built from the PR branch;
+the `verify` job re-runs on the tag:
 
 ```
 git tag -a vX.Y.Z <validated-sha> -m "marqov X.Y.Z"

@@ -14,14 +14,16 @@ import queue
 import re
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import requests
 from requests.adapters import HTTPAdapter
 
-from marqov.executors.base import BaseExecutor, ExecutionResult
+from marqov.executors._blocking import BlockingCalls
+from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 
 
 @dataclass(frozen=True)
@@ -280,11 +282,18 @@ class QBRemoteExecutor(BaseExecutor):
         if kwargs:
             raise TypeError("QB remote supports no extra execution options")
         body = _payload(self._validate_circuit(circuit), shots)
-        return await asyncio.to_thread(self._submit, body)
-
-    def _submit(self, body: dict[str, Any]) -> ExecutionResult:
         deadline = time.monotonic() + self.config.timeout_seconds
         self.last_job = None
+        with BlockingCalls() as calls:
+            job = await calls.submit_owned(
+                self._submit, body, deadline, label="QB circuit", job_id_of=lambda j: j.job_id
+            )
+            return cast(ExecutionResult, await calls.call(self._poll, job, deadline))
+
+    def _submit(
+        self, body: dict[str, Any], deadline: float, claim: Callable[[], None]
+    ) -> QBRemoteJob:
+        claim()
         try:
             reply = self._request("POST", "api/v1/circuits", deadline, body)
             job_id = reply["id"]
@@ -301,7 +310,7 @@ class QBRemoteExecutor(BaseExecutor):
             json.dumps(body, sort_keys=True, separators=(",", ":")),
         )
         self.last_job = job
-        return self._poll(job, deadline)
+        return job
 
     async def readback(self, job: QBRemoteJob) -> ExecutionResult:
         if type(job) is not QBRemoteJob or (job.endpoint, job.target, job.account, job.model) != (
@@ -369,8 +378,9 @@ class QBRemoteExecutor(BaseExecutor):
         except Exception:  # noqa: BLE001 — retain known identity without replay
             raise QBRemoteExecutionError(job.job_id) from None
 
-    async def get_status(self) -> Any:
-        raise NotImplementedError("Pinned QB circuit API exposes no device status contract")
+    async def get_status(self) -> DeviceStatus:
+        # Pinned QB circuit API exposes no device status contract.
+        return DeviceStatus(status="maintenance", queue_depth=None, queue_time_seconds=None)
 
     async def cancel(self, job_id: str) -> bool:
         return False

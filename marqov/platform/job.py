@@ -39,7 +39,7 @@ import time
 from typing import TYPE_CHECKING
 
 from ._models import PlatformResult, is_terminal
-from .errors import JobFailed
+from .errors import JobFailed, TransportError
 
 if TYPE_CHECKING:
     from ._transport import Transport
@@ -152,17 +152,22 @@ class Job:
         back-off with jitter is applied, capped at
         :data:`_MAX_BACKOFF_SECONDS`.
 
-        The ``wait`` value sent to the server is computed as::
+        Each poll's HTTP timeout is bounded by the remaining budget, and the
+        ``wait`` value sent to the server is computed from it::
 
+            request_timeout = min(transport.timeout, remaining_budget)
             wait = min(
                 _SERVER_MAX_WAIT_SECONDS,       # 22 s server cap
                 remaining_budget,               # seconds left in timeout
-                transport.timeout - _WAIT_MARGIN_SECONDS,  # per-request headroom
+                request_timeout - _WAIT_MARGIN_SECONDS,  # per-request headroom
             )
 
         This guarantees the server-side hold is **strictly less than** the
         HTTP request timeout, so the transport cannot time out before the
-        server responds.
+        server responds.  The deadline is also passed to the transport, which
+        starts no retry and runs no backoff after it, and caps a retry's
+        timeout at the time left.  A transport failure raised once the
+        deadline has passed is reported as :class:`TimeoutError`.
 
         Args:
             timeout:       Overall wall-clock deadline in seconds.  If the
@@ -185,9 +190,12 @@ class Job:
                 ``error_message`` field is **not** returned by the status
                 endpoint — see module docstring).
             :class:`TimeoutError`: The overall ``timeout`` elapsed before the
-                job completed.  The job continues running server-side.
+                job completed, including when a poll in flight at the deadline
+                fails with a transport error (chained as ``__cause__``).  The
+                job continues running server-side.
             :class:`~marqov.platform.errors.MarqovPlatformError`: Any
-                non-2xx transport error.
+                non-2xx transport error, or a transport failure that happens
+                before the deadline.
 
         .. note::
             ``dispatch_failed`` is treated as a ``failed`` terminal state
@@ -197,38 +205,45 @@ class Job:
         """
         deadline = time.monotonic() + timeout
         backoff = poll_interval
-
-        # Maximum ``wait`` budget based on the per-request transport timeout
-        # (leave _WAIT_MARGIN_SECONDS headroom so the HTTP request does not
-        # time out before the server responds).
-        max_wait_per_request = max(
-            0, int(self._transport.timeout - _WAIT_MARGIN_SECONDS)
-        )
+        timeout_message = f"Job {self._job_id} did not complete within {timeout}s"
 
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError(
-                    f"Job {self._job_id} did not complete within {timeout}s"
-                )
+                raise TimeoutError(timeout_message)
 
-            # Compute server-side wait: must be < transport.timeout.
-            # The server caps the "wait" param at 22 seconds.
+            # Bound this poll by the remaining budget so one hanging request
+            # cannot overrun the deadline by a full transport timeout.
+            request_timeout = min(self._transport.timeout, remaining)
+
+            # Compute server-side wait: must be < request_timeout (leave
+            # _WAIT_MARGIN_SECONDS headroom so the HTTP request does not time
+            # out before the server responds).  The server caps the "wait"
+            # param at 22 seconds.
             wait_seconds = int(
                 min(
                     _SERVER_MAX_WAIT_SECONDS,
                     remaining,
-                    max_wait_per_request,
+                    request_timeout - _WAIT_MARGIN_SECONDS,
                 )
             )
             # Ensure wait is always strictly positive when budget allows
             wait_seconds = max(0, wait_seconds)
 
-            resp = self._transport.request(
-                "GET",
-                f"/api/jobs/{self._job_id}/status",
-                wait=wait_seconds if wait_seconds > 0 else None,
-            )
+            try:
+                resp = self._transport.request(
+                    "GET",
+                    f"/api/jobs/{self._job_id}/status",
+                    wait=wait_seconds if wait_seconds > 0 else None,
+                    timeout=request_timeout,
+                    deadline=deadline,
+                )
+            except TransportError as exc:
+                # A poll cut short by the deadline is a timeout, not a
+                # transport fault; one that failed earlier propagates as is.
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(timeout_message) from exc
+                raise
             self._last_status = resp
             raw_status: str = resp.get("status", "unknown")
 
@@ -263,9 +278,7 @@ class Job:
             # the next poll, but do not sleep past the deadline.
             remaining_after_poll = deadline - time.monotonic()
             if remaining_after_poll <= 0:
-                raise TimeoutError(
-                    f"Job {self._job_id} did not complete within {timeout}s"
-                )
+                raise TimeoutError(timeout_message)
 
             jitter = self.rng.uniform(0.0, backoff * 0.25)
             sleep_time = min(backoff + jitter, _MAX_BACKOFF_SECONDS, remaining_after_poll)

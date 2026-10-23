@@ -80,11 +80,12 @@ class BackendUnavailable(MarqovPlatformError):
 
 
 class PaidBackendNotSupportedYet(MarqovPlatformError):
-    """Free-path guard raised in v1.0 when a paid backend is requested.
+    """Raised when the server rejects a backend that needs a pre-run cost analysis.
 
-    In v1.0 the platform client routes all jobs through the free execution
-    path.  Any attempt to target a paid QPU backend raises this error so
-    callers fail fast rather than incurring unexpected charges.
+    The client does not check the backend slug itself: it sends the requested
+    slug as given.  The server answers a backend that requires a pre-run
+    analysis (paid backends) with HTTP 422 and the ``analysis_required`` error
+    code, which the transport maps to this exception.
 
     .. deprecated::
         This exception is **retained but deprecated** from v1.1 onward.
@@ -124,8 +125,8 @@ class RateLimited(MarqovPlatformError):
             seconds.  Accepts both the delta-seconds form (e.g. ``"30"``) and
             the RFC 7231 HTTP-date form (e.g. ``"Wed, 21 Oct 2026 07:28:00
             GMT"``) — the latter is converted to a delta against the current
-            time, clamped to ``>= 0``.  ``None`` if the header was absent or
-            unparseable.
+            time.  Either form is clamped to ``>= 0``.  ``None`` if the header
+            was absent or unparseable.
     """
 
     def __init__(

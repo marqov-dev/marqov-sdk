@@ -2,6 +2,7 @@
 
 import math
 
+import numpy as np
 import pytest
 
 from unittest.mock import MagicMock, patch
@@ -179,8 +180,74 @@ class TestNoiseModelPresets:
                 expected = 1 - math.exp(-gate_time / t1)
                 assert abs(channel.gamma - expected) < 1e-15
             elif isinstance(channel, PhaseDamping):
-                expected = 1 - math.exp(-gate_time / t2)
+                expected = 1 - math.exp(-2 * gate_time * (1 / t2 - 1 / (2 * t1)))
                 assert abs(channel.gamma - expected) < 1e-15
+
+    @pytest.mark.parametrize(
+        ("t1", "t2", "gate_time"),
+        [
+            (50e-6, 30e-6, 50e-9),
+            (100e-6, 150e-6, 20e-9),
+        ],
+    )
+    def test_realistic_device_reproduces_t1_and_t2(
+        self, t1: float, t2: float, gate_time: float
+    ) -> None:
+        """Composed Kraus channels decay coherence at 1/T2 and population at 1/T1."""
+        model = NoiseModel.realistic_device(t1=t1, t2=t2, gate_time=gate_time, num_qubits=1)
+        # Per-gate superoperator acting on row-major vec(rho), built from the
+        # standard Kraus operators of the channels the model actually holds.
+        step = np.eye(4)
+        for channel, _ in model.entries():
+            g = channel.gamma
+            if isinstance(channel, AmplitudeDamping):
+                kraus = [
+                    np.array([[1, 0], [0, math.sqrt(1 - g)]]),
+                    np.array([[0, math.sqrt(g)], [0, 0]]),
+                ]
+            else:
+                assert isinstance(channel, PhaseDamping)
+                kraus = [
+                    np.array([[1, 0], [0, math.sqrt(1 - g)]]),
+                    np.array([[0, 0], [0, math.sqrt(g)]]),
+                ]
+            step = sum(np.kron(k, k.conj()) for k in kraus) @ step
+
+        steps = round(2 * min(t1, t2) / gate_time)
+        evolve = np.linalg.matrix_power(step, steps)
+        t = steps * gate_time
+
+        plus = (evolve @ np.full(4, 0.5)).reshape(2, 2)
+        t2_eff = -t / math.log(abs(plus[0, 1]) / 0.5)
+        assert abs(t2_eff / t2 - 1) < 0.01
+
+        excited = (evolve @ np.array([0.0, 0.0, 0.0, 1.0])).reshape(2, 2)
+        t1_eff = -t / math.log(excited[1, 1].real)
+        assert abs(t1_eff / t1 - 1) < 0.01
+
+    @pytest.mark.parametrize(
+        ("kwargs", "name"),
+        [
+            ({"t1": 0, "t2": 30e-6, "gate_time": 50e-9}, "t1"),
+            ({"t1": -1e-6, "t2": 30e-6, "gate_time": 50e-9}, "t1"),
+            ({"t1": 50e-6, "t2": 0, "gate_time": 50e-9}, "t2"),
+            ({"t1": 50e-6, "t2": 30e-6, "gate_time": 0}, "gate_time"),
+            ({"t1": 50e-6, "t2": 2.5 * 50e-6, "gate_time": 50e-9}, "t2"),
+        ],
+    )
+    def test_realistic_device_rejects_invalid_times(
+        self, kwargs: dict[str, float], name: str
+    ) -> None:
+        """Non-positive times and T2 > 2*T1 raise ValueError naming the parameter."""
+        with pytest.raises(ValueError, match=name):
+            NoiseModel.realistic_device(num_qubits=1, **kwargs)
+
+    def test_realistic_device_accepts_t2_at_limit(self) -> None:
+        """T2 == 2*T1 is allowed and needs no pure dephasing."""
+        model = NoiseModel.realistic_device(t1=50e-6, t2=100e-6, gate_time=50e-9, num_qubits=1)
+        for channel, _ in model.entries():
+            if isinstance(channel, PhaseDamping):
+                assert channel.gamma == 0.0
 
 
 

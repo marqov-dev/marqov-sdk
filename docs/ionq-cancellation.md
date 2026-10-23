@@ -11,15 +11,21 @@ that ID using the submission's original endpoint and authentication. It never
 uses another concurrent call's ID and never replays the POST. Cancellation after
 the worker returns, before the coroutine resumes, also schedules cleanup.
 
-A cancellation exception note and warning describe unresolved acceptance. If
+A cancellation exception note and warning describe unresolved acceptance.
+`asyncio.run()` replaces the task's `CancelledError` with a bare
+`KeyboardInterrupt` on Ctrl+C, so there the job ID, when submission had obtained
+one, is in that warning log, not on the exception. If
 submission finishes without a usable ID, a warning states that acceptance is
 unknown. Failed cancellation or unavailable cleanup scheduling logs the known
 job ID and warns that the job may still be running. A successful HTTP response
 to a cancellation request does not prove the provider stopped execution.
 Do not automatically resubmit an interrupted or uncertain submission.
 
-Cancellation while polling retains the existing best-effort cancellation
-behavior. Normal successful execution and result metadata are unchanged.
+Cancellation or timeout while polling sends one best-effort cancellation
+request for the known job ID, and the raised exception carries that ID in
+`remote_job`. On the default v0.3 route an unrecognized job status is cancelled
+the same way, and each of these exits logs the job ID at warning level.
+Normal successful execution and result metadata are unchanged.
 `_current_job_id` remains private compatibility tracking; it is not authoritative
 ownership for concurrent calls.
 

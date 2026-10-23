@@ -159,6 +159,72 @@ class TestBackendConversion:
         assert imported.num_qubits == original.num_qubits
 
 
+class TestFromBraket:
+    """Tests for Circuit.from_braket() measurement and non-gate handling."""
+
+    @staticmethod
+    def _unitary(circuit: Circuit):
+        return circuit._qf.asgate().asoperator()
+
+    def test_terminal_measurement_skipped(self) -> None:
+        import numpy as np
+        from braket.circuits import Circuit as BK
+
+        source = BK().h(0).cnot(0, 1).rx(1, 0.37).measure(0).x(1).measure(1)
+        imported = Circuit.from_braket(source)
+        expected = Circuit().h(0).cnot(0, 1).rx(0.37, 1).x(1)
+        np.testing.assert_allclose(
+            self._unitary(imported), self._unitary(expected), atol=1e-12, rtol=1e-12,
+        )
+
+    def test_mid_circuit_measurement_raises(self) -> None:
+        # Braket's builder refuses a gate after a measure, but an instruction
+        # list built elsewhere can still carry one; from_braket reads only
+        # `.instructions`.
+        from types import SimpleNamespace
+
+        from braket.circuits import Gate, Instruction
+        from braket.circuits.measure import Measure
+
+        source = SimpleNamespace(instructions=[
+            Instruction(Gate.H(), 0),
+            Instruction(Measure(), 0),
+            Instruction(Gate.X(), 0),
+        ])
+        with pytest.raises(NotImplementedError, match=r"mid-circuit measurement \(qubits \[0\]\)"):
+            Circuit.from_braket(source)
+
+    @pytest.mark.parametrize("source, name, index", [
+        (lambda bk: bk.Circuit().h(0).depolarizing(0, 0.1), "Depolarizing", 1),
+        (lambda bk: bk.Circuit().h(0).add_verbatim_box(bk.Circuit().rx(0, 0.3)), "StartVerbatimBox", 1),
+    ])
+    def test_non_gate_operator_names_operator_and_index(self, source, name, index) -> None:
+        import braket.circuits as bk
+
+        with pytest.raises(NotImplementedError, match=f"'{name}' at index {index}"):
+            Circuit.from_braket(source(bk))
+
+    def test_measured_idle_qubit_is_dropped_like_from_qiskit(self) -> None:
+        """A qubit only a measurement touches is dropped, as from_qiskit does."""
+        from braket.circuits import Circuit as BK
+        from qiskit import QuantumCircuit
+
+        reference = QuantumCircuit(2, 2)
+        reference.h(0)
+        reference.measure([0, 1], [0, 1])
+        expected = Circuit.from_qiskit(reference)
+
+        imported = Circuit.from_braket(BK().h(0).measure([0, 1]))
+        assert list(imported._qf.qubits) == list(expected._qf.qubits) == [0]
+        assert imported.to_dict() == expected.to_dict()
+
+    def test_result_types_are_dropped(self) -> None:
+        from braket.circuits import Circuit as BK
+
+        imported = Circuit.from_braket(BK().h(0).probability())
+        assert [gate["gate"] for gate in imported.to_dict()["gates"]] == ["H"]
+
+
 class TestFromQiskit:
     """Tests for Circuit.from_qiskit()."""
 
@@ -173,6 +239,22 @@ class TestFromQiskit:
         orig_amps = original.simulate().tensor.flatten()
         imported_amps = imported.simulate().tensor.flatten()
         assert np.allclose(np.abs(orig_amps), np.abs(imported_amps))
+
+    def test_to_qiskit_register_is_named_q(self) -> None:
+        """The exported register name does not depend on earlier exports."""
+        import numpy as np
+        from qiskit.quantum_info import Operator
+
+        circuit = Circuit().h(0).cnot(0, 2).rz(0.37, 1)
+        circuit.to_qiskit()
+        exported = circuit.to_qiskit()
+        assert [(reg.name, reg.size) for reg in exported.qregs] == [("q", 3)]
+        reference = circuit._qf.asgate().asoperator()
+        # Qiskit orders qubit 0 least significant; QuantumFlow most.
+        perm = [int(format(i, "03b")[::-1], 2) for i in range(8)]
+        np.testing.assert_allclose(
+            Operator(exported).data[np.ix_(perm, perm)], reference, atol=1e-12,
+        )
 
     def test_single_qubit_gates(self) -> None:
         """All single-qubit gates convert correctly."""
@@ -868,6 +950,66 @@ class TestFromPyquil:
             Circuit.from_pyquil(program)
 
 
+def _braket_importable_gates() -> list[str]:
+    from quantumflow.xbraket import BRAKET_TO_QF
+
+    return sorted(BRAKET_TO_QF)
+
+
+class TestToPyquil:
+    """Tests for Circuit.to_pyquil()."""
+
+    @staticmethod
+    def _program_unitary_big_endian(program, num_qubits: int):
+        """pyQuil's program unitary reordered to QuantumFlow's q0-major order."""
+        import numpy as np
+        from pyquil.simulation.tools import program_unitary
+
+        unitary = program_unitary(program, n_qubits=num_qubits)
+        perm = [int(format(i, f"0{num_qubits}b")[::-1], 2) for i in range(2 ** num_qubits)]
+        return unitary[np.ix_(perm, perm)]
+
+    @pytest.mark.parametrize("gate_name", _braket_importable_gates())
+    def test_every_braket_importable_gate_exports_with_same_unitary(self, gate_name) -> None:
+        """Each gate exports, as valid Quil, with the circuit's unitary."""
+        import numpy as np
+        from braket.circuits import Circuit as BK
+        from braket.circuits import Instruction, gates
+        from braket.circuits.angled_gate import AngledGate
+
+        ctor = getattr(gates, gate_name)
+        operator = ctor(0.37) if issubclass(ctor, AngledGate) else ctor()
+        source = BK().add_instruction(
+            Instruction(operator, list(range(ctor.fixed_qubit_count())))
+        )
+        circuit = Circuit.from_braket(source)
+        program = circuit.to_pyquil()
+        exported = self._program_unitary_big_endian(program, circuit.num_qubits)
+        expected = circuit._qf.asgate().asoperator()
+        # Quil has no global-phase gate, so translated gates (V, Si, CY, ...)
+        # can only match up to one global phase factor.
+        pivot = np.unravel_index(np.argmax(np.abs(expected)), expected.shape)
+        phase = exported[pivot] / expected[pivot]
+        assert abs(abs(phase) - 1) < 1e-12
+        np.testing.assert_allclose(exported, phase * expected, atol=1e-12, rtol=1e-12)
+
+    def test_gate_without_quil_name_is_refused(self, monkeypatch) -> None:
+        mapping = {k: v for k, v in Circuit._QF_TO_QUIL.items() if k != "H"}
+        monkeypatch.setattr(Circuit, "_QF_TO_QUIL", mapping)
+        with pytest.raises(
+            NotImplementedError,
+            match="Circuit.to_pyquil\\(\\): gate 'H' at position 1 has no Quil equivalent",
+        ):
+            Circuit().x(0).h(0).to_pyquil()
+
+    def test_unbound_parameter_is_refused(self) -> None:
+        import sympy
+
+        circuit = Circuit().h(0).rx(sympy.Symbol("theta"), 0)
+        with pytest.raises(ValueError, match="Circuit.to_pyquil\\(\\): gate 'Rx' at position 1 has an unbound"):
+            circuit.to_pyquil()
+
+
 class TestOpenQASM:
     """Tests for OpenQASM import and export."""
 
@@ -903,6 +1045,41 @@ class TestOpenQASM:
         qasm = circuit.to_openqasm(version=3)
         restored = Circuit.from_openqasm(qasm)
         assert restored.num_qubits == 2
+
+    @staticmethod
+    def _single_gate_circuit(method_name: str) -> Circuit:
+        """A two-qubit circuit whose last gate is ``method_name``."""
+        circuit = Circuit().h(0).h(1)
+        if method_name in Circuit._ROTATION_GATES:
+            return getattr(circuit, method_name)(0.37, 0)
+        if method_name in ("cnot", "cz", "swap"):
+            return getattr(circuit, method_name)(0, 1)
+        return getattr(circuit, method_name)(0)
+
+    @pytest.mark.parametrize("version", [2, 3])
+    @pytest.mark.parametrize("method_name", sorted(set(Circuit._QISKIT_GATE_MAP.values())))
+    def test_every_canonical_gate_roundtrips(self, method_name, version) -> None:
+        """to_openqasm(version) output parses back to the same unitary."""
+        import numpy as np
+
+        original = self._single_gate_circuit(method_name)
+        restored = Circuit.from_openqasm(original.to_openqasm(version=version))
+        np.testing.assert_allclose(
+            restored._qf.asgate().asoperator(),
+            original._qf.asgate().asoperator(),
+            atol=1e-12, rtol=1e-12,
+        )
+
+    def test_canonical_gate_set_has_twelve_gates(self) -> None:
+        assert len(set(Circuit._QISKIT_GATE_MAP.values())) == 12
+
+    @pytest.mark.parametrize("version", [2, 3])
+    def test_export_is_deterministic(self, version) -> None:
+        """Repeated and equal-circuit exports are byte-identical."""
+        circuit = Circuit().h(0).cnot(0, 1).rx(0.37, 1)
+        first = circuit.to_openqasm(version=version)
+        assert circuit.to_openqasm(version=version) == first
+        assert Circuit().h(0).cnot(0, 1).rx(0.37, 1).to_openqasm(version=version) == first
 
     def test_roundtrip_bell_state(self) -> None:
         """Bell state survives QASM roundtrip."""
@@ -1005,7 +1182,7 @@ class TestOpenQASM:
 
         calls = []
 
-        def parser(source):
+        def parser(source, **kwargs):
             calls.append(source)
             raise qasm2.QASM2ParseError("preamble is not supported")
 

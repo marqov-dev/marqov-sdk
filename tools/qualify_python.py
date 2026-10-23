@@ -19,6 +19,8 @@ import xml.etree.ElementTree as ET
 PROFILES = {
     "core": [
         "tests/test_local_sampling.py",
+        "tests/test_spam.py",
+        "tests/test_spam_correction.py",
         "tests/test_workflow_outputs.py",
         "tests/test_transport_graph_integrity.py",
     ],

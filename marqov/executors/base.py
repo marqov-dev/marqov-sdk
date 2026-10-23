@@ -4,10 +4,27 @@ All executors must inherit from BaseExecutor and implement the execute method.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from marqov.circuits import Circuit
+
+
+def reject_unsupported_options(
+    owner: str, options: Mapping[str, Any], supported: Collection[str] = ()
+) -> None:
+    """Raise TypeError naming every option outside the owner's allow-list.
+
+    An option that is accepted and then dropped looks exactly like one that
+    was applied, so unrecognised options refuse instead (marqov-sdk#77).
+    """
+    unknown = sorted(set(options) - set(supported))
+    if unknown:
+        allowed = ", ".join(sorted(supported)) or "none"
+        raise TypeError(
+            f"{owner} got unsupported option(s): {', '.join(unknown)}. Supported: {allowed}"
+        )
 
 
 @dataclass

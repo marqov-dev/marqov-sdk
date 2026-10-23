@@ -74,6 +74,7 @@ status. Job polling (queued → running → completed) is handled internally ins
 | `status` | `str` | `"online"`, `"offline"`, `"maintenance"` |
 | `queue_depth` | `int \| None` | Number of queued tasks, or `None` if unknown |
 | `queue_time_seconds` | `int \| None` | Estimated queue wait, or `None` if unknown |
+| `execution_windows` | `list[dict[str, str]] \| None` | Device execution windows as `[{"executionDay": <ExecutionDay.value>, "windowStartHour": "HH:MM:SS", "windowEndHour": "HH:MM:SS"}]`, UTC. `None` = unknown / not-applicable / serialize-error; `[]` = device reported none. Defaults to `None`, so `get_status()` implementations need not set it; `BraketExecutor` is the one backend that does. |
 
 The default `BaseExecutor.get_status()` returns `DeviceStatus.always_online()`.
 Cloud backends should override this to query the provider's device status endpoint.
@@ -98,10 +99,11 @@ way `Circuit` is portable across digital ones. `execute_analog()` still returns
 the same `ExecutionResult` as `execute()`, so only the input side is special.
 
 **`CUNQAExecutor`** (`marqov/executors/cunqa.py`) — implements `execute()`
-exactly like every other executor, but as of this writing is not wired into
-`ExecutorFactory.create_executor()`'s provider dispatch. Construct it directly
-until that's done; check `factory.py` for whether this note is still accurate
-before relying on it.
+exactly like every other executor and is reachable through
+`ExecutorFactory.create_executor()` as provider `"CUNQA"`
+(`_create_cunqa_executor` in `marqov/executors/factory.py`). The `cunqa`
+package itself is imported only when an executor is built without an injected
+client, so the factory stays importable where `cunqa` is not installed.
 
 **`qilisdk` and `qristal` aren't `marqov[...]` extras.** Both are installed
 separately (`pip install qilisdk`, or build `qristal` from source/Docker for
@@ -170,14 +172,17 @@ The Rigetti QCS executor tests run against a local QVM instance. QVM requires
 ```bash
 docker pull rigetti/quilc
 docker pull rigetti/qvm
-docker run -d -p 5555:5555 rigetti/quilc -server
-docker run -d -p 5000:5000 rigetti/qvm -server
+docker run -d -p 5555:5555 rigetti/quilc -R
+docker run -d -p 5000:5000 rigetti/qvm -S
 ```
 
 Verify:
 ```bash
 python -c "from pyquil import get_qc; qc = get_qc('2q-qvm'); print(qc)"
 ```
+
+The `-R` and `-S` flags match `tests/integration/test_rigetti_qvm.py`; an earlier
+revision of this guide used `-server` for both images.
 
 Expected output: `<QVM 2q-qvm>` or similar. If you see a connection error,
 check both containers are running with `docker ps`.

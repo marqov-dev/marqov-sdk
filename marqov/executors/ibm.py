@@ -24,6 +24,7 @@ from importlib.metadata import version
 import io
 import json
 import math
+import numbers
 import re
 import time
 import warnings
@@ -31,6 +32,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from marqov.executors._blocking import BlockingCalls
 from marqov.executors._counts import extract_sampler_counts
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 
@@ -110,13 +112,20 @@ class IBMExecutorConfig:
         token: IBM Quantum API token. If None, uses saved credentials
                from QiskitRuntimeService.save_account().
         optimization_level: Transpiler optimization level (0-3).
-        resilience_level: Recorded in the execution result's metadata for
-                           traceability, but NOT currently passed to
-                           SamplerV2 — it has no effect on error mitigation.
-        poll_interval_seconds: Currently unused. `execute()` blocks
-                                synchronously on `job.result()` rather than
-                                polling.
-        timeout_seconds: Maximum time to wait for job completion.
+        resilience_level: Must be 1 (the default); any other value raises
+                           ValueError. SamplerV2's options have no
+                           resilience level (it is an EstimatorV2 option),
+                           so the executor cannot apply one. The value is
+                           still recorded in the result metadata.
+        poll_interval_seconds: Must be 2.0 (the default); any other value
+                                raises ValueError. `execute()` waits on
+                                `job.result()` rather than polling, so there
+                                is no interval to apply; `timeout_seconds`
+                                bounds the wait.
+        timeout_seconds: Maximum time to wait for job completion. On timeout
+                         the provider job is not cancelled, and the thread
+                         blocked on `job.result()` outlives the timeout; the
+                         caller is released without waiting for either.
     """
 
     backend_name: str
@@ -138,10 +147,31 @@ class IBMExecutorConfig:
             or self.timeout_seconds <= 0
         ):
             raise ValueError("timeout_seconds must be finite and positive")
+        # Neither field changes execution; reject anything but the default
+        # rather than silently ignore a setting the caller expects to apply.
+        if self.resilience_level != 1:
+            raise ValueError(
+                f"resilience_level={self.resilience_level!r} is not supported: "
+                "SamplerV2 has no resilience level option (it is an EstimatorV2 "
+                "option), so IBMExecutor cannot apply one. Omit the field."
+            )
+        if self.poll_interval_seconds != 2.0:
+            raise ValueError(
+                f"poll_interval_seconds={self.poll_interval_seconds!r} is not supported: "
+                "IBMExecutor waits on job.result() rather than polling. Omit the "
+                "field; use timeout_seconds to bound the wait."
+            )
 
 
 class IBMExecutionError(RuntimeError):
-    """Submitted job identity is retained; result failure never triggers resubmission."""
+    """Result retrieval failed or timed out for a submitted job; its ID is retained.
+
+    Never triggers resubmission. Refusals the SDK makes on a result that did
+    resolve (multiple classical registers, shot accounting) are not wrapped:
+    they raise ``NotImplementedError`` or ``ValueError`` naming the job ID.
+    Any other failure to decode a resolved result keeps its own type and gains
+    a note naming the job ID.
+    """
 
     def __init__(self, job_id: str) -> None:
         self.job_id = job_id
@@ -168,6 +198,8 @@ class IBMExecutor(BaseExecutor):
         self.config = config
         self._service = None
         self._backend = None
+        # Last-submitted job on this instance, for tracking only. Concurrent
+        # calls overwrite it; each call's own job ID is on its result or error.
         self._current_job_id: str | None = None
 
     def _get_service_sync(self):
@@ -275,20 +307,35 @@ class IBMExecutor(BaseExecutor):
         Args:
             circuit: The quantum circuit to execute.
             shots: Number of measurement shots.
-            **kwargs: Additional backend-specific options (currently unused).
+            **kwargs: Unsupported; any option raises TypeError.
 
         Returns:
             ExecutionResult with measurement counts and metadata.
 
         Raises:
-            IBMExecutionError: Result retrieval failed after submission; includes
-                the job ID. A timeout does not cancel the provider job.
+            TypeError: If any keyword option is supplied.
+            IBMExecutionError: Result retrieval failed or timed out after
+                submission; includes the job ID. A timeout does not cancel the
+                provider job.
+            NotImplementedError: The resolved result has multiple classical
+                registers; the message names the job ID.
+            ValueError: The resolved result carries no measurement data, or its
+                shot total differs from ``shots``; the message names the job ID.
+            asyncio.CancelledError: Re-raised when the caller cancels, with
+                ``remote_job`` attached. Cancelled while waiting, it names this
+                call's job ID (``submission_status`` "submitted") and the
+                provider job is not cancelled. Cancelled during submission,
+                ``job_id`` is None and ``submission_status`` is "unknown".
             Exception: Pre-submission provider/availability failures propagate.
+                A failure raised by the submission itself keeps its type and
+                carries ``remote_job`` (``job_id`` None, ``submission_status``
+                "unknown") with a do-not-replay note.
         """
         if kwargs:
             raise TypeError("Unsupported IBM execution options")
-        if type(shots) is not int or shots <= 0:
+        if isinstance(shots, bool) or not isinstance(shots, numbers.Integral) or shots <= 0:
             raise ValueError("shots must be a positive integer")
+        shots = int(shots)
         circuit = self._validate_circuit(circuit)
 
         loop = asyncio.get_running_loop()
@@ -310,23 +357,62 @@ class IBMExecutor(BaseExecutor):
 
         # Capture this invocation's submitted job before waiting. A timeout does
         # not imply cancellation, and concurrent calls cannot overwrite its ID.
-        job = await loop.run_in_executor(
-            None,
-            partial(self._submit_sampler_sync, transpiled, backend, shots),
-        )
-        job_id = job.job_id()
+        identity: dict[str, Any] = {
+            "provider": "IBM Quantum",
+            "backend_name": self.config.backend_name,
+            "job_id": None,
+            "submission_status": "unknown",
+        }
+        # A per-execution pool, not the default executor: asyncio.run() joins
+        # the default executor on exit, which would hold the caller until the
+        # submission or job finishes. No cancel callable: a timeout never
+        # cancels the job.
+        with BlockingCalls() as calls:
+            try:
+                job = await calls.call(self._submit_sampler_sync, transpiled, backend, shots)
+            except (Exception, asyncio.CancelledError) as exc:
+                exc.remote_job = dict(identity)  # type: ignore[attr-defined]
+                exc.add_note(
+                    "IBM submission acceptance is unknown; the job may still be "
+                    "submitted. Do not replay automatically."
+                )
+                raise
+            job_id = job.job_id()
+            identity["job_id"] = job_id
+            identity["submission_status"] = "submitted"
+            try:
+                result_call = calls.call(job.result)
+                result = (
+                    await asyncio.wait_for(result_call, self.config.timeout_seconds)
+                    if self.config.timeout_seconds is not None
+                    else await result_call
+                )
+            except asyncio.CancelledError as exc:
+                exc.remote_job = dict(identity)  # type: ignore[attr-defined]
+                exc.add_note(
+                    f"IBM job {job_id!r} was submitted; cancelling the wait does not "
+                    "cancel the provider job, which may still be running."
+                )
+                raise
+            except Exception as exc:
+                raise IBMExecutionError(job_id) from exc
+
+        # The result resolved; a refusal here is the SDK's, not a retrieval
+        # failure, so it keeps its own type rather than IBMExecutionError.
         try:
-            result_future = loop.run_in_executor(None, job.result)
-            result = (
-                await asyncio.wait_for(result_future, self.config.timeout_seconds)
-                if self.config.timeout_seconds is not None
-                else await result_future
-            )
             counts = self._extract_counts(result)
-            if sum(counts.values()) != shots:
-                raise ValueError("IBM result shot accounting differs from the submission")
+        except (ValueError, NotImplementedError) as exc:
+            raise type(exc)(f"IBM job {job_id}: {exc}") from exc
         except Exception as exc:
-            raise IBMExecutionError(job_id) from exc
+            exc.add_note(
+                f"IBM job {job_id!r}: the resolved result could not be decoded; "
+                "the job is retained"
+            )
+            raise
+        if sum(counts.values()) != shots:
+            raise ValueError(
+                f"IBM job {job_id}: result shot accounting differs from the submission"
+            )
 
         wall_time = time.perf_counter() - start_time
 

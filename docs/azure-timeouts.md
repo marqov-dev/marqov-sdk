@@ -24,7 +24,9 @@ route. Timeout budgets are still read per invocation. This captures the configur
 workspace route; it does not attest the Azure credential's principal or prove
 billing account ownership. Credentials are not included. The exception keeps
 its original type, including `TimeoutError` and `asyncio.CancelledError`, and
-has a recovery note naming the job and workspace.
+has a recovery note naming the job and workspace. `asyncio.run()` replaces the
+task's `CancelledError` with a bare `KeyboardInterrupt` on Ctrl+C, so there the
+retained job ID is in the warning an interrupted result wait logs, not on the exception.
 
 Errors or cancellation while `backend.run()` or `service.create_job()` is in
 flight carry the same
@@ -42,18 +44,25 @@ Python interpreter shutdown can still wait for live worker threads, and repeated
 interruptions can accumulate workers until their calls finish. Use finite
 budgets when bounded vendor polling is required.
 
-Counts and bit ordering, raw results, cost/timing extraction and successful
-wall-time reporting are preserved. Neither an interrupted wait nor a cancellation
+Counts and bit ordering, raw results and successful wall-time reporting are
+preserved. On the Qiskit path, after the result arrives the executor refreshes
+the vendor job and reads its `JobDetails`: `cost_estimate` is recorded when
+present, and `quantum_time_ms` is `end_execution_time - begin_execution_time`.
+Missing or inaccessible timing leaves `quantum_time_ms` as `None` (the lookup
+failure is logged at debug level), and `execution_time_ms` then falls back to
+local wall time, as in the Braket executor. Neither an interrupted wait nor a cancellation
 request authorizes releasing financial holds, settling as no contact, or
 resubmitting a job. Platform recovery must confirm provider state separately.
 
 This covers both Azure result-wait paths in marqov-sdk#134. Cirq submission
 now precedes its result deadline; previously the deadline wrapped the combined
 `service.run()` call. Native Cirq wrappers return `cirq.Result`; provider-specific
-IonQ wrappers still use the vendor target conversion and legacy polling-error
-mapping to `TimeoutError`. With no configured timeout,
+IonQ wrappers still use the vendor target conversion; their polling timeout is
+cirq-ionq's own `TimeoutError`. With no configured timeout,
 Cirq retains `service.run()`'s vendor default polling budget (300 seconds in the
 tested Azure release), rather than the job wrapper's different default.
 Submission ownership after a lost handle still needs separate work. IBM's
-preserve-job-on-timeout policy is unchanged. Tests use real vendor service/job wrappers with injected offline objects; connected cancellation and deployed runtime compatibility remain
+preserve-job-on-timeout policy is unchanged. Tests use real vendor service/job wrappers (`AzureQuantumService` and Cirq `Job`;
+Qiskit `AzureQuantumJob` around an `azure.quantum.job.Job`) with injected
+offline objects and an offline `result()` on the Qiskit job; connected cancellation and deployed runtime compatibility remain
 unqualified.

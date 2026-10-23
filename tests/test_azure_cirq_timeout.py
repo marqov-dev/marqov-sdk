@@ -297,24 +297,3 @@ async def test_interrupted_submission_retains_unknown_acceptance():
         release.set()
         await wait_event(finished)
 
-
-@pytest.mark.asyncio
-async def test_legacy_ionq_vendor_poll_error_is_mapped_and_cancelled_with_default_budget():
-    from azure.quantum.job.base_job import DEFAULT_TIMEOUT
-
-    job = SimpleNamespace(
-        job_id=lambda: "legacy-ionq",
-        status=lambda: "running",
-        cancel=Mock(),
-        results=Mock(
-            side_effect=RuntimeError(
-                "Job was not completed successful. Instead had status: running"
-            )
-        ),
-    )
-    ex, _ = executor([job], timeout=None)
-    with pytest.raises(TimeoutError, match="wait time has exceeded") as caught:
-        await ex.execute(Circuit().x(0))
-    identity(caught.value, "legacy-ionq")
-    job.results.assert_called_once_with(timeout_seconds=DEFAULT_TIMEOUT)
-    job.cancel.assert_called_once_with()

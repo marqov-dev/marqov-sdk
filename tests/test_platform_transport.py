@@ -1365,3 +1365,226 @@ class TestCancelUsesWritePolicy:
                 job.cancel()
 
         assert call_count == 1, f"Expected 1 attempt, got {call_count}"
+
+
+# ---------------------------------------------------------------------------
+# Client contract leaks (marqov-sdk#150)
+# ---------------------------------------------------------------------------
+
+
+def _real_response(
+    status_code: int, text: str, headers: dict | None = None
+) -> requests.Response:
+    """Build a real requests.Response so ``.json()`` raises the real decode error."""
+    resp = requests.Response()
+    resp.status_code = status_code
+    resp._content = text.encode()
+    resp.headers.update(headers or {})
+    resp.reason = "OK" if status_code < 400 else f"HTTP {status_code}"
+    return resp
+
+
+class TestNonJsonSuccessBody:
+    """A 2xx whose body is not JSON stays inside the exception hierarchy."""
+
+    def test_200_html_body_raises_transport_error(self):
+        """A captive portal answering 200 with HTML raises TransportError, once."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        resp = _real_response(
+            200, "<html>captive portal</html>", {"Content-Type": "text/html"}
+        )
+
+        with patch.object(transport._session, "request", return_value=resp) as mock_req:
+            with pytest.raises(TransportError) as exc_info:
+                transport.request("GET", "/api/meta")
+
+        exc = exc_info.value
+        assert isinstance(exc, MarqovPlatformError)
+        assert exc.status == 200
+        assert exc.message == (
+            "non-JSON success body (HTTP 200, Content-Type: text/html)"
+        )
+        assert isinstance(exc.__cause__, ValueError)
+        # Not retried: the server answered.
+        assert mock_req.call_count == 1
+        # A read carries no idempotency key.
+        assert exc.idempotency_key is None
+
+    def test_non_json_2xx_without_content_type(self):
+        """The message omits the Content-Type when the response has none."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        resp = _real_response(204, "")
+
+        with patch.object(transport._session, "request", return_value=resp):
+            with pytest.raises(TransportError) as exc_info:
+                transport.request("GET", "/api/meta")
+
+        assert exc_info.value.status == 204
+        assert exc_info.value.message == "non-JSON success body (HTTP 204)"
+
+    @pytest.mark.parametrize("status", [302, 304])
+    def test_non_json_3xx_success_body_raises_transport_error(self, status):
+        """``resp.ok`` holds below 400, so an unfollowed 3xx takes the same path."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        resp = _real_response(status, "<html>moved</html>", {"Content-Type": "text/html"})
+
+        with patch.object(transport._session, "request", return_value=resp):
+            with pytest.raises(TransportError) as exc_info:
+                transport.request("GET", "/api/meta")
+
+        assert exc_info.value.status == status
+        assert exc_info.value.message == (
+            f"non-JSON success body (HTTP {status}, Content-Type: text/html)"
+        )
+
+    def test_non_json_success_body_on_write_carries_idempotency_key(self):
+        """The write's Idempotency-Key is on the error, as for other ambiguous writes."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        resp = _real_response(200, "<html>portal</html>", {"Content-Type": "text/html"})
+
+        with patch.object(transport._session, "request", return_value=resp) as mock_req:
+            with pytest.raises(TransportError) as exc_info:
+                transport.request("POST", "/api/scripts", json={"x": 1})
+
+        sent_key = mock_req.call_args.kwargs["headers"]["Idempotency-Key"]
+        assert exc_info.value.idempotency_key == sent_key
+
+
+class TestRequestDeadline:
+    """An optional absolute deadline stops retries and backoff once it passes."""
+
+    def test_no_retry_after_deadline(self):
+        """A fast failure retries only while the deadline has not passed."""
+        import time
+
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        with patch.object(
+            transport._session,
+            "request",
+            side_effect=requests.exceptions.ConnectionError("refused"),
+        ) as mock_req:
+            start = time.monotonic()
+            with pytest.raises(TransportError):
+                transport.request("GET", "/api/meta", deadline=start + 0.05)
+            elapsed = time.monotonic() - start
+
+        # Backoff (0.5 s) is cut to the 0.05 s left, then the loop stops.
+        assert mock_req.call_count == 1
+        assert elapsed < 0.4, f"elapsed {elapsed:.2f}s"
+
+    def test_retry_timeout_capped_at_time_left(self):
+        """A retry that does start gets no more than the time left as its timeout."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        # monotonic readings around the first backoff (before: 10 s left;
+        # after: 2 s left), then before the second backoff (past deadline).
+        with patch(
+            "marqov.platform._transport.time.monotonic", side_effect=[0.0, 8.0, 20.0]
+        ):
+            with patch("marqov.platform._transport.time.sleep") as mock_sleep:
+                with patch.object(
+                    transport._session,
+                    "request",
+                    side_effect=requests.exceptions.ConnectionError("refused"),
+                ) as mock_req:
+                    with pytest.raises(TransportError):
+                        transport.request("GET", "/api/meta", deadline=10.0, timeout=5.0)
+
+        timeouts = [c.kwargs["timeout"] for c in mock_req.call_args_list]
+        assert timeouts == [5.0, 2.0]
+        assert mock_sleep.call_args_list == [call(0.5)]
+
+    def test_no_deadline_keeps_all_attempts(self):
+        """Without a deadline the retry policy is unchanged."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        with patch("marqov.platform._transport.time.sleep"):
+            with patch.object(
+                transport._session,
+                "request",
+                side_effect=requests.exceptions.ConnectionError("refused"),
+            ) as mock_req:
+                with pytest.raises(TransportError):
+                    transport.request("GET", "/api/meta")
+        assert mock_req.call_count == _MAX_RETRIES
+
+
+class TestRetryAfterClamp:
+    """A negative delta-seconds Retry-After is clamped to zero."""
+
+    def test_negative_delta_seconds_clamped_to_zero(self):
+        from marqov.platform._transport import _parse_retry_after
+
+        assert _parse_retry_after("-5") == 0
+        assert _parse_retry_after("30") == 30
+        assert _parse_retry_after("soon") is None
+
+    def test_429_with_negative_retry_after_surfaces_zero(self):
+        """End to end: RateLimited.retry_after is 0, so the documented sleep is safe."""
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        resp = _mock_response(
+            429,
+            {"error": {"code": "rate_limited", "message": "slow down", "status": 429}},
+            headers={"Retry-After": "-5"},
+        )
+
+        with patch.object(transport._session, "request", return_value=resp):
+            with patch("marqov.platform._transport.time.sleep") as mock_sleep:
+                with pytest.raises(RateLimited) as exc_info:
+                    transport.request("GET", "/api/backends")
+
+        assert exc_info.value.retry_after == 0
+        # Every sleep the transport took was non-negative.
+        assert all(c.args[0] >= 0 for c in mock_sleep.call_args_list)
+        # The recovery snippet in docs/platform-client/error-handling.md.
+        assert (exc_info.value.retry_after or 10) >= 0
+
+
+class TestSessionLifecycle:
+    """Transport closes its requests.Session and works as a context manager."""
+
+    def test_close_closes_session_once_and_is_idempotent(self):
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        with patch.object(transport._session, "close") as mock_close:
+            transport.close()
+            transport.close()
+        assert mock_close.call_count == 1
+
+    def test_context_manager_closes_session_on_exit(self):
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        with patch.object(transport._session, "close") as mock_close:
+            with transport as entered:
+                assert entered is transport
+                assert mock_close.call_count == 0
+            assert mock_close.call_count == 1
+
+    def test_context_manager_closes_session_when_body_raises(self):
+        transport = Transport(api_key="marqey_test_x", base_url="http://test")
+        with patch.object(transport._session, "close") as mock_close:
+            with pytest.raises(RuntimeError):
+                with transport:
+                    raise RuntimeError("boom")
+        assert mock_close.call_count == 1
+
+
+class TestErrorHierarchyContract:
+    """Every public exception in marqov.platform.errors is a MarqovPlatformError.
+
+    Pins the claim in docs/platform-client/error-handling.md that all
+    exceptions raised by ``marqov.platform`` inherit from
+    ``MarqovPlatformError``.
+    """
+
+    def test_every_public_error_subclasses_marqov_platform_error(self):
+        import inspect
+
+        import marqov.platform.errors as errors_module
+
+        public = [
+            obj
+            for name, obj in vars(errors_module).items()
+            if not name.startswith("_")
+            and inspect.isclass(obj)
+            and obj.__module__ == errors_module.__name__
+        ]
+        assert public, "no public classes found in marqov.platform.errors"
+        for cls in public:
+            assert issubclass(cls, MarqovPlatformError), cls.__name__

@@ -56,6 +56,12 @@ coroutines on the event loop can progress during simulation. Execution timing
 includes the awaited simulator call; seed handling and result provenance are
 unchanged.
 
+Local results are validated before they are returned: sample keys must be
+bitstrings of the circuit's width (digital) or of one common width (analog),
+counts must be non-negative integers, and they must sum to the requested shots,
+otherwise `RuntimeError` is raised. `reproducibility.shots` records the observed
+total and `reproducibility.bit_order` records the key order (qubit 0 leftmost).
+
 Cancelling the awaiting task stops waiting for its result, but does not stop
 an already-running simulator thread. That thread can continue consuming CPU,
 and event-loop shutdown may wait for it to finish. No local simulation or
@@ -69,6 +75,9 @@ The separate `SpeQtrumExecutor` requires pinned `qilisdk==0.3.0`, an explicit
 `device_code`, `username`, and API key. Factory configuration uses
 `provider="Qilimanjaro", access_path="speqtrum"`; omitting `access_path` retains
 local simulator routing. Unknown paths and incomplete remote configuration fail.
+Construction raises `ImportError` with the `pip install qilisdk==0.3.0` line when
+that version is not installed. `get_status()` reports `maintenance` with no queue
+data when the API is unreachable or returns an unrecognised device status.
 No credentials are read from the environment or shared keyring.
 
 The client authenticates before sending, disables redirects/retries, and never
@@ -79,6 +88,12 @@ bit order and require exact shot accounting. Results are decoded only through an
 `executor.last_job` is an immutable `SpeQtrumJob` record for `readback(record)`
 without another submission. Retain it when a known job has an unresolved result.
 An acceptance-unknown exception without a job ID must not trigger a new submit.
+Cancelling `execute()` before the POST starts sends nothing. Once the POST has
+started, the executor waits up to 1 s for its reply, then re-raises the
+`CancelledError` (the `__cause__` of an `asyncio.wait_for` `TimeoutError`). A
+returned job ID is stored in `last_job` and named in a note on that error;
+otherwise the error carries `acceptance_unknown = True` and a do-not-resubmit
+note, and a later reply is logged at WARNING with its job ID.
 The pinned API exposes no cancellation or idempotency guarantee: `cancel()`
 returns False. Terminal timeout/error/cancellation never produces success.
 

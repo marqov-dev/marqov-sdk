@@ -6,6 +6,7 @@ import asyncio
 import dataclasses
 import hashlib
 import json
+import numbers
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -52,8 +53,9 @@ class SimulationExecutor(BaseExecutor):
     ) -> ExecutionResult:
         if kwargs:
             raise TypeError("Simulation execution options belong in SimulationConfig")
-        if type(shots) is not int or shots <= 0:
+        if isinstance(shots, bool) or not isinstance(shots, numbers.Integral) or shots <= 0:
             raise ValueError("shots must be a positive integer")
+        shots = int(shots)
         circuit = self._validate_circuit(circuit)
         qasm_str = circuit.to_openqasm()
         qasm_str = ensure_measurements(qasm_str)
@@ -205,6 +207,23 @@ def _run_simulation(
            or type(count) is not int or count < 0 for bits, count in counts.items()) or sum(counts.values()) != shots:
         raise RuntimeError("Qristal returned invalid counts or shot accounting")
 
+    noise_record = (
+        None if config.noise_model is None else [
+            {
+                "channel": type(channel).__name__,
+                **{
+                    name: value if isinstance(value, (bool, str)) else float(value)
+                    for name, value in dataclasses.asdict(channel).items()
+                },
+                "qubits": [int(qubit) for qubit in qubits],
+            }
+            for channel, qubits in config.noise_model.entries()
+        ]
+    )
+    inputs_sha256 = hashlib.sha256(json.dumps(
+        {"program": qasm_str, "noise_model": noise_record}, sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+
     metadata = {
         "vendor": "Quantum Brilliance",
         "framework": "Qristal",
@@ -219,6 +238,8 @@ def _run_simulation(
             "seed": config.seed,
             "shots": shots,
             "program_sha256": hashlib.sha256(qasm_str.encode()).hexdigest(),
+            "noise_model": noise_record,
+            "inputs_sha256": inputs_sha256,
             "counts_sha256": hashlib.sha256(json.dumps(counts, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
             "bit_order": "qubit_0_first",
         },

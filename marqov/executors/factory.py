@@ -2,7 +2,8 @@
 
 This module provides a factory pattern for creating executors based on provider.
 Supports AWS Braket, Quantinuum, IBM Quantum, Azure Quantum, IonQ Direct API,
-Rigetti QCS, CUDA-Q, Quantum Brilliance, and the Local simulator.
+Rigetti QCS, CUDA-Q, Quantum Brilliance, Alice & Bob, Qilimanjaro,
+PennyLane Lightning, CUNQA, and the Local simulator.
 
 Example:
     >>> backend_config = {
@@ -17,6 +18,7 @@ Example:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from marqov.executors.alice_bob import AliceBobExecutor, AliceBobExecutorConfig
@@ -24,6 +26,12 @@ from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorCon
 from marqov.executors.base import BaseExecutor
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
 from marqov.executors.cudaq import _SLUG_TO_TARGET, CudaqExecutor, CudaqExecutorConfig
+from marqov.executors.cunqa import (
+    CUNQAExecutor,
+    CUNQAExecutorConfig,
+    _validate_n_qpus,
+    _validate_seconds,
+)
 from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig, normalize_ibm_connection
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
 from marqov.executors.lightning import LightningExecutor, LightningExecutorConfig
@@ -55,7 +63,13 @@ class ExecutorFactory:
           Requires ``qristal`` to be installed separately — it is not on
           PyPI and has no ``marqov[...]`` extra. Build it from source or use
           the official Docker image; see https://qristal.readthedocs.io/.
+        - CUNQA: CESGA's distributed-QC emulator on a Slurm cluster. Requires
+          ``cunqa`` built from source on the cluster; it is only imported when
+          an executor is constructed without an injected client.
         - Local: QuantumFlow simulator (no cloud required)
+        - Alice & Bob: local logical-qubit emulator (see docs/alice-bob.md).
+          Requires ``qiskit-alice-bob-provider`` installed in an isolated
+          environment.
         - IonQ Direct: Native IonQ REST API (no AWS/Braket intermediary)
         - Qilimanjaro: qilisdk local simulators (QiliSim or QutipBackend).
           Install qualified ``qilisdk==0.3.0`` separately; older 0.1.8–0.2.x
@@ -141,6 +155,10 @@ class ExecutorFactory:
             if backend_config.get("access_path") not in (None, "local"):
                 raise ValueError("Unknown Qilimanjaro access_path")
             return cls._create_qilisdk_executor(backend_slug, backend_config)
+
+        # CESGA CUNQA (Slurm-based distributed-QC emulator)
+        if provider == "CUNQA":
+            return cls._create_cunqa_executor(backend_slug, backend_config)
 
         # Xanadu PennyLane Lightning (local CPU simulators). Dispatched on the
         # provider only, never on slug, so no existing slug changes route.
@@ -494,6 +512,77 @@ class ExecutorFactory:
             simulator=simulator, compute_provider=backend_config.get("compute_provider", "local")
         ))
 
+    @classmethod
+    def _create_cunqa_executor(
+        cls,
+        backend_slug: str,
+        backend_config: dict[str, Any],
+    ) -> CUNQAExecutor:
+        """Create a CUNQA executor from configuration.
+
+        No field is required: each key mirrors a ``CUNQAExecutorConfig`` field
+        and falls back to the dataclass default when absent. ``seed`` is
+        inert (the executor does not apply it yet), so passing it raises
+        ``ValueError`` rather than being silently ignored. The ``cunqa``
+        package itself is imported only when the executor is constructed.
+
+        Args:
+            backend_slug: Backend slug (unused for routing).
+            backend_config: Optional ``n_qpus``, ``walltime``, ``simulator``,
+                ``co_located``, ``classical_comm``, ``quantum_comm``,
+                ``mem_per_qpu_gb``, ``startup_timeout_s``, ``poll_interval_s``.
+
+        Returns:
+            Configured CUNQAExecutor instance.
+        """
+        # Fields the dataclass validates itself are checked with its own
+        # validators, so the factory accepts exactly what CUNQAExecutorConfig
+        # accepts; the error is wrapped to name the config key.
+        validated_fields: dict[str, Callable[[Any], object]] = {
+            "n_qpus": _validate_n_qpus,
+            "startup_timeout_s": lambda v: _validate_seconds("startup_timeout_s", v),
+            "poll_interval_s": lambda v: _validate_seconds("poll_interval_s", v),
+        }
+        # Expected type per remaining CUNQAExecutorConfig field, checked here so
+        # a bad value is reported against its config key.
+        field_types: dict[str, type] = {
+            "walltime": str,
+            "simulator": str,
+            "co_located": bool,
+            "classical_comm": bool,
+            "quantum_comm": bool,
+            "mem_per_qpu_gb": int,
+        }
+        if "seed" in backend_config:
+            raise ValueError(
+                "CUNQA config key 'seed' is not applied yet (CUNQAExecutorConfig.seed "
+                "is reserved and never reaches run()); omit the key"
+            )
+        kwargs: dict[str, Any] = {}
+        for key, validate in validated_fields.items():
+            if key not in backend_config:
+                continue
+            value = backend_config[key]
+            try:
+                validate(value)
+            except ValueError as exc:
+                raise ValueError(
+                    f"CUNQA config key {key!r} is invalid (got {type(value).__name__}): {exc}"
+                ) from exc
+            kwargs[key] = value
+        for key, expected in field_types.items():
+            if key not in backend_config:
+                continue
+            value = backend_config[key]
+            # bool is an int subclass; it is only valid where bool is expected.
+            if isinstance(value, bool) != (expected is bool) or not isinstance(value, expected):
+                raise ValueError(
+                    f"CUNQA config key {key!r} must be {expected.__name__}, "
+                    f"got {type(value).__name__}"
+                )
+            kwargs[key] = value
+        return CUNQAExecutor(CUNQAExecutorConfig(**kwargs))
+
     # Backend slug -> PennyLane device name, for configs that give no ``device``.
     _LIGHTNING_SLUG_TO_DEVICE: dict[str, str] = {
         "lightning-qubit": "lightning.qubit",
@@ -559,7 +648,7 @@ class ExecutorFactory:
 
         Example:
             >>> ExecutorFactory.get_supported_providers()
-            ['AWS Braket', 'IBM Quantum', 'Azure Quantum', 'IonQ Direct', 'Rigetti QCS', 'Quantum Brilliance', 'CUDA-Q', 'Local', 'Quantinuum']
+            ['AWS Braket', 'IBM Quantum', 'Azure Quantum', 'IonQ Direct', 'Rigetti QCS', 'Quantum Brilliance', 'CUDA-Q', 'Local', 'Quantinuum', 'Qilimanjaro', 'PennyLane Lightning', 'Alice & Bob', 'CUNQA']
         """
         return [
             "AWS Braket",
@@ -573,6 +662,8 @@ class ExecutorFactory:
             "Quantinuum",
             "Qilimanjaro",
             "PennyLane Lightning",
+            "Alice & Bob",
+            "CUNQA",
         ]
 
     @classmethod

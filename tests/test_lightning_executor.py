@@ -272,6 +272,11 @@ class TestUnsupportedInputs:
         with pytest.raises(ValueError, match="lightning"):
             _executor(device="default.qubit")
 
+    @pytest.mark.asyncio
+    async def test_unsupported_lightning_device_is_not_implemented(self) -> None:
+        with pytest.raises(NotImplementedError, match="outside the supported"):
+            await _executor(device="lightning.nonesuch").execute(bell_state(), shots=10)
+
     def test_unknown_precision_is_refused(self) -> None:
         with pytest.raises(ValueError, match="precision"):
             _executor(precision="half")

@@ -17,6 +17,9 @@ request does not establish terminal provider state.
 `TimeoutError` and caller `CancelledError` retain their types. They expose a
 `remote_job` dictionary with provider, requested and actual processor IDs,
 `as_qvm`, `job_id`, `submission_status`, `phase` and `cancellation_supported`.
+`asyncio.run()` replaces the task's `CancelledError` with a bare
+`KeyboardInterrupt` on Ctrl+C, so there the retained job ID is in the warning
+an interrupted result wait logs, not on the exception.
 Backend/result conversion failures are wrapped in `RuntimeError` with the same
 context. Successful result metadata includes these fields and preserves counts
 and the raw pyQuil result.
@@ -29,7 +32,8 @@ An interruption during compilation prevents subsequent submission by that call.
 
 `await executor.cancel(job_id)` supports owned active handles and the last 32
 interrupted handles retained by that executor instance. It returns `True` when
-the cancellation request finishes, without confirming provider state. Unknown,
+the cancellation request finishes, without confirming provider state; the
+handle is not removed, so a repeat call sends another request. Unknown,
 evicted, completed or other-instance handles return `False`; request failures
 and requests exceeding one second also return `False`. Retained handles include
 compiled programs, so the cache is bounded. QVM and compatible run-only injected

@@ -44,7 +44,12 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from marqov.executors._counts import allocate_counts
-from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
+from marqov.executors.base import (
+    BaseExecutor,
+    DeviceStatus,
+    ExecutionResult,
+    reject_unsupported_options,
+)
 
 if TYPE_CHECKING:
     from marqov.circuits import Circuit
@@ -69,6 +74,10 @@ _LOGGER = logging.getLogger(__name__)
 # the SDK has been used against, and still finite: an unconfigured executor must
 # not be able to wait forever. Set timeout_seconds=None to opt back out.
 _DEFAULT_TIMEOUT_SECONDS = 3600.0
+
+
+class _UnknownJobStatusError(RuntimeError):
+    """A polled job reported a status outside the modelled sets."""
 
 
 @dataclass
@@ -303,17 +312,22 @@ class IonQExecutor(BaseExecutor):
         Args:
             circuit: The quantum circuit to execute.
             shots: Number of measurement shots.
-            **kwargs: Additional backend-specific options (currently unused).
+            **kwargs: Unsupported; any option raises TypeError.
 
         Returns:
             ExecutionResult with measurement counts and metadata.
 
         Raises:
+            TypeError: If any keyword option is supplied.
             RuntimeError: If the job fails, is canceled by IonQ, or reports a
-                status the executor does not recognize.
+                status the executor does not recognize. An unrecognized status
+                sends the remote job a best-effort cancel first.
             ValueError: If no API key is available or the returned job ID is unusable.
             TimeoutError: If the job does not finish within ``timeout_seconds``.
                 The remote job is sent a best-effort cancel first.
+
+        Any error raised after the job ID is known carries a ``remote_job``
+        attribute identifying the provider job.
 
         Cancellation during submission stops waiting without replaying the POST.
         The request worker retains per-call ownership and requests cancellation
@@ -322,6 +336,7 @@ class IonQExecutor(BaseExecutor):
         timeouts, but DNS, a continuing response or worker shutdown can take
         longer; this is not a hard process deadline or guaranteed provider cancel.
         """
+        reject_unsupported_options("IonQExecutor.execute()", kwargs)
         circuit = self._validate_circuit(circuit)
 
         if self.config.api_version == "0.4":
@@ -346,11 +361,20 @@ class IonQExecutor(BaseExecutor):
         # The submission worker owns cleanup if its caller stops waiting.
         submit_response = await self._submit_job(payload)
         job_id = submit_response["id"]
+        identity = {
+            "provider": "ionq",
+            "api_version": "0.3",
+            "job_id": job_id,
+            "target": self.config.target,
+            "base_url": self.config.base_url,
+        }
 
         job_artifact: dict[str, Any] = {}
+        artifact: dict[str, Any] = {}
         # Poll until the job reaches a terminal state. If the wait is cut short,
-        # the job is still queued or running on IonQ's side, and billable, so ask
-        # IonQ to stop it before propagating.
+        # or the job reports a status we do not model, it may still be queued or
+        # running on IonQ's side, and billable, so ask IonQ to stop it before
+        # propagating. Every error after submission carries the job identity.
         try:
             if self.config.timeout_seconds is not None:
                 job = await asyncio.wait_for(
@@ -359,22 +383,30 @@ class IonQExecutor(BaseExecutor):
                 )
             else:
                 job = await self._poll_until_done(job_id, artifact=job_artifact)
-        except (TimeoutError, asyncio.CancelledError):
+
+            wall_time = time.perf_counter() - start_time
+
+            status = job.get("status")
+            if status in _FAILURE_STATUSES:
+                failure = job.get("failure")
+                error_text = failure.get("error") if isinstance(failure, dict) else None
+                message = error_text or f"job {status}"
+                raise RuntimeError(f"IonQ job {job_id} {status}: {message}")
+
+            histogram = job.get("data", {}).get("histogram")
+            if histogram is None:
+                results = await self._request("GET", f"/jobs/{job_id}/results", artifact=artifact)
+                histogram = self._extract_histogram(results)
+        except (TimeoutError, asyncio.CancelledError, _UnknownJobStatusError) as error:
+            _LOGGER.warning(
+                "IonQ stopped waiting on job %r; requesting best-effort cancellation", job_id
+            )
             await self._cancel_interrupted_job(job_id)
+            error.remote_job = identity  # type: ignore[union-attr]
             raise
-
-        wall_time = time.perf_counter() - start_time
-
-        status = job.get("status")
-        if status in _FAILURE_STATUSES:
-            message = job.get("failure", {}).get("error") or f"job {status}"
-            raise RuntimeError(f"IonQ job {job_id} {status}: {message}")
-
-        artifact: dict[str, Any] = {}
-        histogram = job.get("data", {}).get("histogram")
-        if histogram is None:
-            results = await self._request("GET", f"/jobs/{job_id}/results", artifact=artifact)
-            histogram = self._extract_histogram(results)
+        except Exception as error:
+            error.remote_job = identity  # type: ignore[attr-defined]
+            raise
 
         if not artifact:
             artifact = job_artifact or {
@@ -589,7 +621,7 @@ class IonQExecutor(BaseExecutor):
                 else _PENDING_STATUSES
             )
             if status not in pending:
-                raise RuntimeError(
+                raise _UnknownJobStatusError(
                     f"IonQ job {job_id} reported unknown status {status!r}. "
                     "Polling stopped because this status is not a known "
                     "in-progress state; if IonQ uses it for work still in "
