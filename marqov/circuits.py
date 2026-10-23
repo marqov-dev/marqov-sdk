@@ -524,8 +524,9 @@ class Circuit:
         Terminal measurements (nothing after them touches the measured qubit)
         are skipped; as in ``from_qiskit``, a qubit that only a measurement
         touches gets no gate in the returned circuit (it is still an identity
-        wire when a higher index is used, see ``num_qubits``). Identity (``i``)
-        gates are dropped the same way. Result types (e.g.
+        wire when a higher index is used, see ``num_qubits``). An identity
+        (``i``) gate is dropped when another gate touches a higher index, and
+        kept as an ``I`` gate otherwise so the width is kept. Result types (e.g.
         ``probability()``) are not imported: the returned circuit carries
         gates only.
 
@@ -579,10 +580,9 @@ class Circuit:
                     f"power={instruction.power}. Use explicit supported gates "
                     "or decompose modified instructions before importing."
                 )
-            if isinstance(instruction.operator, braket_circuits.gates.I):
-                continue  # A no-op; an idle wire below the largest index stays in the width.
             gate_instructions.append(instruction)
         circuit._qf = qf.braket_to_circuit(braket_circuits.Circuit(gate_instructions))
+        circuit._drop_inner_identities()
         return circuit
 
     # Qiskit gate name -> Circuit fluent method mapping.
@@ -640,9 +640,10 @@ class Circuit:
         basis set via Qiskit's transpiler. This covers any circuit built from
         Qiskit's standard gate set, but a circuit containing an opaque custom
         gate (no `_define`) makes the transpiler itself raise — that error is
-        not caught here and propagates to the caller. Identity (``id``) gates
-        are dropped: an idle wire below the largest index stays in the width
-        (see ``num_qubits``).
+        not caught here and propagates to the caller. An identity (``id``)
+        gate is dropped when another gate touches a higher index (the wire
+        stays in the width, see ``num_qubits``), and kept as an ``I`` gate
+        otherwise so the width is kept.
 
         Requires Qiskit to be installed (``pip install marqov[qiskit]``).
 
@@ -678,8 +679,8 @@ class Circuit:
             )
 
         # Decompose to our supported basis gate set.
-        # `id` stays in the basis so it can be dropped below rather than being
-        # decomposed into an Rx(0) gate.
+        # `id` stays in the basis so it is imported as an identity rather than
+        # being decomposed into an Rx(0) gate.
         decomposed = transpile(
             qiskit_circuit,
             basis_gates=[*cls._QISKIT_BASIS_GATES, "id"],
@@ -691,7 +692,7 @@ class Circuit:
         for index, instruction in enumerate(decomposed.data):
             name = instruction.operation.name
 
-            if name in cls._SKIP_INSTRUCTIONS or name == "id":
+            if name in cls._SKIP_INSTRUCTIONS:
                 continue
 
             if name == "measure":
@@ -714,6 +715,10 @@ class Circuit:
                     "under this SDK's gate-only circuit model."
                 )
 
+            if name == "id":
+                circuit._qf += qf.I(decomposed.find_bit(instruction.qubits[0]).index)
+                continue
+
             if name not in cls._QISKIT_GATE_MAP:
                 raise ValueError(
                     f"Unsupported gate '{name}' after decomposition. "
@@ -731,6 +736,7 @@ class Circuit:
             else:
                 getattr(circuit, method_name)(qubits[0], qubits[1])
 
+        circuit._drop_inner_identities()
         return circuit
 
     @classmethod
@@ -801,6 +807,8 @@ class Circuit:
             key = op.gate.key
             is_terminal = True
             for later in operations[index + 1 :]:
+                if isinstance(later.gate, cirq.IdentityGate):
+                    continue  # An identity after a measurement changes nothing.
                 if qubits & set(later.qubits):
                     is_terminal = False
                     break
@@ -830,6 +838,12 @@ class Circuit:
             return False
 
         qubits = [q.x for q in op.qubits]
+
+        # Identity: kept here, then dropped below the largest other index.
+        if isinstance(gate, cirq.IdentityGate):
+            for qubit in qubits:
+                circuit._qf += qf.I(qubit)
+            return True
 
         # Single-qubit fixed gates.
         if isinstance(gate, cirq.HPowGate) and gate.exponent == 1:
@@ -874,8 +888,9 @@ class Circuit:
         Known gates are mapped directly. Unsupported gates are automatically
         decomposed via ``cirq.decompose()`` until they resolve to gates we
         can map. If decomposition fails, a ``ValueError`` is raised and the
-        gate type is reported to Sentry for observability. Identity gates
-        decompose to nothing, so they are dropped (see ``num_qubits``).
+        gate type is reported to Sentry for observability. An identity gate
+        is dropped when another gate touches a higher index (the wire stays in
+        the width, see ``num_qubits``), and kept as an ``I`` gate otherwise.
 
         Requires Cirq to be installed (``pip install marqov[cirq]``).
 
@@ -969,6 +984,7 @@ class Circuit:
                 f"issue at https://github.com/marqov-dev/marqov-sdk/issues"
             )
 
+        circuit._drop_inner_identities()
         return circuit
 
     # PennyLane gate name -> Circuit fluent method mapping.
@@ -998,8 +1014,9 @@ class Circuit:
         Known gates are mapped directly. Unsupported gates are automatically
         decomposed via ``op.decomposition()`` until they resolve to gates we
         can map. If decomposition fails, a ``ValueError`` is raised and the
-        gate type is reported to Sentry for observability. ``Identity``
-        decomposes to nothing, so it is dropped (see ``num_qubits``).
+        gate type is reported to Sentry for observability. ``Identity`` is
+        dropped when another gate touches a higher wire (the wire stays in the
+        width, see ``num_qubits``), and kept as an ``I`` gate otherwise.
 
         Requires PennyLane to be installed (``pip install marqov[pennylane]``).
 
@@ -1052,6 +1069,11 @@ class Circuit:
 
                 wires = [int(wire) for wire in op.wires]
 
+                if name == "Identity":
+                    for wire in wires:
+                        circuit._qf += qf.I(wire)
+                    continue
+
                 if name in cls._PENNYLANE_GATE_MAP:
                     method_name = cls._PENNYLANE_GATE_MAP[name]
                     if name in cls._PENNYLANE_ROTATION_GATES:
@@ -1092,6 +1114,7 @@ class Circuit:
 
         # tape.operations excludes measurements — no skip logic needed.
         _process_operations(tape.operations)
+        circuit._drop_inner_identities()
         return circuit
 
     # PyQuil gate name -> Circuit fluent method mapping.
@@ -1188,9 +1211,10 @@ class Circuit:
 
         Known gates in the Marqov canonical gate set are mapped directly.
         SWAP is accepted either as a native ``SWAP`` instruction or as the
-        standard three-``CNOT`` decomposition. Classical declarations, ``I``
-        gates and terminal measurements (nothing after them touches the
-        measured qubit) are skipped. Gate modifiers (including ``DAGGER``, ``CONTROLLED`` and
+        standard three-``CNOT`` decomposition. Classical declarations and
+        terminal measurements (nothing after them touches the measured qubit)
+        are skipped. An ``I`` gate is dropped when another gate touches a
+        higher qubit, and kept otherwise so the width is kept. Gate modifiers (including ``DAGGER``, ``CONTROLLED`` and
         ``FORKED``), Quil-native gates outside the canonical set, and mid-circuit
         measurements raise ``NotImplementedError`` so callers can decompose
         them explicitly before importing. Modifiers are checked before the
@@ -1268,7 +1292,8 @@ class Circuit:
 
             name = instruction.name.upper()
             if name == "I":
-                continue  # A no-op; an idle wire below the largest index stays in the width.
+                circuit._qf += qf.I(instruction.get_qubit_indices()[0])
+                continue
             if name not in cls._PYQUIL_GATE_MAP:
                 raise NotImplementedError(
                     f"Unsupported PyQuil gate '{name}'. Supported gates: "
@@ -1286,6 +1311,7 @@ class Circuit:
             else:
                 getattr(circuit, method_name)(qubits[0], qubits[1])
 
+        circuit._drop_inner_identities()
         return circuit
 
     @classmethod
@@ -1293,9 +1319,9 @@ class Circuit:
         """Import a circuit from an OpenQASM 2.0 or 3.0 string.
 
         Auto-detects the QASM version from the header and parses via Qiskit,
-        then imports with ``from_qiskit``. A QASM 2 ``id`` gate is dropped;
-        Qiskit's QASM 3 reader turns ``id`` into a ``U`` gate, which is
-        decomposed rather than dropped.
+        then imports with ``from_qiskit``, which handles a QASM 2 ``id`` gate
+        as an identity. Qiskit's QASM 3 reader turns ``id`` into a ``U`` gate,
+        which is decomposed instead.
 
         Args:
             qasm_string: OpenQASM program string.
@@ -1493,6 +1519,22 @@ class Circuit:
                     f"Circuit qubit labels must be nonnegative integers, got {qubit!r}"
                 )
         return int(max(qubits)) + 1 if qubits else 0
+
+    def _drop_inner_identities(self) -> None:
+        """Drop imported identity gates on wires below the largest other index.
+
+        Such a wire stays in the width as an identity wire, so dropping the
+        gate loses nothing. An identity above every other gate is the only
+        record of its wire and is kept, so the imported width is kept.
+        """
+        others = [int(q) for op in self._qf if not isinstance(op, qf.I) for q in op.qubits]
+        top = max(others, default=-1)
+        kept = [
+            op for op in self._qf
+            if not isinstance(op, qf.I) or any(int(q) > top for q in op.qubits)
+        ]
+        if len(kept) != len(self._qf):
+            self._qf = qf.Circuit(kept)
 
     def _idle_qubits(self) -> list[int]:
         """Return the identity wires: indices below the width that no gate touches."""

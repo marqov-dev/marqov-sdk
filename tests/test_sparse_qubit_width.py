@@ -368,48 +368,81 @@ def test_sparse_round_trip_through_every_framework_is_exact(build, name, round_t
     assert restored.num_qubits == circuit.num_qubits, name
 
 
-def _x2_after_identity_on_1(framework: str):
-    """A native program with an identity on wire 1 and X on wire 2."""
-    if framework == "qiskit":
-        from qiskit import QuantumCircuit
+def _import(framework: str, ops: list[tuple[str, int]]) -> Circuit:
+    """Import a native program of single-qubit ``h``/``x``/``i`` ops on ``max+1`` wires."""
+    width = max(q for _, q in ops) + 1
+    if framework in ("qiskit", "openqasm2"):
+        from qiskit import QuantumCircuit, qasm2
 
-        qc = QuantumCircuit(3)
-        qc.id(1)
-        qc.x(2)
-        return Circuit.from_qiskit(qc)
-    if framework == "openqasm2":
-        return Circuit.from_openqasm(
-            'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[3];\nid q[1];\nx q[2];'
-        )
+        qc = QuantumCircuit(width)
+        for name, q in ops:
+            getattr(qc, "id" if name == "i" else name)(q)
+        if framework == "qiskit":
+            return Circuit.from_qiskit(qc)
+        return Circuit.from_openqasm(qasm2.dumps(qc))
     if framework == "braket":
         from braket.circuits import Circuit as BraketCircuit
 
-        return Circuit.from_braket(BraketCircuit().i(1).x(2))
+        bk = BraketCircuit()
+        for name, q in ops:
+            getattr(bk, name)(q)
+        return Circuit.from_braket(bk)
     if framework == "cirq":
         import cirq
 
-        q = cirq.LineQubit.range(3)
-        return Circuit.from_cirq(cirq.Circuit([cirq.I(q[1]), cirq.X(q[2])]))
+        gates = {"h": cirq.H, "x": cirq.X, "i": cirq.I}
+        return Circuit.from_cirq(cirq.Circuit([gates[n](cirq.LineQubit(q)) for n, q in ops]))
     if framework == "pyquil":
         from pyquil import Program
-        from pyquil.gates import I, X
+        from pyquil.gates import H, I, X
 
-        return Circuit.from_pyquil(Program(I(1), X(2)))
+        gates = {"h": H, "x": X, "i": I}
+        return Circuit.from_pyquil(Program(*[gates[n](q) for n, q in ops]))
     import pennylane as qml
 
-    return Circuit.from_pennylane(qml.tape.QuantumScript([qml.Identity(1), qml.PauliX(2)]))
+    gates = {"h": qml.Hadamard, "x": qml.PauliX, "i": qml.Identity}
+    return Circuit.from_pennylane(qml.tape.QuantumScript([gates[n](q) for n, q in ops]))
+
+
+IMPORT_FRAMEWORKS = ["qiskit", "openqasm2", "braket", "cirq", "pyquil", "pennylane"]
+
+
+def _gate(name: str, qubit: int) -> dict:
+    return {"gate": name, "qubits": [qubit], "params": []}
 
 
 # OpenQASM 3 is absent: Qiskit's QASM 3 reader parses `id` as a U gate, not an
 # identity, so from_openqasm decomposes it. to_openqasm(3) never emits `id`.
-@pytest.mark.parametrize("framework", ["qiskit", "openqasm2", "braket", "cirq", "pyquil", "pennylane"])
-def test_importers_drop_identity_gates(framework):
+@pytest.mark.parametrize("framework", IMPORT_FRAMEWORKS)
+def test_importers_drop_identity_gates_below_the_largest_other_index(framework):
     pytest.importorskip("braket")
     pytest.importorskip("pyquil")
     pytest.importorskip("pennylane")
-    imported = _x2_after_identity_on_1(framework)
-    assert imported.to_dict() == {"gates": [{"gate": "X", "qubits": [2], "params": []}]}
+    imported = _import(framework, [("i", 1), ("x", 2)])
+    assert imported.to_dict() == {"gates": [_gate("X", 2)]}
     assert imported.num_qubits == 3
+
+
+@pytest.mark.parametrize("framework", IMPORT_FRAMEWORKS)
+def test_importers_keep_a_trailing_identity_so_the_width_is_kept(framework):
+    """An identity above every other gate is the only record of that wire."""
+    pytest.importorskip("braket")
+    pytest.importorskip("pyquil")
+    pytest.importorskip("pennylane")
+    imported = _import(framework, [("h", 0), ("i", 1)])
+    assert imported.to_dict() == {"gates": [_gate("H", 0), _gate("I", 1)]}
+    assert imported.num_qubits == 2
+    mixed = _import(framework, [("h", 0), ("i", 1), ("x", 2), ("i", 3)])
+    assert mixed.to_dict() == {"gates": [_gate("H", 0), _gate("X", 2), _gate("I", 3)]}
+    assert mixed.num_qubits == 4
+
+
+def test_cirq_identity_after_a_terminal_measurement_is_not_mid_circuit():
+    import cirq
+
+    q = cirq.LineQubit.range(2)
+    imported = Circuit.from_cirq(cirq.Circuit([cirq.X(q[1]), cirq.measure(q[1]), cirq.I(q[1])]))
+    assert imported.to_dict() == {"gates": [_gate("X", 1)]}
 
 
 def test_from_dict_keeps_identity_gates():
