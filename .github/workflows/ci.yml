@@ -155,7 +155,8 @@ jobs:
   # required context stays stable if the job set ever changes.
   #
   # INVARIANT: the scope planner and every blocking job must be listed in
-  # `needs:` here (test, test-cudaq and python313-qualified). Lint and python313-unsupported are
+  # `needs:` here (test, test-cudaq, python313-qualified and watch-ui).
+  # Lint and python313-unsupported are
   # advisory and excluded by name.
   # Add new blocking jobs to `needs:` in the same PR.
   #
