@@ -28,12 +28,15 @@ async def test_actual_pyqvm_measures_the_excited_physical_wire(sparse):
     qc = SimpleNamespace(qam=qvm, compile=compile, run=qvm.run)
     ex = RigettiExecutor(RigettiExecutorConfig(quantum_processor_id="3q-qvm"), qc=qc)
     out = await ex.execute(Circuit().x(q), shots=16)
-    # Width is the largest index plus one; qubit q is character q of the key.
+    # Only the touched physical wire is measured; the counts key still has
+    # num_qubits characters, with '0' at the untouched (identity) wires.
     width = q + 1
     assert out.counts == {"0" * q + "1": 16}
-    assert out.metadata["measured_qubits"] == list(range(width))
-    assert f"MEASURE {q} ro[{q}]" in compiled[0].out()
+    assert out.metadata["measured_qubits"] == [q]
+    assert f"MEASURE {q} ro[0]" in compiled[0].out()
+    assert "I " not in compiled[0].out()
     assert out.metadata["num_qubits"] == width
+    assert out.metadata.get("identity_wires", []) == list(range(q))
 
 
 @pytest.mark.asyncio
@@ -43,10 +46,33 @@ async def test_actual_pyqvm_sparse_entanglement_preserves_asymmetric_counts():
     out = await RigettiExecutor(
         RigettiExecutorConfig(quantum_processor_id="4q-qvm"), qc=qc
     ).execute(Circuit().h(3).cnot(3, 1).x(0), shots=32)
-    assert out.metadata["measured_qubits"] == [0, 1, 2, 3]  # wire 2 is an identity wire
-    assert set(out.counts) == {"1000", "1101"}
+    assert out.metadata["measured_qubits"] == [0, 1, 3]  # wire 2 is not measured
+    assert set(out.counts) == {"1000", "1101"}  # but keeps its '0' in each key
     assert sum(out.counts.values()) == 32
-    assert out.raw_result.get_register_map()["ro"].shape == (32, 4)
+    assert out.raw_result.get_register_map()["ro"].shape == (32, 3)
+    assert out.metadata["identity_wires"] == [2]
+
+
+@pytest.mark.asyncio
+async def test_actual_pyqvm_measures_only_touched_high_physical_labels():
+    """On QCS labels are physical: idle (possibly dead) qubits 0..9 are not touched."""
+    qvm = PyQVM(n_qubits=12, seed=17)
+    compiled = []
+
+    def compile(program):
+        compiled.append(program)
+        return program
+
+    qc = SimpleNamespace(qam=qvm, compile=compile, run=qvm.run)
+    out = await RigettiExecutor(
+        RigettiExecutorConfig(quantum_processor_id="12q-qvm"), qc=qc
+    ).execute(Circuit().x(10).cz(10, 11), shots=8)
+    program = compiled[0].out()
+    assert sorted(compiled[0].get_qubit_indices()) == [10, 11]
+    assert program.count("MEASURE") == 2
+    assert out.metadata["measured_qubits"] == [10, 11]
+    assert out.counts == {"0" * 10 + "10": 8}
+    assert out.metadata["num_qubits"] == 12
 
 
 @pytest.mark.parametrize(

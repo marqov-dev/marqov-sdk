@@ -315,9 +315,11 @@ class Circuit:
         or ``CY``) are first translated into Quil-native gates, so the program
         equals the circuit up to a global phase (Quil has no global-phase
         gate). Every parameter is exported as a float. Qubit ``i`` stays Quil
-        qubit ``i``; a Quil program has no register width, so each identity
-        wire (see ``num_qubits``) is exported as an ``I`` gate, which
-        ``from_pyquil`` drops again.
+        qubit ``i``; labels are not compacted. A Quil program has no register
+        width, and on QCS its labels are physical qubits, so identity wires
+        (see ``num_qubits``) are not exported and no idle qubit is named.
+        ``RigettiExecutor`` measures only the touched qubits and inserts a
+        ``'0'`` at each identity-wire position of the counts keys.
 
         Returns:
             PyQuil Program object.
@@ -344,7 +346,7 @@ class Circuit:
         # Translation leaves sympy expressions such as `pi/2` in parameters,
         # which pyQuil rejects, so cast them to floats.
         program = Program()
-        for index, op in enumerate(qf.xforest.translate_to_pyquil(self._padded_qf())):
+        for index, op in enumerate(qf.xforest.translate_to_pyquil(self._qf)):
             quil_name = self._QF_TO_QUIL.get(op.name)
             if quil_name is None:
                 raise NotImplementedError(
@@ -1550,9 +1552,9 @@ class Circuit:
     def _padded_qf(self) -> qf.Circuit:
         """Return the circuit with an explicit identity gate on each identity wire.
 
-        For target formats that have no register-width declaration (Cirq,
-        Quil; PennyLane pads separately), an idle wire exists only if an
-        operation names it. Braket is not padded, see ``to_braket``.
+        For Cirq, which has no register-width declaration, an idle wire
+        exists only if an operation names it (PennyLane pads separately).
+        Braket and Quil are not padded, see ``to_braket`` and ``to_pyquil``.
         """
         idle = self._idle_qubits()
         if not idle:

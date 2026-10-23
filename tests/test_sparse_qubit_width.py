@@ -176,11 +176,12 @@ def test_pennylane_export_statevector_matches_simulate(build, width):
     np.testing.assert_allclose(state, _reference(circuit, width), atol=1e-12, rtol=0)
 
 
-def test_pyquil_export_declares_every_wire():
+def test_pyquil_export_keeps_labels_and_sends_no_identity():
+    """Quil labels are physical qubits on QCS, so idle wires are not named."""
     pytest.importorskip("pyquil")
     program = Circuit().h(3).cnot(3, 1).x(0).to_pyquil()
-    assert sorted(program.get_qubit_indices()) == [0, 1, 2, 3]
-    assert "I 2" in program.out()
+    assert sorted(program.get_qubit_indices()) == [0, 1, 3]
+    assert "I " not in program.out()
 
 
 def test_pytket_export_declares_every_wire():
