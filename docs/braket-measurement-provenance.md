@@ -6,6 +6,14 @@
 additional provider request. `MarqovDevice.run()` still returns counts alone and
 cannot supply this provenance contract.
 
+The record describes the provider's counts. When a circuit sent through the
+logical (not label-preserving) path has identity wires, untouched indices below
+its largest one (see `Circuit.num_qubits`), Braket never measured them, and
+`result.counts` is then widened after the record is made: a `'0'` is inserted
+at each identity-wire position, and `result.metadata["identity_wires"]` lists
+those positions. For `Circuit().x(2)`, the provider key `"1"` on
+`measured_qubits=[2]` becomes `"001"`.
+
 | Field | Type and meaning |
 |---|---|
 | `protocol_version` | Literal `marqov.braket-measurement-provenance/v1` |

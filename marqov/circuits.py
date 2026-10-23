@@ -45,10 +45,11 @@ class Circuit:
     Qubits are nonnegative integer indices. The circuit width is the largest
     index any gate touches plus one, so ``Circuit().x(2)`` has three qubits:
     an index below the largest that no gate touches is an identity wire, kept
-    in every export and simulation rather than removed. Qubit ``i`` is always
-    register index ``i`` in an export, and character ``i`` of a counts key
-    from ``LocalExecutor``, so qubit 0 is the leftmost character
-    (``Circuit().x(2)`` yields ``{"001": shots}``).
+    in simulation and in counts keys rather than removed. Qubit ``i`` is
+    always register index ``i`` in an export (labels are never compacted),
+    and character ``i`` of a counts key from ``LocalExecutor``, so qubit 0 is
+    the leftmost character (``Circuit().x(2)`` yields ``{"001": shots}``).
+    Each exporter's docstring says how it carries identity wires.
 
     Example:
         >>> circuit = Circuit()
@@ -233,15 +234,20 @@ class Circuit:
     def to_braket(self) -> BraketCircuit:
         """Convert to Amazon Braket circuit.
 
-        Qubit ``i`` stays Braket qubit ``i``. A Braket circuit has no register
-        width, so each identity wire (see ``num_qubits``) is exported as an
-        ``i`` instruction; ``from_braket`` drops those again.
+        Qubit ``i`` stays Braket qubit ``i``; labels are not compacted. A
+        Braket circuit has no register width, and not every Braket QPU lists
+        the ``i`` gate among its supported operations, so identity wires (see
+        ``num_qubits``) are not exported: Braket measures only the touched
+        qubits. ``BraketExecutor`` and ``MarqovDevice`` insert a ``'0'`` at
+        each identity-wire position of the returned counts keys, since an
+        untouched wire is always in state 0.
 
         Returns:
             Braket Circuit object ready for execution.
         """
         require_braket()
-        return qf.circuit_to_braket(self._padded_qf(), translate=True)
+        # Declaring qubits 0..n-1 stops the converter from compacting labels.
+        return qf.circuit_to_braket(self._wide_qf(), translate=True)
 
     def to_braket_native(self) -> BraketCircuit:
         """Export the Rigetti Rx/Rz/CZ/XY basis preserving source qubit labels.
@@ -1502,8 +1508,9 @@ class Circuit:
     def _padded_qf(self) -> qf.Circuit:
         """Return the circuit with an explicit identity gate on each identity wire.
 
-        For target formats that have no register-width declaration (Braket,
-        Cirq, Quil), an idle wire exists only if an operation names it.
+        For target formats that have no register-width declaration (Cirq,
+        Quil; PennyLane pads separately), an idle wire exists only if an
+        operation names it. Braket is not padded, see ``to_braket``.
         """
         idle = self._idle_qubits()
         if not idle:

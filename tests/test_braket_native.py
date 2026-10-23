@@ -21,8 +21,8 @@ def native():
     return Circuit.from_braket(BraketCircuit().rx(7, 0.3).rz(1, -0.7).cz(7, 1).xy(1, 7, 0.4))
 
 
-# Targets of the logical to_braket() export of native(): identity wires first.
-LOGICAL_TARGETS = [[0], [2], [3], [4], [5], [6], [7], [1], [7, 1], [1, 7]]
+# Targets of the logical to_braket() export of native(): labels kept, no padding.
+LOGICAL_TARGETS = [[7], [1], [7, 1], [1, 7]]
 
 
 def records(circuit):
@@ -62,7 +62,7 @@ def test_native_export_preserves_sparse_order_and_angles():
         ("XY", [1, 7], pytest.approx(0.4, abs=1e-15)),
     ]
     assert source.to_dict() == before
-    # The logical export keeps labels and pads identity wires 0 and 2..6 (marqov-sdk#154).
+    # The logical export keeps labels rather than compacting them (marqov-sdk#154).
     assert [r[1] for r in records(source.to_braket())] == LOGICAL_TARGETS
 
 

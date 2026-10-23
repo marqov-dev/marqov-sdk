@@ -7,7 +7,12 @@ from typing import Any
 
 from marqov.backends import is_azure, is_braket, is_ibm, is_simulator
 from marqov.circuits import Circuit
-from marqov._braket_native import SUPPORTED_EXECUTE_OPTIONS, prepare_braket, validate_options
+from marqov._braket_native import (
+    SUPPORTED_EXECUTE_OPTIONS,
+    prepare_braket,
+    validate_options,
+    widen_logical_counts,
+)
 from marqov._optional import require_braket
 from marqov.executors.base import reject_unsupported_options
 
@@ -413,9 +418,14 @@ class MarqovDevice:
         device = self._get_provider_device()
         self._validate_circuit(marqov_circuit)
 
+        # Braket is sent no identity wire (see Circuit.to_braket); its '0' is put
+        # back in each key. The native label-preserving path is left as returned.
+        idle = [] if preserve_qubit_labels else marqov_circuit._idle_qubits()
+
         if self._backend in ("local", "marqov-sim"):
             result = device.run(native_circuit, shots=shots).result()
-            return dict(result.measurement_counts)
+            counts = dict(result.measurement_counts)
+            return widen_logical_counts(marqov_circuit, counts, result) if idle else counts
 
         elif is_ibm(self._params):
             import qiskit_ibm_runtime
@@ -484,6 +494,8 @@ class MarqovDevice:
                         from marqov.executors._counts import allocate_counts
 
                         counts = allocate_counts(dict(probs), shots)
+                if idle:
+                    counts = widen_logical_counts(marqov_circuit, counts, result)
                 return counts
             except Exception as e:
                 error_msg = str(e)

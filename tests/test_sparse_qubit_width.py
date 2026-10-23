@@ -129,9 +129,18 @@ def test_braket_export_statevector_matches_simulate(build, width):
 
     circuit = build()
     bk = circuit.to_braket()
-    assert [int(q) for q in bk.qubits] == list(range(width))
+    touched = sorted({q for gate in circuit.to_dict()["gates"] for q in gate["qubits"]})
+    # Labels are kept, not compacted; no identity instruction is emitted, because
+    # not every Braket QPU lists `i` among its supported operations.
+    assert [int(q) for q in bk.qubits] == touched
+    assert "I" not in {instruction.operator.name for instruction in bk.instructions}
     result = LocalSimulator().run(bk.copy().state_vector(), shots=0).result()
-    np.testing.assert_allclose(result.values[0], _reference(circuit, width), atol=1e-12, rtol=0)
+    # Braket orders amplitudes over its sorted qubits; an untouched wire is |0>,
+    # so place each Braket qubit i on axis i and the idle axes at index 0.
+    exported = np.zeros((2,) * width, dtype=complex)
+    index = tuple(slice(None) if q in touched else 0 for q in range(width))
+    exported[index] = result.values[0].reshape((2,) * len(touched))
+    np.testing.assert_allclose(exported.flatten(), _reference(circuit, width), atol=1e-12, rtol=0)
 
 
 @pytest.mark.parametrize(("build", "width"), SPARSE)
@@ -187,12 +196,81 @@ def test_openqasm_exports_declare_the_width():
     assert "x q[2];" in circuit.to_openqasm(3)
 
 
-def test_braket_local_simulator_counts_match_local_executor_keys():
-    pytest.importorskip("braket")
+def _braket_entry_points(monkeypatch):
+    """BraketExecutor and cloud MarqovDevice, both backed by a real LocalSimulator."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
     from braket.devices import LocalSimulator
 
-    result = LocalSimulator().run(Circuit().x(2).to_braket(), shots=8).result()
-    assert dict(result.measurement_counts) == {"001": 8}
+    from marqov.device import MarqovDevice
+    from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
+
+    no_cloud = Mock(side_effect=AssertionError("Unexpected AWS initialization"))
+    monkeypatch.setattr("braket.aws.AwsDevice", no_cloud)
+    monkeypatch.setattr("marqov.executors.braket.AwsDevice", no_cloud)
+    submitted = []
+
+    def run(circuit, *args, shots, **kwargs):
+        submitted.append(circuit)
+        result = LocalSimulator().run(circuit, shots=shots).result()
+        return SimpleNamespace(id="offline-task", result=lambda: result, metadata=lambda **k: {})
+
+    provider = SimpleNamespace(name="offline", run=run)
+    arn = "arn:aws:braket:us-east-1::device/qpu/ionq/Forte-1"
+    executor = BraketExecutor(
+        BraketExecutorConfig(device_arn=arn, s3_bucket="unused", s3_prefix="test")
+    )
+    executor._get_device = AsyncMock(return_value=provider)
+    device = MarqovDevice("ionq", {"device_arn": arn, "s3_destination_folder": ("unused", "test")})
+    device._get_provider_device = Mock(return_value=provider)
+    return executor, device, submitted
+
+
+@pytest.mark.parametrize(
+    ("circuit", "expected"),
+    [
+        (Circuit().x(2), {"001"}),
+        (Circuit().h(3).cnot(3, 1).x(0), {"1000", "1101"}),
+        (Circuit().x(1).x(4), {"01001"}),
+        (Circuit().x(0).cnot(0, 1), {"11"}),  # dense: provider keys pass through
+    ],
+    ids=["x2", "bell-1-3", "x1-x4", "dense"],
+)
+def test_braket_counts_use_the_widened_convention(monkeypatch, circuit, expected):
+    """Untouched wires are not sent to Braket; their '0' is inserted in each key."""
+    pytest.importorskip("braket")
+    from marqov.device import MarqovDevice
+
+    executor, device, submitted = _braket_entry_points(monkeypatch)
+    outcome = asyncio.run(executor.execute(circuit, shots=64))
+    cloud = device.run(circuit, shots=64)
+    local = MarqovDevice("local", {}).run(circuit, shots=64)
+    reference = _counts(circuit, shots=64)
+    for counts in (outcome.counts, cloud, local):
+        assert set(counts) == expected == set(reference)
+        assert sum(counts.values()) == 64
+    assert all("I" not in {i.operator.name for i in c.instructions} for c in submitted)
+    # Provenance still describes the provider's own counts in raw_result.
+    provenance = outcome.metadata["measurement_provenance"]
+    touched = sorted({q for gate in circuit.to_dict()["gates"] for q in gate["qubits"]})
+    assert provenance["measured_qubits"] == touched
+    idle = [q for q in range(circuit.num_qubits) if q not in touched]
+    assert outcome.metadata.get("identity_wires", []) == idle
+    assert ("identity_wires" in outcome.metadata) == bool(idle)
+
+
+def test_braket_counts_refuse_measured_wires_that_are_not_the_circuit_wires(monkeypatch):
+    """Without a wire-for-wire match there is no safe place for the idle '0's."""
+    pytest.importorskip("braket")
+    from types import SimpleNamespace
+
+    from marqov._braket_native import widen_logical_counts
+
+    result = SimpleNamespace(measured_qubits=[5, 6])
+    with pytest.raises(ValueError, match="measured qubits"):
+        widen_logical_counts(Circuit().x(2).h(0), {"10": 4}, result)
+    assert widen_logical_counts(Circuit().x(2).h(0), {"01": 4}, SimpleNamespace()) == {"001": 4}
 
 
 @pytest.mark.parametrize("build", [build for build, _ in SPARSE])

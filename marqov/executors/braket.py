@@ -36,7 +36,12 @@ except ModuleNotFoundError as error:
         raise
     boto3 = AwsDevice = AwsSession = BraketCircuit = None
 
-from marqov._braket_native import SUPPORTED_EXECUTE_OPTIONS, prepare_braket, validate_options
+from marqov._braket_native import (
+    SUPPORTED_EXECUTE_OPTIONS,
+    prepare_braket,
+    validate_options,
+    widen_logical_counts,
+)
 from marqov.executors._blocking import BlockingCalls
 from marqov.executors._braket_provenance import measurement_provenance
 from marqov.executors._counts import allocate_counts
@@ -230,10 +235,15 @@ class BraketExecutor(BaseExecutor):
                 Any other option raises TypeError before device initialization.
 
         Returns:
-            ExecutionResult with measurement counts and metadata.
+            ExecutionResult with measurement counts and metadata. On the
+            logical path, keys have ``circuit.num_qubits`` characters, qubit 0
+            leftmost: identity wires are not sent to Braket, so a ``'0'`` is
+            inserted at each one and ``metadata["identity_wires"]`` lists them.
 
         Raises:
             RuntimeError: If task fails or device is unavailable.
+            ValueError: If the provider's measured qubits are not the circuit's
+                touched qubits, so identity wires cannot be placed.
             TypeError: If an option other than verbatim or disable_qubit_rewiring is supplied.
         """
         circuit = self._validate_circuit(circuit)
@@ -280,7 +290,10 @@ class BraketExecutor(BaseExecutor):
                 identity["task_arn"] = task.id
                 identity["submission_status"] = "submitted"
                 self._current_task_arn = task.id  # Tracking only, never cleanup ownership.
-                return await self._task_execution_result(task, device, calls, shots, start_time, s3_location)
+                return await self._task_execution_result(
+                    task, device, calls, shots, start_time, s3_location,
+                    logical_circuit=None if preserve_qubit_labels else circuit,
+                )
             except (Exception, asyncio.CancelledError) as error:
                 self._retain_task_identity(error, identity)
                 raise
@@ -305,6 +318,7 @@ class BraketExecutor(BaseExecutor):
         shots: int,
         start_time: float,
         s3_location: str,
+        logical_circuit: Circuit | None = None,
     ) -> ExecutionResult:
         task_arn = task.id
         result = await calls.wait(
@@ -341,23 +355,31 @@ class BraketExecutor(BaseExecutor):
                 counts = allocate_counts(dict(probs), shots)
                 probability_fallback = True
 
+        metadata: dict[str, Any] = {
+            # Describes the provider's counts in raw_result, before widening.
+            "measurement_provenance": measurement_provenance(
+                result, counts, shots, probability_fallback=probability_fallback,
+            ),
+            "task_arn": task.id,
+            "device_name": device.name,
+            "s3_location": s3_location,
+            "execution_duration_ms": execution_duration_ms,
+            "queue_time_ms": queue_time_ms,
+            "wall_time_ms": wall_time * 1000,
+        }
+        # to_braket() sends no identity wire; put its '0' back in each key.
+        idle = logical_circuit._idle_qubits() if logical_circuit is not None else []
+        if idle:
+            counts = widen_logical_counts(logical_circuit, counts, result)
+            metadata["identity_wires"] = idle
+
         return ExecutionResult(
             counts=counts,
             backend=self.config.device_arn,
             execution_time_ms=execution_duration_ms if execution_duration_ms is not None else wall_time * 1000,
             shots=shots,
             raw_result=result,
-            metadata={
-                "measurement_provenance": measurement_provenance(
-                    result, counts, shots, probability_fallback=probability_fallback,
-                ),
-                "task_arn": task.id,
-                "device_name": device.name,
-                "s3_location": s3_location,
-                "execution_duration_ms": execution_duration_ms,
-                "queue_time_ms": queue_time_ms,
-                "wall_time_ms": wall_time * 1000,
-            },
+            metadata=metadata,
         )
 
     def _task_result_sync(self, task: Any) -> Any:

@@ -129,3 +129,33 @@ def prepare_braket(
             from braket.circuits import Circuit as circuit_factory
         output = circuit_factory().add_verbatim_box(output)
     return output
+
+
+def widen_logical_counts(circuit: Any, counts: dict[str, int], result: Any) -> dict[str, int]:
+    """Key logical-path counts over qubits ``0..circuit.num_qubits-1``.
+
+    ``Circuit.to_braket()`` sends no identity wire to Braket, so the provider
+    measures only the touched qubits. An untouched wire is always in state 0,
+    so a ``'0'`` is inserted at its position. Character ``j`` of a provider
+    key is ``result.measured_qubits[j]``, or the ``j``-th touched qubit in
+    ascending order (Braket's default measurement order) when the result does
+    not report them. Callers skip this for circuits without identity wires and
+    for the native label-preserving path, whose counts stay as returned.
+    """
+    width = circuit.num_qubits
+    touched = sorted({int(q) for gate in circuit.to_dict()["gates"] for q in gate["qubits"]})
+    reported = getattr(result, "measured_qubits", None)
+    wires = [int(q) for q in reported] if reported else touched
+    if sorted(wires) != touched or any(len(key) != len(wires) for key in counts):
+        raise ValueError(
+            f"Braket measured qubits {wires} do not match the circuit's touched qubits "
+            f"{touched}; cannot place its identity wires in the counts keys"
+        )
+    widened: dict[str, int] = {}
+    for key, count in counts.items():
+        bits = ["0"] * width
+        for wire, bit in zip(wires, key):
+            bits[wire] = bit
+        padded = "".join(bits)
+        widened[padded] = widened.get(padded, 0) + count
+    return widened
