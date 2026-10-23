@@ -190,10 +190,12 @@ class MarqovDevice:
     ``channel``, ``instance``, ``token`` and ``optimization_level`` (default
     1); Azure ``subscription_id``, ``resource_group``, ``workspace_name`` and
     ``location`` (default ``"eastus"``); Braket ``device_arn``, ``s3_bucket``
-    and ``s3_prefix`` (default ``"marqov"``). The older ``ibm_``/``azure_``
-    prefixed spellings still work and emit a :class:`DeprecationWarning`;
-    supplying both spellings of one key with different values raises
-    :class:`ValueError`.
+    and ``s3_prefix`` (default ``"marqov"``). With canonical keys only, an
+    IBM dict needs ``channel`` or ``instance`` alongside ``token``: a bare
+    ``token`` does not select IBM, because other providers take one too.
+    The older ``ibm_``/``azure_`` prefixed spellings still work and emit a
+    :class:`DeprecationWarning`; supplying both spellings of one key with
+    different values raises :class:`ValueError`.
     """
 
     def __init__(self, backend: str, params: dict, *, _stacklevel: int = 3) -> None:
