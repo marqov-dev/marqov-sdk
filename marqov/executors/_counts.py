@@ -184,3 +184,21 @@ def widen_counts(
         padded = "".join(bits)
         widened[padded] = widened.get(padded, 0) + count
     return widened
+
+
+def refuse_identity_only(circuit: Any, provider: str) -> None:
+    """Refuse a nonempty circuit whose every gate is an identity, before submission.
+
+    The Braket and Quil exports send no identity gate, so such a circuit
+    exports an empty program, which the provider would refuse or run with
+    nothing measured. Counts are not fabricated in its place.
+
+    Raises:
+        ValueError: If the circuit has gates but none other than identities.
+    """
+    width = circuit.num_qubits
+    if width and len(circuit._idle_qubits()) == width:
+        raise ValueError(
+            f"{provider}: circuit has no non-identity gates; {provider} is sent no identity "
+            "gate, so the program would be empty and there is nothing to run"
+        )

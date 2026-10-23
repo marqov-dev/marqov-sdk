@@ -401,6 +401,10 @@ class MarqovDevice:
         cloud_braket = (self._backend not in ("local", "marqov-sim")
                         and not is_ibm(self._params) and not is_azure(self._params)
                         and is_braket(self._params))
+        if cloud_braket or self._backend in ("local", "marqov-sim"):
+            from marqov.executors._counts import refuse_identity_only
+
+            refuse_identity_only(marqov_circuit, "Braket")
         if cloud_braket or preserve_qubit_labels is not False:
             validate_options(preserve_qubit_labels, kwargs,
                              self._params.get("device_arn") if cloud_braket else None)

@@ -72,7 +72,9 @@ ragged arrays, fractional values and string coercion are refused. Readout
 validation failures raise `RuntimeError` with a `ValueError` cause and the
 existing `remote_job` recovery context. A successful result preserves the raw
 pyQuil result. Shots must be positive integers; an empty circuit still returns
-empty counts without contacting the backend.
+empty counts without contacting the backend. A circuit whose only gates are
+identities would export an empty program, so it raises `ValueError` before
+contacting the backend.
 
 Offline tests use pyQuil's actual `PyQVM` to check sparse physical measurements
 and asymmetric entanglement. They establish local adapter semantics, not

@@ -7,9 +7,11 @@ padding. An Rx on label 7 remains an Rx on label 7. The normal `to_braket()`
 conversion also keeps logical labels, but translates gates. It sends no
 identity gate to Braket (not every Braket QPU lists the `i` gate), so on that
 path `BraketExecutor` and `MarqovDevice` insert a `'0'` at each index that no
-non-identity gate touches in the returned counts keys, giving keys of length `Circuit.num_qubits` (the
-largest index plus one). Counts from `preserve_qubit_labels=True` are returned
-as the provider reported them.
+non-identity gate touches in the returned counts keys, giving keys of length
+`Circuit.num_qubits` (the largest index plus one). A circuit whose only gates
+are identities would be an empty Braket program, so both entry points raise
+`ValueError` before any provider call. Counts from `preserve_qubit_labels=True`
+are returned as the provider reported them.
 
 Only exact QuantumFlow Rx/Rz/CZ/XY gates are accepted. Qubit labels must be
 nonnegative integers (excluding booleans); two-qubit gates require distinct

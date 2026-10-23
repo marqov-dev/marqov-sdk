@@ -644,3 +644,61 @@ def test_rigetti_widens_an_identity_only_top_wire_instead_of_measuring_it():
     assert out.metadata["measured_qubits"] == [0]
     assert out.metadata["identity_wires"] == [1]
     assert set(out.counts) == set(_counts(circuit)) == {"00", "10"}
+
+
+# A circuit with no non-identity gate exports an empty Braket or Quil program.
+# Counts are not fabricated: each path refuses before any provider call.
+
+EMPTY_PROGRAM = "no non-identity gates"
+
+
+def test_braket_executor_refuses_an_identity_only_circuit_before_the_provider(monkeypatch):
+    pytest.importorskip("braket")
+    from unittest.mock import AsyncMock, Mock
+
+    from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
+
+    monkeypatch.setattr("marqov.executors.braket.AwsDevice", Mock(side_effect=AssertionError))
+    executor = BraketExecutor(
+        BraketExecutorConfig(
+            device_arn="arn:aws:braket:us-east-1::device/qpu/ionq/Forte-1",
+            s3_bucket="unused", s3_prefix="test",
+        )
+    )
+    executor._get_device = AsyncMock(side_effect=AssertionError("provider called"))
+    with pytest.raises(ValueError, match=EMPTY_PROGRAM):
+        asyncio.run(executor.execute(_identity_only(), shots=8))
+    executor._get_device.assert_not_called()
+
+
+@pytest.mark.parametrize("backend", ["local", "ionq"])
+def test_marqov_device_braket_paths_refuse_an_identity_only_circuit(backend):
+    pytest.importorskip("braket")
+    from unittest.mock import Mock
+
+    from marqov.device import MarqovDevice
+
+    params = {} if backend == "local" else {
+        "device_arn": "arn:aws:braket:us-east-1::device/qpu/ionq/Forte-1",
+        "s3_destination_folder": ("unused", "test"),
+    }
+    device = MarqovDevice(backend, params)
+    device._get_provider_device = Mock(side_effect=AssertionError("provider called"))
+    with pytest.raises(ValueError, match=EMPTY_PROGRAM):
+        device.run(_identity_only(), shots=8)
+    device._get_provider_device.assert_not_called()
+
+
+def test_rigetti_refuses_an_identity_only_circuit_before_the_backend():
+    pytest.importorskip("pyquil")
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from marqov.executors.rigetti import RigettiExecutor, RigettiExecutorConfig
+
+    qc = SimpleNamespace(qam=None, compile=Mock(), run=Mock())
+    executor = RigettiExecutor(RigettiExecutorConfig(quantum_processor_id="3q-qvm"), qc=qc)
+    with pytest.raises(ValueError, match=EMPTY_PROGRAM):
+        asyncio.run(executor.execute(_identity_only(), shots=8))
+    qc.compile.assert_not_called()
+    qc.run.assert_not_called()

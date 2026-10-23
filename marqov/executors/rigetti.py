@@ -44,7 +44,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from marqov.executors._blocking import BlockingCalls
-from marqov.executors._counts import widen_counts
+from marqov.executors._counts import refuse_identity_only, widen_counts
 from marqov.executors.base import (
     BaseExecutor,
     DeviceStatus,
@@ -259,9 +259,10 @@ class RigettiExecutor(BaseExecutor):
         Raises:
             TypeError: If any keyword option is supplied.
             RuntimeError: If compilation, execution or readout validation fails.
-            ValueError: If shots are not positive integers or the exported
-                program's qubit labels are not the circuit's non-identity
-                qubits.
+            ValueError: If shots are not positive integers, the circuit has
+                gates but none other than identities (the Quil program would
+                be empty), or the exported program's qubit labels are not the
+                circuit's non-identity qubits.
             TimeoutError: If execution exceeds ``config.timeout_seconds``.
         """
         reject_unsupported_options("RigettiExecutor.execute()", kwargs)
@@ -291,6 +292,7 @@ class RigettiExecutor(BaseExecutor):
                 metadata=self._metadata(0, shots, 0.0),
             )
 
+        refuse_identity_only(circuit, "Rigetti")
         program = circuit.to_pyquil()  # type: ignore[no-untyped-call]
         measured_qubits = sorted(program.get_qubit_indices())
         idle = circuit._idle_qubits()

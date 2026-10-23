@@ -44,7 +44,7 @@ from marqov._braket_native import (
 )
 from marqov.executors._blocking import BlockingCalls
 from marqov.executors._braket_provenance import measurement_provenance
-from marqov.executors._counts import allocate_counts
+from marqov.executors._counts import allocate_counts, refuse_identity_only
 from marqov.executors.base import (
     BaseExecutor,
     DeviceStatus,
@@ -242,11 +242,14 @@ class BraketExecutor(BaseExecutor):
 
         Raises:
             RuntimeError: If task fails or device is unavailable.
-            ValueError: If the provider's measured qubits are not the circuit's
-                touched qubits, so identity wires cannot be placed.
+            ValueError: If the circuit has gates but none other than
+                identities (the Braket program would be empty), or the
+                provider's measured qubits are not the circuit's touched
+                qubits, so identity wires cannot be placed.
             TypeError: If an option other than verbatim or disable_qubit_rewiring is supplied.
         """
         circuit = self._validate_circuit(circuit)
+        refuse_identity_only(circuit, "Braket")
 
         start_time = time.perf_counter()
 
