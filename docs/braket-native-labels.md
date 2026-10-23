@@ -4,7 +4,9 @@
 Rx/Rz/CZ/XY basis. It preserves source labels, each gate's target order and
 operation order. It does not translate gates, compact labels or insert idle-wire
 padding. An Rx on label 7 remains an Rx on label 7. The normal `to_braket()`
-conversion remains unchanged and compacts logical labels.
+conversion also keeps logical labels, but translates gates and pads every
+untouched index below the largest with an `i` instruction, so its width is
+`Circuit.num_qubits` (the largest index plus one).
 
 Only exact QuantumFlow Rx/Rz/CZ/XY gates are accepted. Qubit labels must be
 nonnegative integers (excluding booleans); two-qubit gates require distinct
@@ -70,6 +72,7 @@ complex native matrices, verbatim directives, forwarding, default compatibility
 and rejection before initialization are covered. This is offline source
 qualification, not a hosted or hardware result.
 
-Global logical-register width and sparse counts policy in marqov-sdk#154 remain
-separate. This change contributes to the Braket parity audit marqov-sdk#66 but
-does not close its broader behavior audit.
+The logical-register width and the counts policy for sparse indices are
+defined by marqov-sdk#154 (see `Circuit.num_qubits`). This change contributes
+to the Braket parity audit marqov-sdk#66 but does not close its broader
+behavior audit.

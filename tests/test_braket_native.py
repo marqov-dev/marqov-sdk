@@ -21,6 +21,10 @@ def native():
     return Circuit.from_braket(BraketCircuit().rx(7, 0.3).rz(1, -0.7).cz(7, 1).xy(1, 7, 0.4))
 
 
+# Targets of the logical to_braket() export of native(): identity wires first.
+LOGICAL_TARGETS = [[0], [2], [3], [4], [5], [6], [7], [1], [7, 1], [1, 7]]
+
+
 def records(circuit):
     return [
         (i.operator.name, list(map(int, i.target)), getattr(i.operator, "angle", None))
@@ -58,7 +62,8 @@ def test_native_export_preserves_sparse_order_and_angles():
         ("XY", [1, 7], pytest.approx(0.4, abs=1e-15)),
     ]
     assert source.to_dict() == before
-    assert [r[1] for r in records(source.to_braket())] == [[1], [0], [1, 0], [0, 1]]
+    # The logical export keeps labels and pads identity wires 0 and 2..6 (marqov-sdk#154).
+    assert [r[1] for r in records(source.to_braket())] == LOGICAL_TARGETS
 
 
 def test_native_export_matches_complex_operators():
@@ -143,7 +148,7 @@ async def test_default_logical_submission_and_explicit_rewiring(rewiring):
     device.run(native(), shots=4, **options)
     device_call = provider.run.call_args
     assert records(executor_call.args[0]) == records(device_call.args[0])
-    assert [r[1] for r in records(executor_call.args[0])] == [[1], [0], [1, 0], [0, 1]]
+    assert [r[1] for r in records(executor_call.args[0])] == LOGICAL_TARGETS
     if rewiring is None:
         assert "disable_qubit_rewiring" not in executor_call.kwargs
         assert device_call.kwargs["disable_qubit_rewiring"] is False

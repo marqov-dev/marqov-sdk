@@ -55,11 +55,11 @@ retention and failed or slow cleanup. They do not qualify live QCS execution.
 Rigetti measures the physical labels preserved by `Circuit.to_pyquil()`, in
 ascending order, into consecutive `ro` positions. `metadata.measured_qubits[i]`
 identifies the physical wire represented by character i of each counts key.
-Dense circuits retain qubit 0 at the left. For `Circuit().x(2)`, counts are
-`{"1": shots}` and the mapping is `[2]`; for wires 0, 1 and 3, the mapping is
-`[0, 1, 3]`. Untouched wires are not inserted into counts keys. This preserves
-the current active-wire width while fixing wrong-wire measurement; broader
-register-width semantics remain a separate decision.
+The circuit width is the largest qubit index plus one (`Circuit.num_qubits`),
+and `to_pyquil()` exports each untouched index below it as an `I` gate, so
+every wire below the width is measured and qubit 0 stays at the left. For
+`Circuit().x(2)`, counts are `{"001": shots}` and the mapping is `[0, 1, 2]`;
+for wires 0, 1 and 3, the mapping is `[0, 1, 2, 3]`.
 
 For nonempty executions, the `ro` register must contain exactly the requested
 number of rows and one column per measured wire. Values must be integer or

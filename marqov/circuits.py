@@ -42,6 +42,14 @@ class Circuit:
     Provides a fluent API for building circuits that can be converted
     to any supported backend (Braket, Qiskit, Cirq, PyQuil).
 
+    Qubits are nonnegative integer indices. The circuit width is the largest
+    index any gate touches plus one, so ``Circuit().x(2)`` has three qubits:
+    an index below the largest that no gate touches is an identity wire, kept
+    in every export and simulation rather than removed. Qubit ``i`` is always
+    register index ``i`` in an export, and character ``i`` of a counts key
+    from ``LocalExecutor``, so qubit 0 is the leftmost character
+    (``Circuit().x(2)`` yields ``{"001": shots}``).
+
     Example:
         >>> circuit = Circuit()
         >>> circuit.h(0).cnot(0, 1)  # Bell state
@@ -225,11 +233,15 @@ class Circuit:
     def to_braket(self) -> BraketCircuit:
         """Convert to Amazon Braket circuit.
 
+        Qubit ``i`` stays Braket qubit ``i``. A Braket circuit has no register
+        width, so each identity wire (see ``num_qubits``) is exported as an
+        ``i`` instruction; ``from_braket`` imports those back as ``I`` gates.
+
         Returns:
             Braket Circuit object ready for execution.
         """
         require_braket()
-        return qf.circuit_to_braket(self._qf, translate=True)
+        return qf.circuit_to_braket(self._padded_qf(), translate=True)
 
     def to_braket_native(self) -> BraketCircuit:
         """Export the Rigetti Rx/Rz/CZ/XY basis preserving source qubit labels.
@@ -249,15 +261,23 @@ class Circuit:
 
         The circuit is built on one register named ``q``, as
         ``qiskit.QuantumCircuit(n)`` would, so repeated exports are identical.
+        The register has ``num_qubits`` qubits and qubit ``i`` is ``q[i]``;
+        identity wires are idle register qubits.
 
         Returns:
             Qiskit QuantumCircuit object.
         """
         from qiskit import QuantumCircuit, QuantumRegister
+        from quantumflow import xqiskit
 
+        # Translation rebuilds the circuit on the touched qubits only, so
+        # redeclare the full width before the converter sizes the register.
+        translated = xqiskit.translate_to_qiskit(self._qf)
+        if self._idle_qubits():
+            translated = qf.Circuit(translated, qubits=list(range(self.num_qubits)))
         # The converter leaves the register unnamed, so Qiskit names it from a
         # process-global counter (q0, q1, ...); move the gates onto "q".
-        exported = qf.transpile(self._qf, output_format="qiskit")
+        exported = xqiskit.circuit_to_qiskit(translated)
         circuit = QuantumCircuit(QuantumRegister(exported.num_qubits, "q"))
         circuit.compose(exported, qubits=range(exported.num_qubits), inplace=True)
         return circuit
@@ -265,10 +285,14 @@ class Circuit:
     def to_cirq(self):
         """Convert to Google Cirq circuit.
 
+        Qubit ``i`` is ``cirq.LineQubit(i)``. A Cirq circuit has no register
+        width, so each identity wire (see ``num_qubits``) is exported as a
+        ``cirq.I`` operation; ``from_cirq`` drops those again.
+
         Returns:
             Cirq Circuit object.
         """
-        return qf.transpile(self._qf, output_format="cirq")
+        return qf.transpile(self._padded_qf(), output_format="cirq")
 
     # QuantumFlow gate name -> Quil gate name. The fork's map spells two of
     # these wrong ("PhaseShift", "CHPHASE10"), which pyQuil cannot interpret.
@@ -284,7 +308,10 @@ class Circuit:
         Gates outside the Quil-native set (for example Braket's ``V``, ``XY``
         or ``CY``) are first translated into Quil-native gates, so the program
         equals the circuit up to a global phase (Quil has no global-phase
-        gate). Every parameter is exported as a float.
+        gate). Every parameter is exported as a float. Qubit ``i`` stays Quil
+        qubit ``i``; a Quil program has no register width, so each identity
+        wire (see ``num_qubits``) is exported as an ``I`` gate, which
+        ``from_pyquil`` does not import.
 
         Returns:
             PyQuil Program object.
@@ -311,7 +338,7 @@ class Circuit:
         # Translation leaves sympy expressions such as `pi/2` in parameters,
         # which pyQuil rejects, so cast them to floats.
         program = Program()
-        for index, op in enumerate(qf.xforest.translate_to_pyquil(self._qf)):
+        for index, op in enumerate(qf.xforest.translate_to_pyquil(self._padded_qf())):
             quil_name = self._QF_TO_QUIL.get(op.name)
             if quil_name is None:
                 raise NotImplementedError(
@@ -323,6 +350,9 @@ class Circuit:
 
     def to_pytket(self):
         """Convert to pytket Circuit.
+
+        Built from ``to_qiskit()``, so it has ``num_qubits`` qubits and qubit
+        ``i`` is ``q[i]``, identity wires included.
 
         Returns:
             pytket Circuit object.
@@ -348,6 +378,10 @@ class Circuit:
 
     def to_openqasm(self, version: int = 2) -> str:
         """Export circuit as an OpenQASM string.
+
+        Built from ``to_qiskit()``: the register ``q`` is declared with
+        ``num_qubits`` qubits and qubit ``i`` is ``q[i]``, identity wires
+        included.
 
         Args:
             version: QASM version to export (2 or 3). Defaults to 2.
@@ -399,7 +433,9 @@ class Circuit:
         marqov-dev/marqov-sdk#38. This is the only place PennyLane export reads
         QuantumFlow internals. The canonical gates map one-to-one onto
         PennyLane operations with identical matrices (including phase), on
-        the same integer wires.
+        the same integer wires. A script has no register width, so each
+        identity wire (see ``num_qubits``) is a leading ``qml.Identity``;
+        ``from_pennylane`` drops those again.
 
         The script carries no measurements and no shots: a ``Circuit`` is
         gate-only, and the executor decides what to measure (see
@@ -423,7 +459,7 @@ class Circuit:
                 "Install with: pip install marqov[pennylane]"
             )
 
-        operations = []
+        operations = [qml.Identity(wires=qubit) for qubit in self._idle_qubits()]
         for index, op in enumerate(self._qf._elements):
             name = op.name
             if name not in self._QF_TO_PENNYLANE:
@@ -462,10 +498,13 @@ class Circuit:
     def simulate(self) -> qf.State:
         """Run circuit on local simulator.
 
+        The state covers qubits ``0..num_qubits-1``, identity wires included,
+        with qubit 0 as the first (most significant) tensor axis.
+
         Returns:
             QuantumFlow State object with simulation results.
         """
-        return self._qf.run()
+        return self._wide_qf().run()
 
     # Import methods
 
@@ -478,7 +517,8 @@ class Circuit:
         before importing; their modifiers would be lost by the converter.
         Terminal measurements (nothing after them touches the measured qubit)
         are skipped; as in ``from_qiskit``, a qubit that only a measurement
-        touches is not part of the returned circuit. Result types (e.g.
+        touches gets no gate in the returned circuit (it is still an identity
+        wire when a higher index is used, see ``num_qubits``). Result types (e.g.
         ``probability()``) are not imported: the returned circuit carries
         gates only.
 
@@ -1415,8 +1455,46 @@ class Circuit:
 
     @property
     def num_qubits(self) -> int:
-        """Return number of qubits in circuit."""
-        return self._qf.qubit_nb
+        """Return the circuit width: the largest qubit index touched, plus one.
+
+        Indices below the largest that no gate touches are identity wires and
+        still count, so ``Circuit().x(2).num_qubits == 3`` and an empty
+        circuit has width 0. Counts keys from ``LocalExecutor`` have this many
+        characters, with qubit 0 the leftmost: ``Circuit().x(2)`` yields
+        ``{"001": shots}``.
+
+        Raises:
+            ValueError: If a qubit label is not a nonnegative integer.
+        """
+        qubits = self._qf.qubits
+        for qubit in qubits:
+            if isinstance(qubit, (bool, np.bool_)) or not isinstance(qubit, Integral) or qubit < 0:
+                raise ValueError(
+                    f"Circuit qubit labels must be nonnegative integers, got {qubit!r}"
+                )
+        return int(max(qubits)) + 1 if qubits else 0
+
+    def _idle_qubits(self) -> list[int]:
+        """Return the identity wires: indices below the width that no gate touches."""
+        touched = {int(qubit) for qubit in self._qf.qubits}
+        return [qubit for qubit in range(self.num_qubits) if qubit not in touched]
+
+    def _wide_qf(self) -> qf.Circuit:
+        """Return the QuantumFlow circuit declared on qubits ``0..num_qubits-1``."""
+        if not self._idle_qubits():
+            return self._qf
+        return qf.Circuit(self._qf._elements, qubits=list(range(self.num_qubits)))
+
+    def _padded_qf(self) -> qf.Circuit:
+        """Return the circuit with an explicit identity gate on each identity wire.
+
+        For target formats that have no register-width declaration (Braket,
+        Cirq, Quil), an idle wire exists only if an operation names it.
+        """
+        idle = self._idle_qubits()
+        if not idle:
+            return self._qf
+        return qf.Circuit([qf.I(qubit) for qubit in idle] + list(self._qf._elements))
 
     def __repr__(self) -> str:
         """Return string representation."""

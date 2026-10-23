@@ -37,9 +37,11 @@ A copy-and-run demo, including seed replay, is `examples/lightning_cpu_local.py`
   probe prevents user execution. Existing CPU probe behavior is preserved.
 - Circuits: the canonical gate set with bound (numeric) angles. Gates outside
   it, symbolic angles and empty circuits raise.
-- Measurement: finite shots, computational-basis samples of every qubit the
-  circuit uses. Count keys list those qubits in ascending order, lowest index
-  leftmost, the same keys `LocalExecutor` returns (sparse indices included).
+- Measurement: finite shots, computational-basis samples of every qubit below
+  `Circuit.num_qubits` (the largest index plus one). `to_pennylane()` puts a
+  `qml.Identity` on each untouched index below the largest, so it is sampled
+  too. Count keys list the qubits in ascending order, lowest index leftmost,
+  the same keys `LocalExecutor` returns (`Circuit().x(2)` gives `"001"`).
 - Precision: `precision="double"` (complex128, default) or `"single"` (complex64).
 
 The circuit is converted by `Circuit.to_pennylane()`, a direct gate-by-gate

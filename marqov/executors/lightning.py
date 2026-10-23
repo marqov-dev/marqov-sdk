@@ -14,9 +14,10 @@ lacks a sampling seed interface. Exact tn is the default; MPS settings are
 recorded as approximate. All methods require actual device qualification.
 
 Scope: bound gate circuits (the canonical gate set), finite shots,
-computational-basis samples of every qubit the circuit uses. Count keys follow
-the SDK convention: qubit indices in ascending order, lowest index leftmost
-(the same keys ``LocalExecutor`` returns, including for sparse indices).
+computational-basis samples of every qubit below ``Circuit.num_qubits``
+(identity wires included). Count keys follow the SDK convention: qubit indices
+in ascending order, lowest index leftmost (the same keys ``LocalExecutor``
+returns, including for sparse indices).
 
 Seeds and replay (CPU/GPU only): each run builds a fresh device and passes the seed at
 construction, so no RNG state carries over between calls. A run with no seed

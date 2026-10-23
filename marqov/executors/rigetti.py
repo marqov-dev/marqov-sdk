@@ -94,8 +94,10 @@ class RigettiExecutor(BaseExecutor):
     Converts a circuit with ``to_pyquil()``, measures every qubit into a ``ro``
     register, compiles with ``quilc`` and runs the program on a pyquil
     ``QuantumComputer``. Counts use the SDK convention where qubit 0 is the
-    leftmost bit for dense circuits. For sparse physical labels, counts keys
-    follow ascending active labels recorded in ``metadata.measured_qubits``.
+    leftmost bit. ``to_pyquil()`` exports each identity wire below the circuit
+    width as an ``I`` gate, so every qubit ``0..num_qubits-1`` is measured and
+    character ``i`` of a key is qubit ``i``, as recorded in
+    ``metadata.measured_qubits``.
 
     A ``QuantumComputer`` may be injected for unit testing without a running QVM
     or QCS credentials.
@@ -197,8 +199,8 @@ class RigettiExecutor(BaseExecutor):
 
         Reads the ``ro`` register (a ``shots`` x ``num_qubits`` array of bits) and
         bins the per-shot bitstrings. The first measured qubit is leftmost;
-        for dense wires this is qubit 0. Sparse physical labels are recorded
-        in ``metadata.measured_qubits`` in ascending order.
+        this is qubit 0. The measured labels are recorded in
+        ``metadata.measured_qubits`` in ascending order.
 
         Args:
             result: The object returned by ``QuantumComputer.run`` (exposes
@@ -289,7 +291,7 @@ class RigettiExecutor(BaseExecutor):
         program = circuit.to_pyquil()  # type: ignore[no-untyped-call]
         measured_qubits = sorted(program.get_qubit_indices())
         if len(measured_qubits) != num_qubits:
-            raise ValueError("Rigetti export does not preserve the circuit's active qubit count")
+            raise ValueError("Rigetti export does not preserve the circuit's qubit count")
         measured = self._build_measured_program(program, measured_qubits, shots)
 
         identity: dict[str, Any] = {

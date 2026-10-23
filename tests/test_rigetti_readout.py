@@ -28,10 +28,12 @@ async def test_actual_pyqvm_measures_the_excited_physical_wire(sparse):
     qc = SimpleNamespace(qam=qvm, compile=compile, run=qvm.run)
     ex = RigettiExecutor(RigettiExecutorConfig(quantum_processor_id="3q-qvm"), qc=qc)
     out = await ex.execute(Circuit().x(q), shots=16)
-    assert out.counts == {"1": 16}
-    assert out.metadata["measured_qubits"] == [q]
-    assert f"MEASURE {q} ro[0]" in compiled[0].out()
-    assert out.metadata["num_qubits"] == 1  # Active-wire width remains unchanged
+    # Width is the largest index plus one; qubit q is character q of the key.
+    width = q + 1
+    assert out.counts == {"0" * q + "1": 16}
+    assert out.metadata["measured_qubits"] == list(range(width))
+    assert f"MEASURE {q} ro[{q}]" in compiled[0].out()
+    assert out.metadata["num_qubits"] == width
 
 
 @pytest.mark.asyncio
@@ -41,10 +43,10 @@ async def test_actual_pyqvm_sparse_entanglement_preserves_asymmetric_counts():
     out = await RigettiExecutor(
         RigettiExecutorConfig(quantum_processor_id="4q-qvm"), qc=qc
     ).execute(Circuit().h(3).cnot(3, 1).x(0), shots=32)
-    assert out.metadata["measured_qubits"] == [0, 1, 3]
-    assert set(out.counts) == {"100", "111"}
+    assert out.metadata["measured_qubits"] == [0, 1, 2, 3]  # wire 2 is an identity wire
+    assert set(out.counts) == {"1000", "1101"}
     assert sum(out.counts.values()) == 32
-    assert out.raw_result.get_register_map()["ro"].shape == (32, 3)
+    assert out.raw_result.get_register_map()["ro"].shape == (32, 4)
 
 
 @pytest.mark.parametrize(
