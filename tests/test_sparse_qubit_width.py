@@ -237,25 +237,94 @@ def test_pennylane_round_trip_keeps_width_and_drops_the_identity_padding(build):
     assert restored.num_qubits == circuit.num_qubits
 
 
-def test_braket_round_trip_keeps_width_as_explicit_identity_gates():
-    """Braket has no width declaration: idle wires export as `i` and import as `I`."""
-    pytest.importorskip("braket")
-    restored = Circuit.from_braket(Circuit().x(2).to_braket())
-    assert restored.num_qubits == 3
-    assert restored.to_dict()["gates"] == [
-        {"gate": "I", "qubits": [0], "params": []},
-        {"gate": "I", "qubits": [1], "params": []},
-        {"gate": "X", "qubits": [2], "params": []},
+def _chain() -> Circuit:
+    """Sparse circuit whose gates each share a wire with the previous one.
+
+    Qiskit's DAG and Cirq's moments may reorder gates on disjoint wires (dense
+    circuits too), so a chain is the circuit whose `to_dict()` order every
+    framework keeps. Wire 2 is idle.
+    """
+    return Circuit().h(3).cnot(3, 1).t(1).cnot(1, 0).s(0).x(0).cz(0, 3).swap(3, 1)
+
+
+def _chain_low() -> Circuit:
+    """Wires {2, 4}; wires 0, 1 and 3 are idle."""
+    return Circuit().h(2).cnot(2, 4).t(4).s(4).cz(4, 2).x(2).swap(2, 4)
+
+
+def _round_trips():
+    """Every exporter/importer pair, as (name, round trip)."""
+    return [
+        ("qiskit", lambda c: Circuit.from_qiskit(c.to_qiskit())),
+        ("openqasm2", lambda c: Circuit.from_openqasm(c.to_openqasm(2))),
+        ("openqasm3", lambda c: Circuit.from_openqasm(c.to_openqasm(3))),
+        ("braket", lambda c: Circuit.from_braket(c.to_braket())),
+        ("cirq", lambda c: Circuit.from_cirq(c.to_cirq())),
+        ("pyquil", lambda c: Circuit.from_pyquil(c.to_pyquil())),
+        ("pennylane", lambda c: Circuit.from_pennylane(c.to_pennylane())),
     ]
 
 
-def test_pyquil_round_trip_of_an_idle_wire_is_refused_by_from_pyquil():
-    """Known limitation: `from_pyquil` has no mapping for the `I` padding."""
+@pytest.mark.parametrize("build", [_chain, _chain_low])
+@pytest.mark.parametrize(("name", "round_trip"), _round_trips(), ids=lambda v: v if isinstance(v, str) else "")
+def test_sparse_round_trip_through_every_framework_is_exact(build, name, round_trip):
+    pytest.importorskip("braket")
     pytest.importorskip("pyquil")
-    with pytest.raises(NotImplementedError, match="'I'"):
-        Circuit.from_pyquil(Circuit().x(2).to_pyquil())
-    dense = Circuit().h(0).cnot(0, 1)
-    assert Circuit.from_pyquil(dense.to_pyquil()).to_dict() == dense.to_dict()
+    pytest.importorskip("pennylane")
+    circuit = build()
+    restored = round_trip(circuit)
+    assert restored.to_dict() == circuit.to_dict(), name
+    assert restored.num_qubits == circuit.num_qubits, name
+
+
+def _x2_after_identity_on_1(framework: str):
+    """A native program with an identity on wire 1 and X on wire 2."""
+    if framework == "qiskit":
+        from qiskit import QuantumCircuit
+
+        qc = QuantumCircuit(3)
+        qc.id(1)
+        qc.x(2)
+        return Circuit.from_qiskit(qc)
+    if framework == "openqasm2":
+        return Circuit.from_openqasm(
+            'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[3];\nid q[1];\nx q[2];'
+        )
+    if framework == "braket":
+        from braket.circuits import Circuit as BraketCircuit
+
+        return Circuit.from_braket(BraketCircuit().i(1).x(2))
+    if framework == "cirq":
+        import cirq
+
+        q = cirq.LineQubit.range(3)
+        return Circuit.from_cirq(cirq.Circuit([cirq.I(q[1]), cirq.X(q[2])]))
+    if framework == "pyquil":
+        from pyquil import Program
+        from pyquil.gates import I, X
+
+        return Circuit.from_pyquil(Program(I(1), X(2)))
+    import pennylane as qml
+
+    return Circuit.from_pennylane(qml.tape.QuantumScript([qml.Identity(1), qml.PauliX(2)]))
+
+
+# OpenQASM 3 is absent: Qiskit's QASM 3 reader parses `id` as a U gate, not an
+# identity, so from_openqasm decomposes it. to_openqasm(3) never emits `id`.
+@pytest.mark.parametrize("framework", ["qiskit", "openqasm2", "braket", "cirq", "pyquil", "pennylane"])
+def test_importers_drop_identity_gates(framework):
+    pytest.importorskip("braket")
+    pytest.importorskip("pyquil")
+    pytest.importorskip("pennylane")
+    imported = _x2_after_identity_on_1(framework)
+    assert imported.to_dict() == {"gates": [{"gate": "X", "qubits": [2], "params": []}]}
+    assert imported.num_qubits == 3
+
+
+def test_from_dict_keeps_identity_gates():
+    """Only the framework importers drop identities; the gate-record format keeps them."""
+    data = {"gates": [{"gate": "I", "qubits": [1], "params": []}]}
+    assert Circuit.from_dict(data).to_dict() == data
 
 
 # Dense circuits: exports and counts pinned from the implementation before marqov-sdk#154

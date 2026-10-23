@@ -235,7 +235,7 @@ class Circuit:
 
         Qubit ``i`` stays Braket qubit ``i``. A Braket circuit has no register
         width, so each identity wire (see ``num_qubits``) is exported as an
-        ``i`` instruction; ``from_braket`` imports those back as ``I`` gates.
+        ``i`` instruction; ``from_braket`` drops those again.
 
         Returns:
             Braket Circuit object ready for execution.
@@ -311,7 +311,7 @@ class Circuit:
         gate). Every parameter is exported as a float. Qubit ``i`` stays Quil
         qubit ``i``; a Quil program has no register width, so each identity
         wire (see ``num_qubits``) is exported as an ``I`` gate, which
-        ``from_pyquil`` does not import.
+        ``from_pyquil`` drops again.
 
         Returns:
             PyQuil Program object.
@@ -518,7 +518,8 @@ class Circuit:
         Terminal measurements (nothing after them touches the measured qubit)
         are skipped; as in ``from_qiskit``, a qubit that only a measurement
         touches gets no gate in the returned circuit (it is still an identity
-        wire when a higher index is used, see ``num_qubits``). Result types (e.g.
+        wire when a higher index is used, see ``num_qubits``). Identity (``i``)
+        gates are dropped the same way. Result types (e.g.
         ``probability()``) are not imported: the returned circuit carries
         gates only.
 
@@ -563,7 +564,6 @@ class Circuit:
                     f"'{instruction.operator.name}' at index {index}. Only gates "
                     "and terminal measurements are supported."
                 )
-            gate_instructions.append(instruction)
             if instruction.control or instruction.power != 1:
                 raise NotImplementedError(
                     f"Circuit.from_braket(): unsupported modifiers for gate "
@@ -573,6 +573,9 @@ class Circuit:
                     f"power={instruction.power}. Use explicit supported gates "
                     "or decompose modified instructions before importing."
                 )
+            if isinstance(instruction.operator, braket_circuits.gates.I):
+                continue  # A no-op; an idle wire below the largest index stays in the width.
+            gate_instructions.append(instruction)
         circuit._qf = qf.braket_to_circuit(braket_circuits.Circuit(gate_instructions))
         return circuit
 
@@ -631,7 +634,9 @@ class Circuit:
         basis set via Qiskit's transpiler. This covers any circuit built from
         Qiskit's standard gate set, but a circuit containing an opaque custom
         gate (no `_define`) makes the transpiler itself raise — that error is
-        not caught here and propagates to the caller.
+        not caught here and propagates to the caller. Identity (``id``) gates
+        are dropped: an idle wire below the largest index stays in the width
+        (see ``num_qubits``).
 
         Requires Qiskit to be installed (``pip install marqov[qiskit]``).
 
@@ -667,9 +672,11 @@ class Circuit:
             )
 
         # Decompose to our supported basis gate set.
+        # `id` stays in the basis so it can be dropped below rather than being
+        # decomposed into an Rx(0) gate.
         decomposed = transpile(
             qiskit_circuit,
-            basis_gates=cls._QISKIT_BASIS_GATES,
+            basis_gates=[*cls._QISKIT_BASIS_GATES, "id"],
             optimization_level=0,
         )
 
@@ -678,7 +685,7 @@ class Circuit:
         for index, instruction in enumerate(decomposed.data):
             name = instruction.operation.name
 
-            if name in cls._SKIP_INSTRUCTIONS:
+            if name in cls._SKIP_INSTRUCTIONS or name == "id":
                 continue
 
             if name == "measure":
@@ -861,7 +868,8 @@ class Circuit:
         Known gates are mapped directly. Unsupported gates are automatically
         decomposed via ``cirq.decompose()`` until they resolve to gates we
         can map. If decomposition fails, a ``ValueError`` is raised and the
-        gate type is reported to Sentry for observability.
+        gate type is reported to Sentry for observability. Identity gates
+        decompose to nothing, so they are dropped (see ``num_qubits``).
 
         Requires Cirq to be installed (``pip install marqov[cirq]``).
 
@@ -984,7 +992,8 @@ class Circuit:
         Known gates are mapped directly. Unsupported gates are automatically
         decomposed via ``op.decomposition()`` until they resolve to gates we
         can map. If decomposition fails, a ``ValueError`` is raised and the
-        gate type is reported to Sentry for observability.
+        gate type is reported to Sentry for observability. ``Identity``
+        decomposes to nothing, so it is dropped (see ``num_qubits``).
 
         Requires PennyLane to be installed (``pip install marqov[pennylane]``).
 
@@ -1173,9 +1182,9 @@ class Circuit:
 
         Known gates in the Marqov canonical gate set are mapped directly.
         SWAP is accepted either as a native ``SWAP`` instruction or as the
-        standard three-``CNOT`` decomposition. Classical declarations and
-        terminal measurements (nothing after them touches the measured qubit)
-        are skipped. Gate modifiers (including ``DAGGER``, ``CONTROLLED`` and
+        standard three-``CNOT`` decomposition. Classical declarations, ``I``
+        gates and terminal measurements (nothing after them touches the
+        measured qubit) are skipped. Gate modifiers (including ``DAGGER``, ``CONTROLLED`` and
         ``FORKED``), Quil-native gates outside the canonical set, and mid-circuit
         measurements raise ``NotImplementedError`` so callers can decompose
         them explicitly before importing. Modifiers are checked before the
@@ -1252,6 +1261,8 @@ class Circuit:
                 )
 
             name = instruction.name.upper()
+            if name == "I":
+                continue  # A no-op; an idle wire below the largest index stays in the width.
             if name not in cls._PYQUIL_GATE_MAP:
                 raise NotImplementedError(
                     f"Unsupported PyQuil gate '{name}'. Supported gates: "
@@ -1275,7 +1286,10 @@ class Circuit:
     def from_openqasm(cls, qasm_string: str) -> Circuit:
         """Import a circuit from an OpenQASM 2.0 or 3.0 string.
 
-        Auto-detects the QASM version from the header and parses via Qiskit.
+        Auto-detects the QASM version from the header and parses via Qiskit,
+        then imports with ``from_qiskit``. A QASM 2 ``id`` gate is dropped;
+        Qiskit's QASM 3 reader turns ``id`` into a ``U`` gate, which is
+        decomposed rather than dropped.
 
         Args:
             qasm_string: OpenQASM program string.
