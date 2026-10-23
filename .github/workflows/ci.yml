@@ -91,6 +91,45 @@ jobs:
       - name: CUDA-Q executor tests (incl. real qpp-cpu run)
         run: pytest tests/test_cudaq_executor.py -q
 
+  # Cheap doc/code sync checks. They run on every non-draft change, including
+  # documentation-only ones that skip the dependency-heavy jobs, because these
+  # tests read the prose itself (README provider table, SECURITY.md supported
+  # row, the documented native-workflow example, the private-reference scan)
+  # and docs can drift without any code change. Core install only, no extras.
+  docs-check:
+    needs: ci-scope
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install (core + test runner only)
+        run: pip install uv && uv pip install --system -e . "pytest>=8.0.0" "pytest-asyncio>=0.23.0" "pyyaml>=6.0.0"
+      - name: Doc-pinning tests
+        run: >-
+          pytest -q
+          tests/test_executors.py::TestProviderListDocSync
+          tests/test_platform_submit_native.py::test_the_documented_example_is_the_example_file_verbatim
+          tests/test_no_private_references.py
+          tests/test_version.py
+          tests/test_python_compatibility_policy.py
+      - name: Test IDs cited in the docs exist
+        # One ID per call: pytest mis-collects some overlapping ID lists.
+        run: |
+          # shellcheck disable=SC2016  # the backticks are literal Markdown, not expansions
+          ids=$(grep -rhoE '`tests/[A-Za-z0-9_/]+\.py::[][A-Za-z0-9_:-]+`' \
+                README.md CONTRIBUTING.md SECURITY.md RELEASING.md docs | tr -d '`' | sort -u)
+          missing=0
+          for id in $ids; do
+            # Exit 0 only when the ID collects (4: not found, 5: nothing collected).
+            if ! pytest --collect-only -q "$id" >/dev/null 2>&1; then
+              echo "::error::Cited test does not collect: $id"; missing=1
+            fi
+          done
+          exit $missing
+
   lint:
     needs: ci-scope
     if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft != true) && needs.ci-scope.outputs.run_code == 'true' }}
@@ -155,9 +194,8 @@ jobs:
   # required context stays stable if the job set ever changes.
   #
   # INVARIANT: the scope planner and every blocking job must be listed in
-  # `needs:` here (test, test-cudaq, python313-qualified and watch-ui).
-  # Lint and python313-unsupported are
-  # advisory and excluded by name.
+  # `needs:` here (docs-check, test, test-cudaq, python313-qualified and watch-ui).
+  # Lint and python313-unsupported are advisory and excluded by name.
   # Add new blocking jobs to `needs:` in the same PR.
   #
   # Always evaluate non-draft results: require code jobs to succeed, or to
@@ -166,7 +204,7 @@ jobs:
   ci-success:
     name: CI Success
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft != true) }}
-    needs: [ci-scope, test, test-cudaq, python313-qualified, watch-ui]
+    needs: [ci-scope, docs-check, test, test-cudaq, python313-qualified, watch-ui]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -180,6 +218,8 @@ jobs:
           scope = needs.pop("ci-scope")
           if scope["result"] != "success":
               raise SystemExit("Scope planner did not succeed")
+          if needs.pop("docs-check")["result"] != "success":
+              raise SystemExit("Doc/code sync checks did not succeed")
           run_code = scope["outputs"].get("run_code")
           if run_code not in {"true", "false"}:
               raise SystemExit("Scope planner returned no valid decision")
