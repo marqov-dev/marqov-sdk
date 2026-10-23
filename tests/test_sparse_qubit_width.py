@@ -286,33 +286,33 @@ def test_sparse_exports_are_byte_identical_when_repeated(build):
 # Round trips through each framework's own importer
 
 
-@pytest.mark.parametrize("build", [build for build, _ in SPARSE])
-def test_qiskit_and_openqasm_round_trips_keep_width_and_gates(build):
+@pytest.mark.parametrize(("build", "width"), SPARSE)
+def test_qiskit_and_openqasm_round_trips_keep_width_and_gates(build, width):
     circuit = build()
     for restored in (
         Circuit.from_qiskit(circuit.to_qiskit()),
         Circuit.from_openqasm(circuit.to_openqasm(2)),
         Circuit.from_openqasm(circuit.to_openqasm(3)),
     ):
-        assert restored.num_qubits == circuit.num_qubits
-        np.testing.assert_allclose(_reference(restored), _reference(circuit), atol=1e-12)
+        assert restored.num_qubits == width
+        np.testing.assert_allclose(_reference(restored, width), _reference(circuit, width), atol=1e-12)
 
 
-@pytest.mark.parametrize("build", [build for build, _ in SPARSE])
-def test_cirq_round_trip_keeps_width_and_drops_the_identity_padding(build):
+@pytest.mark.parametrize(("build", "width"), SPARSE)
+def test_cirq_round_trip_keeps_width_and_drops_the_identity_padding(build, width):
     circuit = build()
     restored = Circuit.from_cirq(circuit.to_cirq())
-    assert restored.num_qubits == circuit.num_qubits
+    assert restored.num_qubits == width
     assert "I" not in {gate["gate"] for gate in restored.to_dict()["gates"]}
 
 
-@pytest.mark.parametrize("build", [build for build, _ in SPARSE])
-def test_pennylane_round_trip_keeps_width_and_drops_the_identity_padding(build):
+@pytest.mark.parametrize(("build", "width"), SPARSE)
+def test_pennylane_round_trip_keeps_width_and_drops_the_identity_padding(build, width):
     pytest.importorskip("pennylane")
     circuit = build()
     restored = Circuit.from_pennylane(circuit.to_pennylane())
     assert restored.to_dict() == circuit.to_dict()
-    assert restored.num_qubits == circuit.num_qubits
+    assert restored.num_qubits == width
 
 
 def _chain() -> Circuit:
