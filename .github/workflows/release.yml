@@ -93,13 +93,14 @@ jobs:
         run: >-
           "$RUNNER_TEMP/wheel-venv/bin/python" -m pytest tests/ -q
           --import-mode=importlib --ignore=tests/test_benchmark_suite.py
+          --ignore=tests/test_vqe_h2_ansatz.py
       - name: Test source-only benchmark harness separately
         if: matrix.coverage == 'all'
         # benchmarks/ is deliberately not in the wheel. This step exercises the
         # development harness, not installed-package qualification.
         run: >-
           PYTHONPATH="$GITHUB_WORKSPACE" "$RUNNER_TEMP/wheel-venv/bin/python"
-          -m pytest tests/test_benchmark_suite.py -q
+          -m pytest tests/test_benchmark_suite.py tests/test_vqe_h2_ansatz.py -q
       - name: Test QiliSDK and SpeQtrum without skips
         if: matrix.coverage == 'qilisdk'
         env:
