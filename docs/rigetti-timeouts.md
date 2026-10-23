@@ -52,14 +52,15 @@ retention and failed or slow cleanup. They do not qualify live QCS execution.
 
 ## Measurement mapping and result validation
 
-Rigetti measures only the physical labels the circuit touches, preserved by
-`Circuit.to_pyquil()`, in ascending order, into consecutive `ro` positions;
-`metadata.measured_qubits` lists them. Untouched qubits are not named in the
-program, so idle physical qubits are never measured. Counts keys still follow
+Rigetti measures only the physical labels a non-identity gate touches,
+preserved by `Circuit.to_pyquil()`, in ascending order, into consecutive `ro`
+positions; `metadata.measured_qubits` lists them. `to_pyquil()` exports no
+identity gate, so untouched qubits, and qubits that only identity gates touch,
+are not named in the program and are never measured. Counts keys still follow
 the SDK width convention: they have `Circuit.num_qubits` characters (the
 largest index plus one), character i is qubit i with qubit 0 at the left, and
-an untouched index below the largest (listed in `metadata.identity_wires`)
-reads `0`, since an untouched wire is always in state 0. For `Circuit().x(2)`,
+an index no non-identity gate touches (listed in `metadata.identity_wires`)
+reads `0`, since such a wire is always in state 0. For `Circuit().x(2)`,
 the mapping is `[2]` and counts are `{"001": shots}`; for wires 0, 1 and 3,
 the mapping is `[0, 1, 3]` and keys have four characters. A circuit on
 `[10, 11]` measures only qubits 10 and 11.

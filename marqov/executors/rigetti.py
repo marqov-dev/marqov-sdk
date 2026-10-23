@@ -259,8 +259,9 @@ class RigettiExecutor(BaseExecutor):
         Raises:
             TypeError: If any keyword option is supplied.
             RuntimeError: If compilation, execution or readout validation fails.
-            ValueError: If shots are not positive integers or the exported active
-                qubit count differs from the circuit.
+            ValueError: If shots are not positive integers or the exported
+                program's qubit labels are not the circuit's non-identity
+                qubits.
             TimeoutError: If execution exceeds ``config.timeout_seconds``.
         """
         reject_unsupported_options("RigettiExecutor.execute()", kwargs)
@@ -292,7 +293,8 @@ class RigettiExecutor(BaseExecutor):
 
         program = circuit.to_pyquil()  # type: ignore[no-untyped-call]
         measured_qubits = sorted(program.get_qubit_indices())
-        touched = sorted({q for gate in circuit.to_dict()["gates"] for q in gate["qubits"]})
+        idle = circuit._idle_qubits()
+        touched = [q for q in range(num_qubits) if q not in idle]
         if measured_qubits != touched:
             raise ValueError("Rigetti export does not preserve the circuit's qubit labels")
         measured = self._build_measured_program(program, measured_qubits, shots)
@@ -383,8 +385,7 @@ class RigettiExecutor(BaseExecutor):
             **identity,
             "measured_qubits": measured_qubits,
         }
-        # Idle wires were not measured; put their '0' back in each key.
-        idle = circuit._idle_qubits()
+        # Identity wires were not measured; put their '0' back in each key.
         if idle:
             counts = widen_counts(circuit, counts, measured_qubits, "Rigetti")
             metadata["identity_wires"] = idle

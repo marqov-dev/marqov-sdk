@@ -151,8 +151,8 @@ def widen_counts(
 ) -> dict[str, int]:
     """Key counts over qubits ``0..circuit.num_qubits-1`` by restoring identity wires.
 
-    Shared by the Braket and Rigetti paths, which send only the touched
-    qubits to the provider (an untouched index below the largest is an
+    Shared by the Braket and Rigetti paths, which send only the qubits a
+    non-identity gate touches (any other index below the width is an
     identity wire, see ``Circuit.num_qubits``). An untouched wire is always in
     state 0, so a ``'0'`` is inserted at its position; character ``j`` of a
     provider key is ``measured_qubits[j]``, or the ``j``-th touched qubit in
@@ -163,7 +163,7 @@ def widen_counts(
             qubits, or a key's length is not the number of measured qubits.
     """
     width = circuit.num_qubits
-    touched = sorted({int(q) for gate in circuit.to_dict()["gates"] for q in gate["qubits"]})
+    touched = sorted(set(range(width)) - set(circuit._idle_qubits()))
     wires = [int(q) for q in measured_qubits] if measured_qubits else touched
     if sorted(wires) != touched:
         raise ValueError(

@@ -236,9 +236,10 @@ class Circuit:
 
         Qubit ``i`` stays Braket qubit ``i``; labels are not compacted. A
         Braket circuit has no register width, and not every Braket QPU lists
-        the ``i`` gate among its supported operations, so identity wires (see
-        ``num_qubits``) are not exported: Braket measures only the touched
-        qubits. ``BraketExecutor`` and ``MarqovDevice`` insert a ``'0'`` at
+        the ``i`` gate among its supported operations, so no identity is
+        exported, not even an ``I`` gate in the circuit, and identity wires
+        (see ``num_qubits``) are not sent: Braket measures only the qubits a
+        non-identity gate touches. ``BraketExecutor`` and ``MarqovDevice`` insert a ``'0'`` at
         each identity-wire position of the returned counts keys, since an
         untouched wire is always in state 0.
 
@@ -247,7 +248,7 @@ class Circuit:
         """
         require_braket()
         # Declaring qubits 0..n-1 stops the converter from compacting labels.
-        return qf.circuit_to_braket(self._wide_qf(), translate=True)
+        return qf.circuit_to_braket(self._without_identities(), translate=True)
 
     def to_braket_native(self) -> BraketCircuit:
         """Export the Rigetti Rx/Rz/CZ/XY basis preserving source qubit labels.
@@ -279,7 +280,7 @@ class Circuit:
         # Translation rebuilds the circuit on the touched qubits only, so
         # redeclare the full width before the converter sizes the register.
         translated = xqiskit.translate_to_qiskit(self._qf)
-        if self._idle_qubits():
+        if self._unnamed_qubits():
             translated = qf.Circuit(translated, qubits=list(range(self.num_qubits)))
         # The converter leaves the register unnamed, so Qiskit names it from a
         # process-global counter (q0, q1, ...); move the gates onto "q".
@@ -316,8 +317,9 @@ class Circuit:
         equals the circuit up to a global phase (Quil has no global-phase
         gate). Every parameter is exported as a float. Qubit ``i`` stays Quil
         qubit ``i``; labels are not compacted. A Quil program has no register
-        width, and on QCS its labels are physical qubits, so identity wires
-        (see ``num_qubits``) are not exported and no idle qubit is named.
+        width, and on QCS its labels are physical qubits, so no identity is
+        exported (not even an ``I`` gate in the circuit) and no identity wire
+        (see ``num_qubits``) is named.
         ``RigettiExecutor`` measures only the touched qubits and inserts a
         ``'0'`` at each identity-wire position of the counts keys.
 
@@ -346,7 +348,7 @@ class Circuit:
         # Translation leaves sympy expressions such as `pi/2` in parameters,
         # which pyQuil rejects, so cast them to floats.
         program = Program()
-        for index, op in enumerate(qf.xforest.translate_to_pyquil(self._qf)):
+        for index, op in enumerate(qf.xforest.translate_to_pyquil(self._without_identities())):
             quil_name = self._QF_TO_QUIL.get(op.name)
             if quil_name is None:
                 raise NotImplementedError(
@@ -467,7 +469,7 @@ class Circuit:
                 "Install with: pip install marqov[pennylane]"
             )
 
-        operations = [qml.Identity(wires=qubit) for qubit in self._idle_qubits()]
+        operations = [qml.Identity(wires=qubit) for qubit in self._unnamed_qubits()]
         for index, op in enumerate(self._qf._elements):
             name = op.name
             if name not in self._QF_TO_PENNYLANE:
@@ -1507,7 +1509,8 @@ class Circuit:
 
         Indices below the largest that no gate touches are identity wires and
         still count, so ``Circuit().x(2).num_qubits == 3`` and an empty
-        circuit has width 0. Counts keys from ``LocalExecutor`` have this many
+        circuit has width 0. An identity gate counts toward the width, but a
+        wire it alone touches is an identity wire too. Counts keys from ``LocalExecutor`` have this many
         characters, with qubit 0 the leftmost: ``Circuit().x(2)`` yields
         ``{"001": shots}``.
 
@@ -1539,27 +1542,47 @@ class Circuit:
             self._qf = qf.Circuit(kept)
 
     def _idle_qubits(self) -> list[int]:
-        """Return the identity wires: indices below the width that no gate touches."""
-        touched = {int(qubit) for qubit in self._qf.qubits}
+        """Return the identity wires: indices below the width that only identities touch.
+
+        A wire whose only gates are identities is in state 0 as surely as an
+        untouched one, so it is an identity wire too.
+        """
+        touched = {int(q) for op in self._qf if not isinstance(op, qf.I) for q in op.qubits}
         return [qubit for qubit in range(self.num_qubits) if qubit not in touched]
+
+    def _unnamed_qubits(self) -> list[int]:
+        """Return the indices below the width that no operation names at all."""
+        named = {int(qubit) for qubit in self._qf.qubits}
+        return [qubit for qubit in range(self.num_qubits) if qubit not in named]
 
     def _wide_qf(self) -> qf.Circuit:
         """Return the QuantumFlow circuit declared on qubits ``0..num_qubits-1``."""
-        if not self._idle_qubits():
+        if not self._unnamed_qubits():
             return self._qf
         return qf.Circuit(self._qf._elements, qubits=list(range(self.num_qubits)))
 
+    def _without_identities(self) -> qf.Circuit:
+        """Return the circuit without identity gates, declared on ``0..num_qubits-1``.
+
+        For providers that are sent no identity (Braket, Quil): identity wires
+        are restored in the counts keys instead.
+        """
+        ops = [op for op in self._qf if not isinstance(op, qf.I)]
+        if len(ops) == len(self._qf) and not self._unnamed_qubits():
+            return self._qf
+        return qf.Circuit(ops, qubits=list(range(self.num_qubits)))
+
     def _padded_qf(self) -> qf.Circuit:
-        """Return the circuit with an explicit identity gate on each identity wire.
+        """Return the circuit with an explicit identity gate on each unnamed wire.
 
         For Cirq, which has no register-width declaration, an idle wire
         exists only if an operation names it (PennyLane pads separately).
         Braket and Quil are not padded, see ``to_braket`` and ``to_pyquil``.
         """
-        idle = self._idle_qubits()
-        if not idle:
+        unnamed = self._unnamed_qubits()
+        if not unnamed:
             return self._qf
-        return qf.Circuit([qf.I(qubit) for qubit in idle] + list(self._qf._elements))
+        return qf.Circuit([qf.I(qubit) for qubit in unnamed] + list(self._qf._elements))
 
     def __repr__(self) -> str:
         """Return string representation."""

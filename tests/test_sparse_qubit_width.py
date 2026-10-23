@@ -575,3 +575,72 @@ def test_azure_cirq_submission_of_a_dense_circuit_is_unchanged():
     expected = circuit.to_cirq()
     expected.append(cirq.measure(*sorted(expected.all_qubits()), key="result"))
     assert _azure_cirq_submission(circuit, "ionq.simulator") == expected
+
+
+# A wire touched only by identity gates is an identity wire too: no provider is
+# sent an identity, and its '0' is restored in the counts keys.
+
+
+def _top_identity() -> Circuit:
+    """H on wire 0; wire 1 holds only an identity (as from_qiskit keeps it)."""
+    return Circuit.from_dict({"gates": [_gate("H", 0), _gate("I", 1)]})
+
+
+def _identity_only() -> Circuit:
+    return Circuit.from_dict({"gates": [_gate("I", 0), _gate("I", 2)]})
+
+
+def test_identity_only_wires_are_identity_wires():
+    assert _top_identity().num_qubits == 2
+    assert _top_identity()._idle_qubits() == [1]
+    assert _identity_only()._idle_qubits() == [0, 1, 2]
+    assert set(_counts(_top_identity())) == {"00", "10"}
+
+
+@pytest.mark.parametrize("build", [_top_identity, _identity_only])
+def test_azure_ionq_cirq_submission_sends_no_identity_on_an_identity_only_wire(build):
+    import cirq
+
+    circuit = build()
+    program = _azure_cirq_submission(circuit, "ionq.simulator")
+    assert not any(isinstance(op.gate, cirq.IdentityGate) for op in program.all_operations())
+    (measure,) = [op for op in program.all_operations() if cirq.is_measurement(op)]
+    assert list(measure.qubits) == cirq.LineQubit.range(circuit.num_qubits)
+    from azure.quantum.cirq.targets import IonQTarget
+
+    assert IonQTarget._translate_cirq_circuit(program).body["qubits"] == circuit.num_qubits
+
+
+def test_braket_sends_no_identity_for_an_identity_only_top_wire(monkeypatch):
+    pytest.importorskip("braket")
+    from marqov.device import MarqovDevice
+
+    circuit = _top_identity()
+    assert "I" not in {i.operator.name for i in circuit.to_braket().instructions}
+    executor, device, submitted = _braket_entry_points(monkeypatch)
+    outcome = asyncio.run(executor.execute(circuit, shots=64))
+    cloud = device.run(circuit, shots=64)
+    local = MarqovDevice("local", {}).run(circuit, shots=64)
+    for counts in (outcome.counts, cloud, local):
+        assert set(counts) == {"00", "10"}
+    assert all("I" not in {i.operator.name for i in c.instructions} for c in submitted)
+    assert outcome.metadata["identity_wires"] == [1]
+
+
+def test_rigetti_widens_an_identity_only_top_wire_instead_of_measuring_it():
+    pytest.importorskip("pyquil")
+    from types import SimpleNamespace
+
+    from pyquil.pyqvm import PyQVM
+
+    from marqov.executors.rigetti import RigettiExecutor, RigettiExecutorConfig
+
+    circuit = _top_identity()
+    assert "I " not in circuit.to_pyquil().out()
+    qvm = PyQVM(n_qubits=2, seed=17)
+    qc = SimpleNamespace(qam=qvm, compile=lambda p: p, run=qvm.run)
+    executor = RigettiExecutor(RigettiExecutorConfig(quantum_processor_id="2q-qvm"), qc=qc)
+    out = asyncio.run(executor.execute(circuit, shots=64))
+    assert out.metadata["measured_qubits"] == [0]
+    assert out.metadata["identity_wires"] == [1]
+    assert set(out.counts) == set(_counts(circuit)) == {"00", "10"}
