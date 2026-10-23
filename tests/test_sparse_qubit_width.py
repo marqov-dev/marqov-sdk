@@ -273,6 +273,19 @@ def test_braket_counts_refuse_measured_wires_that_are_not_the_circuit_wires(monk
     assert widen_logical_counts(Circuit().x(2).h(0), {"01": 4}, SimpleNamespace()) == {"001": 4}
 
 
+def test_braket_counts_refuse_keys_whose_length_is_not_the_measured_width():
+    """A key-length mismatch gets its own message, not a measured-qubit one."""
+    pytest.importorskip("braket")
+    from types import SimpleNamespace
+
+    from marqov._braket_native import widen_logical_counts
+
+    result = SimpleNamespace(measured_qubits=[0, 2])
+    with pytest.raises(ValueError, match=r"key '1' has 1 characters, not the 2 measured") as error:
+        widen_logical_counts(Circuit().x(2).h(0), {"1": 4}, result)
+    assert "do not match" not in str(error.value)
+
+
 @pytest.mark.parametrize("build", [build for build, _ in SPARSE])
 def test_sparse_exports_are_byte_identical_when_repeated(build):
     pytest.importorskip("braket")

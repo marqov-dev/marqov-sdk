@@ -146,11 +146,17 @@ def widen_logical_counts(circuit: Any, counts: dict[str, int], result: Any) -> d
     touched = sorted({int(q) for gate in circuit.to_dict()["gates"] for q in gate["qubits"]})
     reported = getattr(result, "measured_qubits", None)
     wires = [int(q) for q in reported] if reported else touched
-    if sorted(wires) != touched or any(len(key) != len(wires) for key in counts):
+    if sorted(wires) != touched:
         raise ValueError(
             f"Braket measured qubits {wires} do not match the circuit's touched qubits "
             f"{touched}; cannot place its identity wires in the counts keys"
         )
+    for key in counts:
+        if len(key) != len(wires):
+            raise ValueError(
+                f"Braket counts key {key!r} has {len(key)} characters, not the "
+                f"{len(wires)} measured qubits {wires}; cannot place its identity wires"
+            )
     widened: dict[str, int] = {}
     for key, count in counts.items():
         bits = ["0"] * width
