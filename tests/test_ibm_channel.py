@@ -265,12 +265,18 @@ def test_factory_translates_stored_legacy_values():
 
 def _device_kwargs(fake_runtime, channel, instance):
     captured, _ = fake_runtime
-    params = {"backend": "ibm_brisbane", "token": "tok"}
+    params = {"backend": "ibm_brisbane", "ibm_token": "tok"}
     if channel is not None:
-        params["channel"] = channel
+        params["ibm_channel"] = channel
     if instance is not None:
-        params["instance"] = instance
-    MarqovDevice("ibm_brisbane", params)._get_provider_device()
+        params["ibm_instance"] = instance
+    # ibm_token is what routes a token-only dict to IBM, and it is a
+    # deprecated spelling (marqov-sdk#162). Ignore only that rename warning,
+    # so the caller's error filter still catches retired-value warnings.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Backend param", category=DeprecationWarning)
+        device = MarqovDevice("ibm_brisbane", params)
+    device._get_provider_device()
     return captured["kwargs"]
 
 

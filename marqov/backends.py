@@ -24,16 +24,18 @@ def is_azure(params: dict) -> bool:
 def is_ibm(params: dict) -> bool:
     """Return True if params indicate an IBM Quantum target.
 
-    ``channel`` and ``token`` are canonical; ``ibm_channel`` and ``ibm_token``
-    are their deprecated spellings (see ``marqov.executors._params``). The
-    canonical keys select IBM only when nothing else names a provider (other
-    providers take a ``token`` too), so a dict that routed somewhere before
-    canonical keys existed still routes there.
+    ``channel`` and ``instance`` are canonical IBM keys; ``ibm_channel`` and
+    ``ibm_token`` are deprecated spellings that also select IBM (see
+    ``marqov.executors._params``). A canonical ``token`` never selects IBM on
+    its own, because IonQ, Quantum Brilliance and others take a ``token`` too:
+    supply ``channel`` or ``instance`` with it. The canonical keys select IBM
+    only when nothing else names a provider, so a dict that routed somewhere
+    before canonical keys existed still routes there.
     """
     if params.get("ibm_token") or params.get("ibm_channel"):
         return True
     return (
-        bool(params.get("channel") or params.get("token"))
+        bool(params.get("channel") or params.get("instance"))
         and not is_azure(params)
         and not is_braket(params)
     )

@@ -250,7 +250,7 @@ class ExecutorFactory:
         config = BraketExecutorConfig(
             device_arn=backend_config["device_arn"],
             s3_bucket=backend_config["s3_bucket"],
-            s3_prefix=backend_config.get("s3_prefix", DEFAULT_S3_PREFIX),
+            s3_prefix=backend_config.get("s3_prefix") or DEFAULT_S3_PREFIX,
             aws_profile=backend_config.get("aws_profile"),
             aws_region=backend_config.get("region"),
             poll_interval_seconds=backend_config.get("poll_interval_seconds", 1.0),

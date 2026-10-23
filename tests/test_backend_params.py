@@ -74,6 +74,17 @@ def test_matching_values_under_both_spellings_do_not_warn(deprecated, canonical,
         assert _normalize({deprecated: value, canonical: value})[canonical] == value
 
 
+@pytest.mark.parametrize(
+    "params",
+    [{"ibm_token": "t", "token": ""}, {"ibm_token": "", "token": "t"},
+     {"ibm_token": None, "token": "t"}, {"ibm_token": "t", "token": None}],
+)
+def test_blank_spelling_is_absent_not_a_conflict(params):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        assert _normalize(params)["token"] == "t"
+
+
 def test_unrelated_keys_pass_through_untouched():
     params = {"device_arn": SV1_ARN, "backend_name": "ibm_kingston", "target": "ionq.simulator",
               "s3_bucket": "b", "provider": "AWS Braket", "shots": 10}
@@ -97,8 +108,12 @@ def test_normaliser_does_not_mutate_its_input():
 @pytest.mark.parametrize(
     ("params", "expected"),
     [
-        ({"token": "tok"}, "ibm"),
         ({"channel": "ibm_cloud"}, "ibm"),
+        ({"instance": "crn:v1:a/b/c"}, "ibm"),
+        ({"channel": "ibm_cloud", "token": "tok"}, "ibm"),
+        # A bare canonical token is ambiguous (IonQ, QB and others take one),
+        # so it never selects IBM: it must not reach QiskitRuntimeService.
+        ({"token": "tok"}, None),
         ({"subscription_id": "sub"}, "azure"),
         # Dicts that routed before canonical keys existed keep their route:
         # a stray canonical key never pulls them onto another provider.
@@ -153,6 +168,32 @@ async def test_bucket_only_braket_config_is_accepted_by_both_paths_with_marqov_p
     factory_folder = factory_provider.run.call_args.kwargs["s3_destination_folder"]
 
     assert device_folder == factory_folder == ("b", "marqov")
+
+
+def test_bare_token_dict_is_not_routed_to_ibm():
+    """An IonQ-style key must not be handed to QiskitRuntimeService."""
+    device = MarqovDevice("ionq-aria", {"backend": "ionq-aria", "token": "IONQ_KEY"})
+    with pytest.raises(ValueError, match="Cannot determine provider"):
+        device._get_provider_device()
+
+
+@pytest.mark.parametrize("prefix", [None, ""])
+@pytest.mark.asyncio
+async def test_blank_s3_prefix_defaults_to_marqov_on_both_paths(prefix):
+    config = {"device_arn": SV1_ARN, "s3_bucket": "b", "s3_prefix": prefix}
+
+    device_provider = _offline_braket_provider()
+    device = MarqovDevice("sv1", {"backend": "sv1", **config})
+    with patch.object(MarqovDevice, "_get_provider_device", return_value=device_provider):
+        device.run(Circuit().x(0), shots=4)
+
+    factory_provider = _offline_braket_provider()
+    executor = ExecutorFactory.create_executor("sv1", {"provider": "AWS Braket", **config})
+    executor._get_device = AsyncMock(return_value=factory_provider)
+    await executor.execute(Circuit().x(0), shots=4)
+
+    assert device_provider.run.call_args.args[1] == ("b", "marqov")
+    assert factory_provider.run.call_args.kwargs["s3_destination_folder"] == ("b", "marqov")
 
 
 def test_device_braket_still_requires_a_bucket():
@@ -375,6 +416,26 @@ def test_factory_refuses_conflicting_spellings():
             {"provider": "Azure Quantum", "target": "ionq.simulator", **AZURE_CANONICAL,
              "location": "eastus", "azure_location": "westus"},
         )
+
+
+# ---------------------------------------------------------------------------
+# Deprecation warnings are attributed to the user's call, not to marqov
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("entry", ["MarqovDevice", "get_device", "create_executor"])
+def test_deprecation_warning_points_at_the_callers_line(entry):
+    from marqov.device import get_device
+
+    calls = {
+        "MarqovDevice": lambda: MarqovDevice("ibm_k", {"backend": "ibm_k", "ibm_token": "t"}),
+        "get_device": lambda: get_device({"backend": "ibm_k", "ibm_token": "t"}),
+        "create_executor": lambda: ExecutorFactory.create_executor(
+            "ibm-k", {"provider": "IBM Quantum", "ibm_token": "t"}),
+    }
+    with pytest.warns(DeprecationWarning, match="'ibm_token'") as record:
+        calls[entry]()
+    assert [Path(w.filename).name for w in record] == [Path(__file__).name]
 
 
 # ---------------------------------------------------------------------------

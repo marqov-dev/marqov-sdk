@@ -196,13 +196,15 @@ class MarqovDevice:
     :class:`ValueError`.
     """
 
-    def __init__(self, backend: str, params: dict) -> None:
+    def __init__(self, backend: str, params: dict, *, _stacklevel: int = 3) -> None:
         self._backend = backend
         self._params = params
         # Canonical spellings, shared with ExecutorFactory (marqov-sdk#162).
         # The deprecated ibm_/azure_ keys warn here, and conflicting
-        # spellings raise before any provider is touched.
-        self._backend_params = normalize_backend_params(params, stacklevel=3)
+        # spellings raise before any provider is touched. _stacklevel is
+        # private: get_device() raises it by one so the warning names its
+        # caller's line rather than device.py, where default filters hide it.
+        self._backend_params = normalize_backend_params(params, stacklevel=_stacklevel)
         self._provider_device = None
 
     @property
@@ -277,7 +279,7 @@ class MarqovDevice:
             raise ValueError(
                 f"Cannot determine provider for backend '{self._backend}'. "
                 f"Params must include one of: device_arn (AWS Braket), "
-                f"channel/token (IBM Quantum), subscription_id (Azure Quantum)."
+                f"channel or instance (IBM Quantum), subscription_id (Azure Quantum)."
             )
 
         return self._provider_device
@@ -482,7 +484,7 @@ class MarqovDevice:
                     raise ValueError(
                         "s3_destination_folder or s3_bucket required for AWS device execution"
                     )
-                s3_folder = (s3_bucket, self._backend_params.get("s3_prefix", DEFAULT_S3_PREFIX))
+                s3_folder = (s3_bucket, self._backend_params.get("s3_prefix") or DEFAULT_S3_PREFIX)
             try:
                 disable_rewiring = kwargs.get("disable_qubit_rewiring", False)
 
@@ -524,7 +526,7 @@ class MarqovDevice:
             raise ValueError(
                 f"Cannot determine provider for backend '{self._backend}'. "
                 f"Params must include one of: device_arn (AWS Braket), "
-                f"channel/token (IBM Quantum), subscription_id (Azure Quantum)."
+                f"channel or instance (IBM Quantum), subscription_id (Azure Quantum)."
             )
 
 
@@ -543,4 +545,4 @@ def get_device(params: dict) -> MarqovDevice:
     backend = params.get("backend")
     if not backend:
         raise ValueError("'backend' is required in params")
-    return MarqovDevice(backend, params)
+    return MarqovDevice(backend, params, _stacklevel=4)

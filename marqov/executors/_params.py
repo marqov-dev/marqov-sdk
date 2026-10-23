@@ -61,7 +61,9 @@ def normalize_backend_params(params: Mapping[str, Any], *, stacklevel: int = 2) 
     """Return a copy of ``params`` with every deprecated key renamed to its canonical one.
 
     Keys that are not deprecated aliases are copied through untouched. A
-    deprecated key whose value is ``None`` is treated as absent and dropped.
+    value of ``None`` or ``""`` under either spelling of a renamed key counts
+    as absent: a blank deprecated key is dropped, and a blank canonical key
+    is filled from its deprecated spelling, so neither raises as a conflict.
 
     Args:
         params: The backend configuration as supplied by the caller.
@@ -85,9 +87,9 @@ def normalize_backend_params(params: Mapping[str, Any], *, stacklevel: int = 2) 
         if deprecated not in normalized:
             continue
         value = normalized.pop(deprecated)
-        if value is None:
+        if _is_blank(value):
             continue
-        if normalized.get(canonical) is not None:
+        if not _is_blank(normalized.get(canonical)):
             if normalized[canonical] != value:
                 raise ValueError(
                     f"Backend params set both {deprecated!r} ({value!r}) and "
@@ -102,3 +104,8 @@ def normalize_backend_params(params: Mapping[str, Any], *, stacklevel: int = 2) 
         )
         normalized[canonical] = value
     return normalized
+
+
+def _is_blank(value: Any) -> bool:
+    """``None`` and ``""`` both mean "not supplied" (``0`` and ``False`` do not)."""
+    return value is None or (isinstance(value, str) and value == "")
