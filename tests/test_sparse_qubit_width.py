@@ -511,3 +511,67 @@ def test_dense_circuit_exports_and_counts_are_unchanged():
     assert _counts(circuit, shots=256) == {
         "001": 1, "010": 13, "011": 116, "100": 3, "110": 112, "111": 11,
     }
+
+
+def _azure_cirq_submission(circuit: Circuit, target_name: str):
+    """The cirq program the Azure executor submits, captured before any network call."""
+    pytest.importorskip("azure.quantum.cirq")
+    from unittest.mock import Mock
+
+    from azure.quantum.cirq import AzureQuantumService
+
+    from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorConfig
+
+    submitted = []
+
+    def submit(**kwargs):
+        submitted.append(kwargs["program"])
+        raise RuntimeError("offline: stop after capturing the program")
+
+    target = Mock()
+    target.submit.side_effect = submit
+    service = AzureQuantumService(workspace=Mock(), default_target=target_name)
+    service.get_target = Mock(return_value=target)
+    executor = AzureQuantumExecutor(
+        AzureQuantumExecutorConfig(
+            subscription_id="subscription", resource_group="group", workspace_name="workspace",
+            location="eastus", target=target_name, framework="cirq",
+        )
+    )
+    executor._backend = service
+    with pytest.raises(RuntimeError, match="offline"):
+        asyncio.run(executor.execute(circuit, shots=5))
+    (program,) = submitted
+    return program
+
+
+# Gates IonQ's Cirq serializer accepts (it has no CZ or SWAP, sparse or dense).
+@pytest.mark.parametrize(
+    "build", [lambda: Circuit().h(2), lambda: Circuit().h(3).cnot(3, 1).x(0), _sparse_low]
+)
+def test_azure_cirq_submission_serializes_for_ionq_and_quantinuum(build):
+    """IonQ's serializer refuses cirq.I, so idle wires are measured, not padded."""
+    import cirq
+
+    circuit = build()
+    program = _azure_cirq_submission(circuit, "ionq.simulator")
+    assert not any(isinstance(op.gate, cirq.IdentityGate) for op in program.all_operations())
+    (measure,) = [op for op in program.all_operations() if cirq.is_measurement(op)]
+    assert list(measure.qubits) == cirq.LineQubit.range(circuit.num_qubits)
+
+    from azure.quantum.cirq.targets import IonQTarget, QuantinuumTarget
+
+    serialized = IonQTarget._translate_cirq_circuit(program)
+    assert serialized.body["qubits"] == circuit.num_qubits
+    qasm = QuantinuumTarget._translate_cirq_circuit(program)
+    assert f"qreg q[{circuit.num_qubits}];" in qasm
+    assert qasm.count("measure q[") == circuit.num_qubits
+
+
+def test_azure_cirq_submission_of_a_dense_circuit_is_unchanged():
+    import cirq
+
+    circuit = _dense()
+    expected = circuit.to_cirq()
+    expected.append(cirq.measure(*sorted(expected.all_qubits()), key="result"))
+    assert _azure_cirq_submission(circuit, "ionq.simulator") == expected

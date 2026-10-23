@@ -419,14 +419,21 @@ class AzureQuantumExecutor(BaseExecutor):
         # Azure Quantum requires explicit measurements
         # Check if circuit has measurements, add if not
         import cirq
+        if circuit._idle_qubits():
+            # IonQ's serializer refuses cirq.I, so drop the identity-wire
+            # padding; measuring every qubit below keeps those wires.
+            cirq_circuit = cirq.Circuit(
+                op for op in cirq_circuit.all_operations()
+                if not isinstance(op.gate, cirq.IdentityGate)
+            )
         has_measurements = any(
             isinstance(op.gate, cirq.MeasurementGate)
             for moment in cirq_circuit
             for op in moment
         )
         if not has_measurements:
-            # Add measurement to all qubits
-            qubits = sorted(cirq_circuit.all_qubits())
+            # Measure every qubit 0..num_qubits-1, identity wires included.
+            qubits = cirq.LineQubit.range(circuit.num_qubits)
             cirq_circuit.append(cirq.measure(*qubits, key="result"))
 
         identity = {
