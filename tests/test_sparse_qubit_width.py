@@ -462,6 +462,66 @@ def _dense() -> Circuit:
     )
 
 
+def _r(value) -> float:
+    return round(float(value), 12)
+
+
+def _public_type(obj) -> str:
+    """First public ``*Gate`` class in the MRO (cirq.Y is a private _PauliY)."""
+    return next(
+        k.__name__ for k in type(obj).__mro__
+        if not k.__name__.startswith("_") and k.__name__.endswith("Gate")
+    )
+
+
+def _braket_ops(circuit: Circuit) -> list:
+    ops = []
+    for ins in circuit.to_braket().instructions:
+        angle = getattr(ins.operator, "angle", None)
+        ops.append((type(ins.operator).__name__, [int(q) for q in ins.target],
+                    None if angle is None else _r(angle)))
+    return ops
+
+
+def _cirq_ops(circuit: Circuit) -> list:
+    return [(_public_type(op.gate), _r(getattr(op.gate, "exponent", 1.0)), [q.x for q in op.qubits])
+            for op in circuit.to_cirq().all_operations()]
+
+
+def _pennylane_ops(circuit: Circuit) -> list:
+    return [(op.name, [int(w) for w in op.wires], [_r(p) for p in op.parameters])
+            for op in circuit.to_pennylane().operations]
+
+
+def _pytket_ops(circuit: Circuit) -> list:
+    return [(cmd.op.type.name, [q.index[0] for q in cmd.qubits], [_r(p) for p in cmd.op.params])
+            for cmd in circuit.to_pytket().get_commands()]
+
+
+DENSE_BRAKET_OPS = [
+    ("H", [0], None), ("CNot", [0, 1], None), ("Rx", [2], 0.3), ("S", [1], None),
+    ("T", [2], None), ("CZ", [2, 0], None), ("Swap", [1, 2], None), ("Ry", [0], 0.7),
+    ("Rz", [1], 1.1), ("Y", [2], None), ("Z", [0], None), ("X", [1], None),
+]
+DENSE_CIRQ_OPS = [
+    ("HPowGate", 1.0, [0]), ("XPowGate", 0.095492965855, [2]), ("CXPowGate", 1.0, [0, 1]),
+    ("ZPowGate", 0.25, [2]), ("ZPowGate", 0.5, [1]), ("CZPowGate", 1.0, [2, 0]),
+    ("SwapPowGate", 1.0, [1, 2]), ("YPowGate", 0.222816920329, [0]),
+    ("ZPowGate", 0.350140874802, [1]), ("YPowGate", 1.0, [2]), ("ZPowGate", 1.0, [0]),
+    ("XPowGate", 1.0, [1]),
+]
+DENSE_PENNYLANE_OPS = [
+    ("Hadamard", [0], []), ("CNOT", [0, 1], []), ("RX", [2], [0.3]), ("S", [1], []),
+    ("T", [2], []), ("CZ", [2, 0], []), ("SWAP", [1, 2], []), ("RY", [0], [0.7]),
+    ("RZ", [1], [1.1]), ("PauliY", [2], []), ("PauliZ", [0], []), ("PauliX", [1], []),
+]
+DENSE_PYTKET_OPS = [
+    ("H", [0], []), ("Rx", [2], [0.095492965855]), ("CX", [0, 1], []), ("T", [2], []),
+    ("CZ", [2, 0], []), ("S", [1], []), ("Ry", [0], [0.222816920329]), ("SWAP", [1, 2], []),
+    ("Z", [0], []), ("Rz", [1], [0.350140874802]), ("Y", [2], []), ("X", [1], []),
+]
+
+
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
@@ -493,18 +553,14 @@ def test_dense_circuit_exports_and_counts_are_unchanged():
     assert circuit.to_pyquil().out() == DENSE_PYQUIL
     assert len(circuit.to_qiskit().qubits) == 3
     assert list(circuit.simulate().qubits) == [0, 1, 2]
-    assert _sha(circuit.to_braket().to_ir().json()) == (
-        "159026a6a5e25d9ebdfdef79912deb06d5173c585772d27368aa9401ae5f244a"
-    )
-    assert _sha(repr(circuit.to_cirq())) == (
-        "e2b3d7bddf8c7c9afd3a6190a6351fc0ebd36c683b32dc196fa05da3b197dac3"
-    )
-    assert _sha(repr(circuit.to_pennylane().operations)) == (
-        "f3aa267c24960dfcd4dc488f727abfc906ede30d6bace5e354e58324448f7f6a"
-    )
-    assert _sha(repr(circuit.to_pytket().get_commands())) == (
-        "b51d895076d6aa4d43c53db6c8ec70ec4d339b3c523922d9a353d58d18520fe9"
-    )
+    # Framework exports are pinned by structure (gate, wires, angle) rather than
+    # by a hash of the framework's own text form, which changes across releases
+    # of those libraries (Braket's IR JSON did between 1.117 and 1.127). The
+    # expected values were generated from the pre-#154 code.
+    assert _braket_ops(circuit) == DENSE_BRAKET_OPS
+    assert _cirq_ops(circuit) == DENSE_CIRQ_OPS
+    assert _pennylane_ops(circuit) == DENSE_PENNYLANE_OPS
+    assert _pytket_ops(circuit) == DENSE_PYTKET_OPS
     assert _sha(json.dumps(circuit.to_dict(), sort_keys=True)) == (
         "cb1ea9c0fe805b33e799e4de622cc6c48932725b04f2cd99243d119dfb319a04"
     )
