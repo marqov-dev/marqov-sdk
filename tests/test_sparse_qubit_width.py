@@ -556,7 +556,7 @@ def test_dense_circuit_exports_and_counts_are_unchanged():
     # Framework exports are pinned by structure (gate, wires, angle) rather than
     # by a hash of the framework's own text form, which changes across releases
     # of those libraries (Braket's IR JSON did between 1.117 and 1.127). The
-    # expected values were generated from the pre-#154 code.
+    # expected values were generated from the code before marqov-sdk#154.
     assert _braket_ops(circuit) == DENSE_BRAKET_OPS
     assert _cirq_ops(circuit) == DENSE_CIRQ_OPS
     assert _pennylane_ops(circuit) == DENSE_PENNYLANE_OPS
