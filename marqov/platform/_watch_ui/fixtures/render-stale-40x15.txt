@@ -1,0 +1,15 @@
+┌──────────────────────────────────────┐
+│Marqov · replay · STALE — observation │
+└──────────────────────────────────────┘
+┌Workflow jobs─────────────────────────┐
+│> workflow-1 · Queued                 │
+│  workflow-2 · Running                │
+│  workflow-3 · Needs review           │
+│  workflow-4 · Checking execution     │
+│  workflow-5 · Cancellation requested │
+│  workflow-6 · Cancelled              │
+│  workflow-7 · Completed              │
+│  workflow-8 · Failed                 │
+└──────────────────────────────────────┘
+↑↓ select · d details (needs width ≥75)
+· r refresh · q exit

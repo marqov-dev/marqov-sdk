@@ -5,6 +5,15 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
+## [Unreleased]
+
+### Added
+
+- `marqov watch`: a read-only Ratatui dashboard with existing API-key authentication,
+  project selection, automatic bounded refresh, stale-data retention and retry backoff.
+  The viewer builds from bundled locked Rust source on first launch; JSON and project
+  listing modes work without Rust.
+
 ## [0.10.1] - 2026-10-21
 
 A patch release of fixes found after 0.10.0. The platform client keeps its

@@ -13,6 +13,25 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  watch-ui:
+    name: Watch terminal viewer
+    needs: ci-scope
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft != true) && needs.ci-scope.outputs.run_code == 'true' }}
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: marqov/platform/_watch_ui
+    env:
+      CARGO_BUILD_JOBS: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - run: cargo test --locked
+      - run: cargo clippy --locked --all-targets -- -D warnings
   ci-scope:
     # Drafts allocate no runner. Marking ready emits ready_for_review below.
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft != true }}
@@ -175,7 +194,7 @@ jobs:
   # required context stays stable if the job set ever changes.
   #
   # INVARIANT: the scope planner and every blocking job must be listed in
-  # `needs:` here (docs-check, test, test-cudaq and python313-qualified).
+  # `needs:` here (docs-check, test, test-cudaq, python313-qualified and watch-ui).
   # Lint and python313-unsupported are advisory and excluded by name.
   # Add new blocking jobs to `needs:` in the same PR.
   #
@@ -185,7 +204,7 @@ jobs:
   ci-success:
     name: CI Success
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft != true) }}
-    needs: [ci-scope, docs-check, test, test-cudaq, python313-qualified]
+    needs: [ci-scope, docs-check, test, test-cudaq, python313-qualified, watch-ui]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

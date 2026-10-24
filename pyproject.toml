@@ -160,7 +160,7 @@ Issues = "https://github.com/marqov-dev/marqov-sdk/issues"
 Changelog = "https://github.com/marqov-dev/marqov-sdk/blob/main/CHANGELOG.md"
 
 [project.scripts]
-marqov = "marqov.cli:main"
+marqov = "marqov.platform.cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -171,6 +171,7 @@ path = "marqov/__init__.py"   # __version__ here is the single source of truth
 
 [tool.hatch.build.targets.wheel]
 packages = ["marqov"]
+exclude = ["marqov/platform/_watch_ui/target/**"]
 
 [tool.ruff]
 line-length = 100

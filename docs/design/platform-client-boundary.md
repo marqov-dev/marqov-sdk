@@ -50,6 +50,10 @@ Inside `marqov.platform`:
 - `Job` — a handle for an async, server-side job.
 - Error classes — the full server error taxonomy.
 - `backends()`, `platform_info()` — platform-side metadata.
+- The installed CLI composition root combines standalone workflow commands with
+  the opt-in `watch` command. It lives here and imports the core CLI, preserving
+  the dependency direction. Local commands do not require credentials or make
+  Platform API requests. Importing `marqov` alone still does not load this package.
 
 **Nothing in the core SDK (`marqov/circuits.py`, `marqov/device.py`,
 `marqov/backends.py`, `marqov/executors/`, `marqov/workflows/`) imports from
