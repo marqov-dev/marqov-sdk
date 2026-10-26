@@ -35,7 +35,7 @@ from marqov.executors.factory import ExecutorFactory
 from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
 from marqov.executors.lightning import LightningExecutor, LightningExecutorConfig
-from marqov.executors.local import LocalExecutor
+from marqov.executors.local import LocalExecutor, LocalExecutorConfig
 from marqov.executors.qb_remote import (
     QBRemoteConfig,
     QBRemoteExecutionError,
@@ -70,6 +70,7 @@ __all__ = [
     "LightningExecutor",
     "LightningExecutorConfig",
     "LocalExecutor",
+    "LocalExecutorConfig",
     "QBRemoteConfig",
     "QBRemoteExecutionError",
     "QBRemoteExecutor",

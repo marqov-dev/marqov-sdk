@@ -1302,3 +1302,12 @@ class TestCUNQAFactoryConfigValidation:
             ExecutorFactory.create_executor("cunqa", {"provider": "CUNQA", "seed": 7})
         assert "'seed'" in str(exc_info.value)
         assert "omit" in str(exc_info.value)
+
+
+def test_local_executor_config_is_exported_from_the_executors_package():
+    """``LocalExecutorConfig`` is importable from ``marqov.executors`` like every other config."""
+    import marqov.executors as executors
+    from marqov.executors.local import LocalExecutorConfig as defined
+
+    assert executors.LocalExecutorConfig is defined
+    assert "LocalExecutorConfig" in executors.__all__
