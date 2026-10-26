@@ -246,7 +246,6 @@ class AzureQuantumExecutor(BaseExecutor):
         reject_unsupported_options("AzureQuantumExecutor.execute()", kwargs)
         circuit = self._validate_circuit(circuit)
 
-        loop = asyncio.get_running_loop()
         start_time = time.perf_counter()
 
         if self.config.framework == "qiskit":

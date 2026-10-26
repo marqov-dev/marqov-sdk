@@ -10,8 +10,6 @@ The activity module has marqov imports but activities aren't sandboxed.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from temporalio.client import Client
 from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import (

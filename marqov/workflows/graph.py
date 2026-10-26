@@ -27,7 +27,7 @@ from __future__ import annotations
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 # Context variable for tracking active workflow graph
 _active_graph: ContextVar[TransportGraph | None] = ContextVar("active_graph", default=None)
