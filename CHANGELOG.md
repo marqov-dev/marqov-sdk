@@ -5,6 +5,81 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
+## [0.11.0] - 2026-10-26
+
+A minor release with two behaviour changes that make results and
+configuration mean what they say. A circuit on sparse qubit indices keeps
+each qubit at its own position instead of being silently renumbered, and
+`MarqovDevice` and `ExecutorFactory` read the same backend settings under the
+same names. `mypy marqov` now passes under a configuration that is enforced
+rather than declared.
+
+### Upgrading
+
+These changes can alter what existing code sees.
+
+- **Sparse circuits are no longer compacted.** `Circuit.num_qubits` is the
+  largest qubit index used plus one, so `Circuit().x(2).num_qubits == 3`
+  (it was 1). Every counts key for such a circuit grows to that width, with
+  qubit 0 as the leftmost character: `Circuit().x(2)` gives `{'001': N}`
+  where it used to give `{'1': N}`, and qubit `i` is at register index `i` in
+  every export. Circuits whose indices run contiguously from 0 are unchanged.
+- Cirq and PennyLane exports of sparse circuits pad idle wires with
+  identity. Braket and Rigetti are sent no identity: they measure only the
+  qubits a gate touches and their counts are widened with `'0'` at idle
+  positions, with `metadata["identity_wires"]` listing them. If a provider's
+  reported measured qubits do not match the circuit's, the run raises
+  `ValueError` rather than returning mis-mapped counts.
+- A circuit made only of identity gates raises `ValueError` before any
+  Braket or Rigetti call. `Circuit` builder calls with a negative or
+  non-integer qubit index (for example `h(-1)` or `h(1.0)`) raise
+  `ValueError`. A Qiskit `id` gate imports as an identity instead of `Rx(0)`.
+- **Backend parameter names.** `MarqovDevice` and `ExecutorFactory` share one
+  set of canonical keys: `channel`, `instance`, `token`,
+  `optimization_level`, `subscription_id`, `resource_group`,
+  `workspace_name` and `location`. The `ibm_*` and `azure_*` spellings still
+  work but emit a `DeprecationWarning` naming the canonical key; supplying
+  both spellings with different values raises `ValueError`.
+  `{"optimization_level": 3}` now reaches the IBM transpiler on the
+  `MarqovDevice` path, where it was silently ignored.
+- With canonical keys only, a `MarqovDevice` IBM dict needs `channel` or
+  `instance` alongside `token`; a bare `token` does not select IBM. The
+  `MarqovDevice` Braket path accepts a bucket without `s3_prefix` (default
+  `"marqov"`), and the factory's Azure builder no longer requires `location`
+  (default `"eastus"`).
+
+### Fixed
+
+- `Circuit` keeps sparse qubit indices as identity wires across
+  `simulate()`, `LocalExecutor`, every exporter and importer, and the
+  Braket, Rigetti and Azure execution paths. (marqov-sdk#291, closes
+  marqov-sdk#154)
+
+- `MarqovDevice` and `ExecutorFactory` normalise backend parameter names
+  through one private helper, so one params dict behaves the same on both
+  paths. (marqov-sdk#290, closes marqov-sdk#162)
+
+- `LocalExecutorConfig` is exported from `marqov.executors`, like every other
+  executor config. (marqov-sdk#296)
+
+### Changed
+
+- The mypy configuration replaces the declared but unenforced
+  `strict = true` with checks that `mypy marqov` passes, plus a listed set
+  of modules exempted for now. Unused imports and a dead local in `marqov/`
+  are removed. No runtime behaviour changes. (marqov-sdk#294,
+  marqov-sdk#295)
+
+- CI skips draft pull requests, runs a light `docs-check` job (doc/code sync
+  tests and a check that every test ID cited in the docs still collects) for
+  documentation-only changes, and cancels superseded runs. (marqov-sdk#265,
+  marqov-sdk#289)
+
+### Documentation
+
+- `docs/quality/lint-baseline-2026-10.md` records the lint and type-check
+  baseline and what has found bugs in this SDK. (marqov-sdk#293)
+
 ## [0.10.1] - 2026-10-21
 
 A patch release of fixes found after 0.10.0. The platform client keeps its

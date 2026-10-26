@@ -62,9 +62,9 @@ asyncio.run(main())  # from sync code, asyncio.run(measure(1000)) also works
 The current release is on [PyPI](https://pypi.org/project/marqov/). The
 [changelog](https://github.com/marqov-dev/marqov-sdk/blob/main/CHANGELOG.md) lists every change by release, with an Upgrading
 section for anything that can alter existing code. If you are upgrading from
-0.9.x or earlier, read the [0.10.0 release notes](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/releases/0.10.0.md)
-first: options an executor or `MarqovDevice.run()` does not apply now raise
-`TypeError` instead of being ignored.
+0.10.x, read the [0.11.0 release notes](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/releases/0.11.0.md)
+first: circuits on sparse qubit indices keep each qubit at its own position, so
+their counts keys get wider, and backend parameter names are unified.
 
 ```bash
 pip install marqov
