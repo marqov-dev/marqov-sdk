@@ -26,6 +26,7 @@ the SDK can round-trip today.
 | Single-qubit  | H, X, Y, Z, S, T            |
 | Rotation      | Rx(θ), Ry(θ), Rz(θ)         |
 | Two-qubit     | CNOT/CX, CZ, SWAP            |
+| Three-qubit   | Toffoli/CCX, Fredkin/CSWAP  |
 
 ## §2 — Executor Interface
 
