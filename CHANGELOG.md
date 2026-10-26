@@ -31,9 +31,11 @@ These changes can alter what existing code sees.
   reported measured qubits do not match the circuit's, the run raises
   `ValueError` rather than returning mis-mapped counts.
 - A circuit made only of identity gates raises `ValueError` before any
-  Braket or Rigetti call. `Circuit` builder calls with a negative or
-  non-integer qubit index (for example `h(-1)` or `h(1.0)`) raise
-  `ValueError`. A Qiskit `id` gate imports as an identity instead of `Rx(0)`.
+  Braket or Rigetti call. A circuit with a negative or non-integer qubit
+  index (for example `h(-1)` or `h(1.0)`) raises `ValueError` as soon as its
+  width is needed: `num_qubits`, simulation, execution and every framework
+  export (`to_dict()` still records the label as given). A Qiskit `id` gate
+  imports as an identity instead of `Rx(0)`.
 - **Backend parameter names.** `MarqovDevice` and `ExecutorFactory` share one
   set of canonical keys: `channel`, `instance`, `token`,
   `optimization_level`, `subscription_id`, `resource_group`,
