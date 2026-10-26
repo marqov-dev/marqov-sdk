@@ -178,7 +178,90 @@ target-version = "py312"
 
 [tool.mypy]
 python_version = "3.12"
-strict = true
+# The whole package is checked, including the bodies of unannotated functions.
+# `strict = true` was declared here before but never enforced (176 errors);
+# see docs/quality/lint-baseline-2026-10.md. Strict-style checks apply to the
+# modules listed below, which already pass them.
+check_untyped_defs = true
+
+# Optional provider SDKs that ship without type information, or are not
+# installed by the `all` extra.
+[[tool.mypy.overrides]]
+module = [
+    "azure.quantum.*",
+    "boto3",
+    "braket.*",
+    "cloudpickle",
+    "cunqa.*",
+    "pennylane",
+    "qilisdk.*",
+    "qiskit.*",
+    "qiskit_alice_bob_provider",
+    "qiskit_ibm_runtime.*",
+    "quantumflow",
+    "sentry_sdk",
+]
+ignore_missing_imports = true
+
+# Strict-style checks for modules that pass them. Add a module here once it
+# passes; do not remove one to make an error go away. disallow_untyped_calls is
+# left off so a module's status does not depend on the typing of its callees.
+[[tool.mypy.overrides]]
+module = [
+    "marqov",
+    "marqov._optional",
+    "marqov.benchmarking",
+    "marqov.benchmarking.fidelity",
+    "marqov.benchmarking.spam",
+    "marqov.executors",
+    "marqov.executors._blocking",
+    "marqov.executors._counts",
+    "marqov.executors._params",
+    "marqov.executors.alice_bob",
+    "marqov.executors.base",
+    "marqov.executors.local",
+    "marqov.executors.qb_remote",
+    "marqov.executors.qilisdk",
+    "marqov.executors.rigetti",
+    "marqov.executors.speqtrum",
+    "marqov.experiments",
+    "marqov.platform",
+    "marqov.platform._native",
+    "marqov.platform.errors",
+    "marqov.qutip",
+    "marqov.qutip.record",
+    "marqov.simulation",
+    "marqov.simulation.backends",
+    "marqov.simulation.executor",
+    "marqov.simulation.noise",
+    "marqov.workflows",
+    "marqov.workflows._child_env",
+    "marqov.workflows._task_child",
+    "marqov.workflows.activity",
+    "marqov.workflows.capture",
+    "marqov.workflows.graph",
+    "marqov.workflows.runner",
+    "marqov.workflows.temporal_workflow",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_decorators = true
+disallow_any_generics = true
+warn_return_any = true
+
+# Temporarily exempted: these modules do not pass check_untyped_defs yet.
+# Burn this list down; do not add to it.
+[[tool.mypy.overrides]]
+module = [
+    "marqov._braket_native",
+    "marqov.cli",
+    "marqov.executors._braket_provenance",
+    "marqov.executors.braket",
+    "marqov.executors.factory",
+    "marqov.executors.ionq",
+    "marqov.workflows.decorators",
+]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "function"

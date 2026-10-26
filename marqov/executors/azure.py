@@ -132,8 +132,8 @@ class AzureQuantumExecutor(BaseExecutor):
             "location": config.location,
             "backend": config.target,
         }
-        self._workspace = None
-        self._backend = None
+        self._workspace: Any = None
+        self._backend: Any = None
         self._current_job_id: str | None = None
 
     def _create_workspace_sync(self):

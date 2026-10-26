@@ -517,7 +517,7 @@ class LightningExecutor(BaseExecutor):
         """
         name = self.config.device
         options = _tensor_options(self.config)
-        key = (name, self.config.precision)
+        key: tuple[Any, ...] = (name, self.config.precision)
         if name == "lightning.tensor":
             key += tuple(sorted(options.items()))
         probe_seed = None if name == "lightning.tensor" else 0
