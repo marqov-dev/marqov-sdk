@@ -52,6 +52,8 @@ _EXPECTED_PUBLIC_NAMES: frozenset[str] = frozenset(
         "Job",
         "JobStatus",
         "Backend",
+        "JobSummary",
+        "Project",
         "PlatformResult",
         "PlatformInfo",
         "is_terminal",

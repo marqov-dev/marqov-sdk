@@ -5,6 +5,26 @@ All notable changes to the `marqov` SDK are documented here. This project follow
 still change between minor versions; `1.0.0` is reserved for the first API-stable
 release.
 
+## [Unreleased]
+
+### Added
+
+- `marqov watch`, a read-only terminal view of Marqov Platform jobs: the
+  team's recent jobs (`--all`) or the jobs linked to one project
+  (`--project ID|NAME`), with `--limit`, `--refresh` and `--once` (one JSON
+  snapshot). It refreshes on a paced interval, keeps the last good view marked
+  STALE when a refresh fails, and stops after an authentication failure. The
+  plain-text view needs no new dependency; `pip install "marqov[watch]"` adds
+  Rich for a live, coloured table. See
+  [docs/platform-client/watch.md](docs/platform-client/watch.md). This is the
+  pure-Python successor to the Ratatui prototype in marqov-sdk#261 (marqov-sdk#292).
+- `MarqovClient.recent_jobs()`, `projects()` and `project_jobs()`, read-only
+  listings returning the new `JobSummary` and `Project` dataclasses, and
+  `MarqovClient.base_url`.
+- The `marqov` CLI offers commands registered under the `marqov.cli`
+  entry-point group, which is how `watch` is added without the core CLI
+  importing `marqov.platform`.
+
 ## [0.11.0] - 2026-10-26
 
 A minor release with two behaviour changes that make results and

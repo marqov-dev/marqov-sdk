@@ -50,6 +50,15 @@ Inside `marqov.platform`:
 - `Job` — a handle for an async, server-side job.
 - Error classes — the full server error taxonomy.
 - `backends()`, `platform_info()` — platform-side metadata.
+- `recent_jobs()`, `projects()`, `project_jobs()`: read-only listings, and the
+  `marqov watch` command built on them (`marqov/platform/watch.py`).
+
+The `marqov` CLI stays `marqov.cli:main`, in the core. It offers commands that
+packages register under the `marqov.cli` entry-point group, and this SDK's own
+`pyproject.toml` registers `watch = "marqov.platform.watch:watch"` there. The
+core CLI finds the command by that name and imports it only when it is invoked
+or listed by `marqov --help`, so `marqov.cli` never imports `marqov.platform`
+and local commands such as `marqov run` never load the platform client.
 
 **Nothing in the core SDK (`marqov/circuits.py`, `marqov/device.py`,
 `marqov/backends.py`, `marqov/executors/`, `marqov/workflows/`) imports from

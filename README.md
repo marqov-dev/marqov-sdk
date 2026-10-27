@@ -340,6 +340,7 @@ For the full error taxonomy and retry guidance see
 - [Native workflows on the hosted platform](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/platform-client/native-workflows.md)
 - [Saved-script execution](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/platform-client/saved-scripts.md)
 - [Error handling](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/platform-client/error-handling.md)
+- [Watching jobs in the terminal (`marqov watch`)](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/platform-client/watch.md)
 - [API reference](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/platform-client/api-reference.md)
 
 ---
