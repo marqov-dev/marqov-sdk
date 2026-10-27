@@ -187,3 +187,67 @@ class PlatformResult:
         if total == 0:
             return {}
         return {k: v / total for k, v in c.items()}
+
+
+# ---------------------------------------------------------------------------
+# Project
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Project:
+    """A project on the Marqov Platform, from ``GET /api/projects``.
+
+    Attributes:
+        id:          Project UUID.
+        name:        Display name.  Names need not be unique within a team.
+        description: Free-text description (``""`` when absent).
+        created_at:  ISO 8601 creation time, or ``None`` when absent.
+        updated_at:  ISO 8601 last-update time, or ``None`` when absent.
+    """
+
+    id: str
+    name: str
+    description: str
+    created_at: str | None
+    updated_at: str | None
+
+
+# ---------------------------------------------------------------------------
+# JobSummary
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class JobSummary:
+    """A job's state as recorded by the platform, for listings.
+
+    Built from a ``GET /api/jobs`` row or a ``GET /api/jobs/{id}/status``
+    response.  Deliberately carries no ``result`` payload and no
+    ``error_message``: listings show state, not outputs or server text.  Use
+    :meth:`~marqov.platform.client.MarqovClient.job` for a job's result.
+
+    Attributes:
+        id:                 Job UUID.
+        status:             Raw status string (see :func:`is_terminal`).
+        backend:            Backend slug.
+        created_at:         ISO 8601 creation time, or ``None``.
+        updated_at:         ISO 8601 time the record last changed, or ``None``.
+        estimated_cost_usd: Estimated cost; not the settled charge.  ``None``
+                            when absent.
+        actual_cost_usd:    Recorded cost, when the listing provides one
+                            (``GET /api/jobs`` rows do; status responses
+                            do not).  ``None`` otherwise.
+        hold_reason:        Reason for a scheduling hold, when the listing provides
+                            one (status responses do; ``GET /api/jobs`` rows do
+                            not).  ``None`` otherwise.
+    """
+
+    id: str
+    status: str
+    backend: str
+    created_at: str | None
+    updated_at: str | None
+    estimated_cost_usd: float | None
+    actual_cost_usd: float | None
+    hold_reason: str | None

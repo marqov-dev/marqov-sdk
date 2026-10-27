@@ -46,7 +46,8 @@ from uuid import UUID
 import marqov
 from marqov.circuits import Circuit
 
-from ._models import Backend, PlatformInfo
+from . import _listings
+from ._models import Backend, JobSummary, PlatformInfo, Project
 from ._native import build_public_submission, check_receipt, parse_runtimes, require_uuid
 from ._transport import Transport, _UnreadableSuccessBody
 from .errors import MarqovPlatformError, TransportError
@@ -585,6 +586,112 @@ class MarqovClient:
             result = job.result(timeout=60.0)
         """
         return Job(self._transport, job_id)
+
+    def recent_jobs(self, *, limit: int = 20, deadline: float | None = None) -> list[JobSummary]:
+        """List the team's most recent jobs, newest first.
+
+        Calls ``GET /api/jobs?limit=N`` (one page; the cursor is not followed).
+
+        Args:
+            limit:    Number of jobs, 1 to 100 (the platform's maximum).
+            deadline: Optional absolute :func:`time.monotonic` time after which
+                      no retry starts (see ``Transport.request``).
+
+        Raises:
+            ValueError: ``limit`` is not an integer from 1 to 100 (nothing is sent).
+            MarqovPlatformError: ``code="invalid_response"`` for an unexpected
+                response shape, or any platform error (e.g. ``RateLimited``).
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer from 1 to 100")
+        resp = self._transport.request(
+            "GET", "/api/jobs", params={"limit": limit}, deadline=deadline
+        )
+        return [_listings.job_summary(row) for row in _listings.rows(resp, "data", "job list")]
+
+    def projects(self, *, deadline: float | None = None) -> list[Project]:
+        """List the team's projects (``GET /api/projects``).
+
+        Args:
+            deadline: Optional absolute :func:`time.monotonic` time after which
+                      no retry starts.
+
+        Raises:
+            MarqovPlatformError: ``code="invalid_response"`` for an unexpected
+                response shape, or any platform error.
+        """
+        resp = self._transport.request("GET", "/api/projects", deadline=deadline)
+        return [_listings.project(row) for row in _listings.rows(resp, "projects", "project list")]
+
+    def project_jobs(
+        self,
+        project_id: str,
+        *,
+        limit: int = 10,
+        max_documents: int = 100,
+        deadline: float | None = None,
+    ) -> list[JobSummary]:
+        """List the jobs linked to a project, with each job's current status.
+
+        The platform has no project job-list endpoint: a job is linked to a
+        project by a result block in one of its documents (Workspaces and
+        Reports).  This reads the project's active documents in the platform's
+        order (most recent activity first), collects the result blocks' job IDs
+        in block order without duplicates, stops once ``limit`` are found, then
+        reads each job's ``GET /api/jobs/{id}/status``.  That is ``1 + D + J``
+        requests for ``D`` documents read and ``J`` jobs returned; ``D`` is at
+        most ``max_documents``, the number of most recently active documents
+        considered.
+
+        A project with no linked jobs returns ``[]``; team jobs are never
+        substituted.
+
+        Args:
+            project_id: Project UUID.
+            limit:      Maximum number of jobs, 1 to 100.
+            max_documents: Maximum number of documents considered, 1 to 100.
+            deadline:   Optional absolute :func:`time.monotonic` time after
+                        which no retry starts; applies to every request.
+
+        Raises:
+            ValueError: ``project_id`` is not a UUID, or ``limit`` or
+                ``max_documents`` is not an integer from 1 to 100 (nothing is
+                sent).
+            MarqovPlatformError: ``code="invalid_response"`` for an unexpected
+                shape, a document of another project, or a status response for
+                a different job; or any platform error.
+        """
+        identifier = _script_uuid(project_id, "project_id")
+        for name, value in (("limit", limit), ("max_documents", max_documents)):
+            if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 100:
+                raise ValueError(f"{name} must be an integer from 1 to 100")
+        base = f"/api/projects/{identifier}/documents"
+        listing = self._transport.request(
+            "GET", base, params={"archived": "exclude", "limit": max_documents}, deadline=deadline
+        )
+        linked: list[str] = []
+        # Sliced as well as requested: the bound holds even if the server sends more.
+        for document in _listings.rows(listing, "documents", "document list")[:max_documents]:
+            document_id = _listings.uuid_of(document.get("id"), "document identity")
+            full = self._transport.request("GET", f"{base}/{document_id}", deadline=deadline)
+            for job_id in _listings.linked_job_ids(full, identifier):
+                if job_id not in linked:
+                    linked.append(job_id)
+            if len(linked) >= limit:
+                break
+        jobs: list[JobSummary] = []
+        for job_id in linked[:limit]:
+            status = self._transport.request("GET", f"/api/jobs/{job_id}/status", deadline=deadline)
+            summary = _listings.job_summary(status if isinstance(status, dict) else {})
+            if summary.id != job_id:
+                raise _listings.invalid("job status identity")
+            jobs.append(summary)
+        return jobs
+
+    @property
+    def base_url(self) -> str:
+        """The platform URL this client sends requests to (no trailing slash)."""
+        return self._transport._base_url
 
     def backends(self) -> list[Backend]:
         """Fetch the list of available quantum backends from the platform.

@@ -5,7 +5,7 @@ import it explicitly; `import marqov` has no cost from this package.
 
 ```python
 from marqov.platform import MarqovClient
-from marqov.platform import Job, JobStatus, Backend, PlatformResult
+from marqov.platform import Job, JobStatus, JobSummary, Project, Backend, PlatformResult
 from marqov.platform import MarqovPlatformError, AuthenticationError, JobFailed
 ```
 
@@ -219,6 +219,71 @@ was submitted in a previous process or session.
 
 ---
 
+### `client.recent_jobs()`
+
+```python
+jobs: list[JobSummary] = client.recent_jobs(*, limit: int = 20, deadline: float | None = None)
+```
+
+List the team's most recent jobs, newest first (`GET /api/jobs`, one page).
+`limit` is 1 to 100; anything else raises `ValueError` before a request is sent.
+
+---
+
+### `client.projects()`
+
+```python
+projects: list[Project] = client.projects(*, deadline: float | None = None)
+```
+
+List the team's projects (`GET /api/projects`).
+
+---
+
+### `client.project_jobs()`
+
+```python
+jobs: list[JobSummary] = client.project_jobs(
+    project_id: str,
+    *,
+    limit: int = 10,
+    max_documents: int = 100,
+    deadline: float | None = None,
+)
+```
+
+List the jobs linked to a project, with each job's current status. The
+platform has no project job-list endpoint: a job is linked to a project by a
+result block in one of the project's documents (Workspaces and Reports). The
+client reads the project's active documents in the platform's order (most
+recent activity first), collects the result blocks' job IDs in block order
+without duplicates, stops once `limit` are found, then reads each job's
+status. That is `1 + D + J` requests for `D` documents read and `J` jobs
+returned; `D` is at most `max_documents`, the number of most recently active
+documents considered. A project with no linked jobs returns `[]`.
+
+`project_id` must be a UUID, and `limit` and `max_documents` 1 to 100
+(`ValueError` otherwise, before anything is sent).
+
+**Shared by the three listings:**
+
+- `deadline` is an absolute `time.monotonic()` time after which no retry
+  starts; `project_jobs()` applies it to every request.
+- All three are reads, so the transport retries them on connection failures
+  and on 429/502/503/504, honouring `Retry-After`. A rate limit that outlasts
+  the retries raises `RateLimited` with `retry_after`.
+- A success response that is not JSON raises `TransportError`. A response of
+  an unexpected shape, a document from another project, or a status for a
+  different job raises `MarqovPlatformError` with `code="invalid_response"`.
+
+---
+
+### `client.base_url`
+
+The platform URL the client sends requests to, without a trailing slash.
+
+---
+
 ### `client.backends()`
 
 ```python
@@ -407,6 +472,47 @@ A dataclass representing a quantum backend available on the platform.
 | `pricing` | `dict` | Pricing metadata (shape is server-defined) |
 | `supported_program_types` | `list` | Accepted program types (e.g. `["qasm3"]`) |
 | `extra` | `dict` | Additional server fields not mapped above |
+
+---
+
+## `Project`
+
+```python
+from marqov.platform import Project
+```
+
+A project, from `client.projects()`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `str` | Project UUID |
+| `name` | `str` | Display name; names need not be unique |
+| `description` | `str` | Description (`""` when absent) |
+| `created_at` | `str \| None` | ISO 8601 creation time |
+| `updated_at` | `str \| None` | ISO 8601 last-update time |
+
+---
+
+## `JobSummary`
+
+```python
+from marqov.platform import JobSummary
+```
+
+A job's state as recorded by the platform, from `client.recent_jobs()` and
+`client.project_jobs()`. It carries no result payload and no error message;
+use `client.job(job_id)` for a job's result.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `str` | Job UUID |
+| `status` | `str` | Raw status string (see `is_terminal()`) |
+| `backend` | `str` | Backend slug |
+| `created_at` | `str \| None` | ISO 8601 creation time |
+| `updated_at` | `str \| None` | ISO 8601 time the record last changed |
+| `estimated_cost_usd` | `float \| None` | Estimated cost; not the settled charge |
+| `actual_cost_usd` | `float \| None` | Recorded cost from `recent_jobs()` rows; `None` from `project_jobs()` (status responses do not carry it) |
+| `hold_reason` | `str \| None` | Reason for a scheduling hold, from `project_jobs()`; `None` from `recent_jobs()` (job-list rows do not carry it) |
 
 ---
 

@@ -15,8 +15,10 @@ imported by the caller.
 from marqov.platform._models import (
     Backend,
     JobStatus,
+    JobSummary,
     PlatformInfo,
     PlatformResult,
+    Project,
     is_terminal,
 )
 from marqov.platform.client import MarqovClient
@@ -41,6 +43,8 @@ __all__ = [
     # Models
     "JobStatus",
     "Backend",
+    "JobSummary",
+    "Project",
     "PlatformResult",
     "PlatformInfo",
     "is_terminal",

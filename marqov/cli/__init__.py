@@ -5,6 +5,10 @@ This module provides the command-line interface for:
 - Managing workflow status
 - Starting Temporal workers
 
+Other installed packages can add commands through the ``marqov.cli``
+entry-point group; the Platform's ``marqov watch`` arrives that way, so this
+module never imports ``marqov.platform``.
+
 Usage:
     $ marqov run workflow.py::my_workflow --arg shots=1000
     $ marqov status <workflow-id>
@@ -18,6 +22,7 @@ import importlib.util
 import json
 import sys
 import uuid
+from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 from typing import Any
 
@@ -106,7 +111,28 @@ def parse_args(args: tuple[str, ...]) -> dict[str, Any]:
     return result
 
 
-@click.group()
+class _MarqovGroup(click.Group):
+    """A group that also offers commands registered under the ``marqov.cli`` entry points.
+
+    A registered command is imported only when it is invoked or listed by
+    ``--help``. A built-in command of the same name wins.
+    """
+
+    @staticmethod
+    def _registered() -> dict[str, EntryPoint]:
+        return {ep.name: ep for ep in entry_points(group="marqov.cli")}
+
+    def list_commands(self, ctx: click.Context) -> list[str]:
+        return sorted({*super().list_commands(ctx), *self._registered()})
+
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
+        command = super().get_command(ctx, cmd_name)
+        if command is None and (entry := self._registered().get(cmd_name)) is not None:
+            command = entry.load()
+        return command
+
+
+@click.group(cls=_MarqovGroup)
 @click.version_option(version=__version__)
 def main() -> None:
     """Marqov - Quantum workflow orchestration."""
