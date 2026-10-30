@@ -206,6 +206,22 @@ class TestLocalExecutor:
         assert second_packages["numpy"] != "mutated"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("shots", [-5, 0, 2.5, True, "100", None])
+    async def test_invalid_shots_rejected(self, shots: Any) -> None:
+        """Non-positive or non-integer shots raise a Marqov error, not numpy's or empty counts."""
+        with pytest.raises(ValueError, match="shots must be a positive integer"):
+            await LocalExecutor().execute(bell_state(), shots=shots)
+
+    @pytest.mark.asyncio
+    async def test_numpy_integer_shots_accepted(self) -> None:
+        import numpy as np
+
+        result = await LocalExecutor(LocalExecutorConfig(seed=1)).execute(bell_state(), shots=np.int64(10))
+        assert sum(result.counts.values()) == 10
+        assert type(result.shots) is int
+        assert type(result.metadata["reproducibility"]["shots"]) is int
+
+    @pytest.mark.asyncio
     async def test_execute_timing(self) -> None:
         """Execution time is recorded."""
         executor = LocalExecutor()

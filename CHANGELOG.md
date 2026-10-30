@@ -31,6 +31,10 @@ release.
   now seeds the `LocalExecutor` it returns, so the seed reaches
   `metadata["reproducibility"]["seed"]`. It was silently dropped. A seed that
   is not a non-negative integer raises `ValueError` naming the `seed` key.
+- `LocalExecutor.execute()` raises `ValueError("shots must be a positive
+  integer")` for zero, negative or non-integer shots, like the other
+  executors. `shots=0` used to return empty counts, and a negative value
+  surfaced numpy's "negative dimensions are not allowed".
 
 ## [0.11.0] - 2026-10-26
 
