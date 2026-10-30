@@ -25,6 +25,13 @@ release.
   entry-point group, which is how `watch` is added without the core CLI
   importing `marqov.platform`.
 
+### Fixed
+
+- `ExecutorFactory.create_executor("local", {"provider": "Local", "seed": N})`
+  now seeds the `LocalExecutor` it returns, so the seed reaches
+  `metadata["reproducibility"]["seed"]`. It was silently dropped. A seed that
+  is not a non-negative integer raises `ValueError` naming the `seed` key.
+
 ## [0.11.0] - 2026-10-26
 
 A minor release with two behaviour changes that make results and

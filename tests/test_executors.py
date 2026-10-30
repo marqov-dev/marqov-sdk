@@ -1080,6 +1080,34 @@ class TestExecutorFactory:
         with pytest.raises(ValueError, match="missing 'provider'"):
             ExecutorFactory.create_executor("sv1", {})
 
+    @pytest.mark.asyncio
+    async def test_local_executor_receives_configured_seed(self) -> None:
+        """A seed in the local backend config reaches the executor and its result record."""
+        executor = ExecutorFactory.create_executor("local", {"provider": "Local", "seed": 73})
+        assert isinstance(executor, LocalExecutor)
+        assert executor.config.seed == 73
+
+        result = await executor.execute(bell_state(), shots=100)
+        assert result.metadata["reproducibility"]["seed"] == 73
+        direct = await LocalExecutor(LocalExecutorConfig(seed=73)).execute(bell_state(), shots=100)
+        assert result.counts == direct.counts
+
+    def test_local_executor_without_seed_is_unseeded(self) -> None:
+        executor = ExecutorFactory.create_executor("local", {"provider": "Local"})
+        assert isinstance(executor, LocalExecutor)
+        assert executor.config.seed is None
+
+    def test_local_executor_numpy_integer_seed_accepted_as_int(self) -> None:
+        import numpy as np
+
+        executor = ExecutorFactory.create_executor("local", {"provider": "Local", "seed": np.int64(5)})
+        assert executor.config.seed == 5 and type(executor.config.seed) is int
+
+    @pytest.mark.parametrize("value", ["73", 7.0, True, -1])
+    def test_local_executor_bad_seed_rejected_naming_key(self, value: Any) -> None:
+        with pytest.raises(ValueError, match="'seed'"):
+            ExecutorFactory.create_executor("local", {"provider": "Local", "seed": value})
+
     def test_supported_providers_has_no_duplicates(self) -> None:
         """Regression: `IonQ Direct` was listed twice after concurrent unitaryHACK merges
         re-added it. get_supported_providers() must have no duplicates."""
