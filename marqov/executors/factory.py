@@ -18,6 +18,7 @@ Example:
 
 from __future__ import annotations
 
+import numbers
 from collections.abc import Callable
 from typing import Any
 
@@ -41,7 +42,7 @@ from marqov.executors.cunqa import (
 from marqov.executors.ibm import IBMExecutor, IBMExecutorConfig, normalize_ibm_connection
 from marqov.executors.ionq import IonQExecutor, IonQExecutorConfig
 from marqov.executors.lightning import LightningExecutor, LightningExecutorConfig
-from marqov.executors.local import LocalExecutor
+from marqov.executors.local import LocalExecutor, LocalExecutorConfig
 from marqov.executors.qb_remote import QBRemoteConfig, QBRemoteExecutor
 from marqov.executors.qilisdk import QiliSDKExecutor, QiliSDKExecutorConfig
 from marqov.executors.quantinuum import QuantinuumExecutor, QuantinuumExecutorConfig
@@ -72,7 +73,7 @@ class ExecutorFactory:
         - CUNQA: CESGA's distributed-QC emulator on a Slurm cluster. Requires
           ``cunqa`` built from source on the cluster; it is only imported when
           an executor is constructed without an injected client.
-        - Local: QuantumFlow simulator (no cloud required)
+        - Local: QuantumFlow simulator (no cloud required). Optional ``seed``.
         - Alice & Bob: local logical-qubit emulator (see docs/alice-bob.md).
           Requires ``qiskit-alice-bob-provider`` installed in an isolated
           environment.
@@ -134,7 +135,7 @@ class ExecutorFactory:
 
         # Handle local simulator
         if backend_slug == "local" or provider == "Local":
-            return LocalExecutor()
+            return cls._create_local_executor(backend_config)
 
         if provider == "Alice & Bob":
             return AliceBobExecutor(AliceBobExecutorConfig(
@@ -600,6 +601,26 @@ class ExecutorFactory:
         "lightning-gpu": "lightning.gpu",
         "lightning-tensor": "lightning.tensor",
     }
+
+    @classmethod
+    def _create_local_executor(cls, backend_config: dict[str, Any]) -> LocalExecutor:
+        """Create a local QuantumFlow executor from configuration.
+
+        Optional key: ``seed``, a non-negative integer (numpy integers are
+        accepted and stored as ``int``). Absent or None leaves the run unseeded.
+
+        Raises:
+            ValueError: If ``seed`` is not a non-negative integer.
+        """
+        seed = backend_config.get("seed")
+        if seed is not None:
+            if isinstance(seed, bool) or not isinstance(seed, numbers.Integral) or seed < 0:
+                raise ValueError(
+                    f"Local config key 'seed' must be a non-negative integer or None, "
+                    f"got {seed!r} ({type(seed).__name__})"
+                )
+            seed = int(seed)
+        return LocalExecutor(LocalExecutorConfig(seed=seed))
 
     @classmethod
     def _create_lightning_executor(

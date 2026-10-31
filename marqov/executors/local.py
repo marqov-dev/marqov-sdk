@@ -6,6 +6,7 @@ No cloud credentials required - perfect for development and testing.
 
 import hashlib
 import json
+import numbers
 import time
 from dataclasses import dataclass
 from functools import lru_cache
@@ -80,7 +81,7 @@ class LocalExecutor(BaseExecutor):
 
         Args:
             circuit: The circuit to execute.
-            shots: Number of measurement shots.
+            shots: Number of measurement shots; a positive integer.
             **kwargs: Unsupported; any option raises TypeError.
 
         Returns:
@@ -93,8 +94,12 @@ class LocalExecutor(BaseExecutor):
 
         Raises:
             TypeError: If any keyword option is supplied.
+            ValueError: If shots is not a positive integer.
         """
         reject_unsupported_options("LocalExecutor.execute()", kwargs)
+        if isinstance(shots, bool) or not isinstance(shots, numbers.Integral) or shots <= 0:
+            raise ValueError("shots must be a positive integer")
+        shots = int(shots)
         circuit = self._validate_circuit(circuit)
 
         start_time = time.perf_counter()
