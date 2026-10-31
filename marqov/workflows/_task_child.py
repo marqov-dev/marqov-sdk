@@ -78,6 +78,11 @@ def _serialize_value(value: Any) -> Any:
         }
 
 
+# json.dumps escapes a character to at most 12 bytes, so this stays under the
+# parent's 64 KiB MAX_ERROR_BYTES with room for the envelope.
+_MAX_ERROR_CHARS = 5000
+
+
 def main() -> int:
     workdir = Path(os.environ.get("MARQOV_TASK_WORKDIR", ""))
     if not workdir or not workdir.is_dir():
@@ -91,7 +96,9 @@ def main() -> int:
     def _write_error(msg: str) -> int:
         # Errors go to error.json (separate channel); result.json is never
         # written on failure so the activity can treat result.json as "success only".
-        error_path.write_text(json.dumps({"node_id": node_id, "error": msg}))
+        # The tail of a message holds the traceback's end; the clip keeps a real
+        # failure under the parent's error.json size cap.
+        error_path.write_text(json.dumps({"node_id": node_id, "error": msg[-_MAX_ERROR_CHARS:]}))
         return 1
 
     try:

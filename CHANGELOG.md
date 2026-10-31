@@ -35,6 +35,14 @@ release.
   integer")` for zero, negative or non-integer shots, like the other
   executors. `shots=0` used to return empty counts, and a negative value
   surfaced numpy's "negative dimensions are not allowed".
+- A task can no longer exhaust or hang the worker through its output files.
+  `result.json` and `error.json` are opened without following symlinks and
+  without blocking, must be regular files, and are read only up to their size
+  cap: before, a symlink to `/dev/zero` passed the size check and was read
+  until the worker ran out of memory, and a FIFO blocked the event loop. A
+  rejected file, including an oversized or malformed one, is now a
+  non-retryable task failure. A task's own exception is clipped to its last
+  5000 characters, so it stays an ordinary, retryable failure.
 
 ## [0.11.0] - 2026-10-26
 
