@@ -27,6 +27,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from temporalio.exceptions import ApplicationError
 
 # The project conftest.py is empty — no stubs to restore.
 # Import the real modules directly.
@@ -462,73 +463,171 @@ async def test_success_path_never_cloudpickle_loads_result_value(mock_activity_c
 # ---------------------------------------------------------------------------
 
 
+async def _run_task_expecting_rejection(task: Any, node_id: str) -> ApplicationError:
+    """Run ``task`` and return the non-retryable failure the activity must raise."""
+    with pytest.raises(ApplicationError) as excinfo:
+        await execute_task(node_id, _enc(task), json.dumps([]), json.dumps({}))
+    assert excinfo.value.non_retryable
+    return excinfo.value
+
+
 @pytest.mark.asyncio
 async def test_oversized_result_is_rejected(mock_activity_ctx):
-    """result.json larger than MAX_RESULT_BYTES must be rejected with RuntimeError."""
+    """result.json larger than MAX_RESULT_BYTES must be rejected, not retried."""
     import marqov.workflows.activity as activity_mod
 
-    # Confirm the constant exists and is reasonable.
-    assert hasattr(activity_mod, "MAX_RESULT_BYTES"), (
-        "activity.py must define MAX_RESULT_BYTES constant"
-    )
     cap = activity_mod.MAX_RESULT_BYTES
     assert 1024 * 1024 <= cap <= 256 * 1024 * 1024, (
         f"MAX_RESULT_BYTES={cap} is outside the expected range [1 MiB, 256 MiB]"
     )
 
-    # Simulate a child that writes a result.json exceeding the cap.
-    from marqov.workflows import _child_env as ce
+    def writes_oversized_result() -> None:
+        workdir = Path(os.environ["MARQOV_TASK_WORKDIR"])
+        (workdir / "result.json").write_bytes(b"x" * (cap + 1))
+        os._exit(0)
 
-    workdir_capture: list[Path] = []
-    original_ntw = ce.new_task_workdir
+    error = await _run_task_expecting_rejection(writes_oversized_result, "node-big")
+    assert "limit" in str(error) and "S3" in str(error)
 
-    def capturing_ntw(node_id: str) -> Path:
-        wd = original_ntw(node_id)
-        workdir_capture.append(wd)
-        return wd
 
-    def normal_fn() -> int:
-        return 1
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output_name", ["result.json", "error.json"])
+async def test_symlinked_child_output_is_not_followed(mock_activity_ctx, tmp_path, output_name):
+    """A child output that is a symlink is rejected; its target is never read.
 
-    func_ref = _enc(normal_fn)
+    The target here is an ordinary file holding a valid envelope, so following
+    the link would succeed. A link to /dev/zero is the attack: stat() reports
+    size 0 and the read never ends.
+    """
+    target = tmp_path / "planted.json"
+    target.write_text(json.dumps({"node_id": "node-link", "result": 1, "error": "planted"}))
+    target_path = str(target)
 
-    # We need the child to write a file that exceeds the cap.  Instead of
-    # running a real task that produces huge output (slow), we intercept after
-    # the child exits and replace result.json with an oversized stub.
-    original_path_stat = Path.stat
+    def plants_symlink() -> None:
+        workdir = Path(os.environ["MARQOV_TASK_WORKDIR"])
+        (workdir / output_name).symlink_to(target_path)
+        os._exit(0)
 
-    def patched_stat(self, *args, **kwargs):
-        st = original_path_stat(self, *args, **kwargs)
-        # For any result.json inside a marqov_task_ workdir, lie about the size.
-        if self.name == "result.json" and "marqov_task_" in str(self.parent):
-            import os
-            import stat as stat_mod
-            # Return a stat_result with st_size beyond the cap.
-            fake_size = cap + 1
-            # stat_result is a named tuple-like; rebuild from os.stat_result
-            fields = list(st)
-            fields[6] = fake_size  # index 6 = st_size
-            return os.stat_result(fields)
-        return st
+    error = await _run_task_expecting_rejection(plants_symlink, "node-link")
+    assert output_name in str(error) and "symlink" in str(error)
 
-    with patch("marqov.workflows.activity.new_task_workdir", side_effect=capturing_ntw):
-        with patch.object(Path, "stat", patched_stat):
-            with pytest.raises(RuntimeError, match="[Ss]ize|[Ll]imit|[Tt]oo large|[Oo]versized|[Cc]ap"):
-                await execute_task("node-big", func_ref, json.dumps([]), json.dumps({}))
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output_name", ["result.json", "error.json"])
+async def test_fifo_child_output_is_rejected_without_blocking(mock_activity_ctx, output_name):
+    """A FIFO has no writer once the child exits, so opening it must not block."""
+
+    def plants_fifo() -> None:
+        workdir = Path(os.environ["MARQOV_TASK_WORKDIR"])
+        os.mkfifo(workdir / output_name)
+        os._exit(0)
+
+    error = await _run_task_expecting_rejection(plants_fifo, "node-fifo")
+    assert output_name in str(error) and "regular file" in str(error)
 
 
 @pytest.mark.asyncio
 async def test_oversized_error_json_is_rejected(mock_activity_ctx):
-    """error.json larger than MAX_ERROR_BYTES must be rejected (not read in full)."""
+    """error.json larger than MAX_ERROR_BYTES must be rejected, not retried."""
     import marqov.workflows.activity as activity_mod
 
-    assert hasattr(activity_mod, "MAX_ERROR_BYTES"), (
-        "activity.py must define MAX_ERROR_BYTES constant"
-    )
     cap = activity_mod.MAX_ERROR_BYTES
     assert 1024 <= cap <= 1024 * 1024, (
         f"MAX_ERROR_BYTES={cap} is outside the expected range [1 KiB, 1 MiB]"
     )
+
+    def writes_oversized_error() -> None:
+        workdir = Path(os.environ["MARQOV_TASK_WORKDIR"])
+        (workdir / "error.json").write_bytes(b"x" * (cap + 1))
+        os._exit(0)
+
+    error = await _run_task_expecting_rejection(writes_oversized_error, "node-big-error")
+    assert "error.json" in str(error) and "limit" in str(error)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output_name", ["result.json", "error.json"])
+async def test_directory_child_output_is_rejected(mock_activity_ctx, output_name):
+    """A directory in place of a child output fails cleanly and leaks no descriptor."""
+    import marqov.workflows.activity as activity_mod
+
+    def plants_directory() -> None:
+        workdir = Path(os.environ["MARQOV_TASK_WORKDIR"])
+        (workdir / output_name).mkdir()
+        os._exit(0)
+
+    opened: list[int] = []
+    real_open = os.open
+
+    def recording_open(*args: Any, **kwargs: Any) -> int:
+        fd = real_open(*args, **kwargs)
+        opened.append(fd)
+        return fd
+
+    with patch.object(activity_mod.os, "open", side_effect=recording_open):
+        error = await _run_task_expecting_rejection(plants_directory, "node-dir")
+
+    assert output_name in str(error) and "regular file" in str(error)
+    assert opened
+    for fd in opened:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+
+def test_child_output_read_stops_at_the_limit(tmp_path):
+    """Only limit + 1 bytes are read, so a huge sparse file costs nothing."""
+    import marqov.workflows.activity as activity_mod
+
+    path = tmp_path / "result.json"
+    path.write_bytes(b"x" * 100)
+    requested: list[int] = []
+    real_fdopen = os.fdopen
+
+    def spying_fdopen(*args: Any, **kwargs: Any) -> Any:
+        handle = real_fdopen(*args, **kwargs)
+        spy = MagicMock(wraps=handle)
+        spy.__enter__.return_value = spy
+        spy.__exit__.side_effect = lambda *exc: handle.close()
+
+        def read(size: int = -1) -> bytes:
+            requested.append(size)
+            return handle.read(size)
+
+        spy.read.side_effect = read
+        return spy
+
+    with patch.object(activity_mod.os, "fdopen", side_effect=spying_fdopen):
+        with pytest.raises(ApplicationError, match="limit"):
+            activity_mod._read_child_output(path, 10, "node")
+    assert requested == [11]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task_message", ["x" * 200_000, "\U0001f600" * 60_000])
+async def test_huge_task_exception_stays_an_ordinary_retryable_failure(
+    mock_activity_ctx, task_message
+):
+    """A genuine task failure must not hit the error.json cap and lose its retries."""
+
+    def raises_huge() -> None:
+        raise ValueError(task_message + "the end of the message")
+
+    with pytest.raises(RuntimeError, match="the end of the message"):
+        await execute_task("node-huge", _enc(raises_huge), json.dumps([]), json.dumps({}))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", [b"not json", b"\xff\xfe", b"[1]", b"[" * 60_000])
+async def test_malformed_error_json_is_rejected(mock_activity_ctx, content):
+    """A task cannot force retries by forging an unreadable error.json."""
+
+    def forges_error() -> None:
+        workdir = Path(os.environ["MARQOV_TASK_WORKDIR"])
+        (workdir / "error.json").write_bytes(content)
+        os._exit(0)
+
+    error = await _run_task_expecting_rejection(forges_error, "node-forged")
+    assert "error.json" in str(error)
 
 
 # ---------------------------------------------------------------------------
