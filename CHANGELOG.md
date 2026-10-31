@@ -35,6 +35,11 @@ release.
   integer")` for zero, negative or non-integer shots, like the other
   executors. `shots=0` used to return empty counts, and a negative value
   surfaced numpy's "negative dimensions are not allowed".
+- A `~/.netrc` entry for the Marqov Platform host no longer replaces the API
+  key. `requests` swapped the `Authorization: Bearer` header for Basic
+  credentials from netrc, on the first request and after a redirect, so the
+  platform saw the wrong credentials. Proxy and CA settings from the
+  environment are unaffected.
 
 ## [0.11.0] - 2026-10-26
 

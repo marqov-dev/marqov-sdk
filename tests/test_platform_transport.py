@@ -8,7 +8,9 @@ follow the envelope ``{ error: { code, message, status } }``.
 
 from __future__ import annotations
 
+import http.server
 import os
+import threading
 from unittest.mock import MagicMock, patch, call
 
 import pytest
@@ -1588,3 +1590,84 @@ class TestErrorHierarchyContract:
         assert public, "no public classes found in marqov.platform.errors"
         for cls in public:
             assert issubclass(cls, MarqovPlatformError), cls.__name__
+
+
+class _RecordingHandler(http.server.BaseHTTPRequestHandler):
+    """Answers /redirect with a same-host 302 to /target, anything else with {}."""
+
+    def do_GET(self):
+        self.server.authorization.append(self.headers.get("Authorization"))
+        if self.path == "/redirect":
+            self.send_response(302)
+            self.send_header("Location", getattr(self.server, "redirect_to", "/target"))
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def netrc_server(tmp_path, monkeypatch):
+    """A local server whose host has an entry in the user's netrc file."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RecordingHandler)
+    server.authorization = []
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    netrc = tmp_path / "netrc"
+    netrc.write_text("machine 127.0.0.1 login someone password secret\n")
+    netrc.chmod(0o600)
+    monkeypatch.setenv("NETRC", str(netrc))
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+class TestNetrc:
+    """A netrc entry for the platform host must never replace the API key."""
+
+    def test_api_key_is_sent_instead_of_netrc_credentials(self, netrc_server):
+        transport = Transport(
+            api_key="marqey_test_abc123",
+            base_url=f"http://127.0.0.1:{netrc_server.server_port}",
+        )
+        transport.request("GET", "/target")
+        assert netrc_server.authorization == ["Bearer marqey_test_abc123"]
+
+    def test_same_host_redirect_keeps_the_api_key(self, netrc_server):
+        transport = Transport(
+            api_key="marqey_test_abc123",
+            base_url=f"http://127.0.0.1:{netrc_server.server_port}",
+        )
+        transport.request("GET", "/redirect")
+        assert netrc_server.authorization == ["Bearer marqey_test_abc123"] * 2
+
+    def test_cross_host_redirect_drops_the_api_key(self, netrc_server):
+        other = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RecordingHandler)
+        other.authorization = []
+        threading.Thread(target=other.serve_forever, daemon=True).start()
+        netrc_server.redirect_to = f"http://127.0.0.1:{other.server_port}/target"
+        transport = Transport(
+            api_key="marqey_test_abc123",
+            base_url=f"http://127.0.0.1:{netrc_server.server_port}",
+        )
+        try:
+            transport.request("GET", "/redirect")
+        finally:
+            other.shutdown()
+            other.server_close()
+        assert netrc_server.authorization == ["Bearer marqey_test_abc123"]
+        assert other.authorization == [None]
+
+    def test_environment_proxies_are_still_honoured(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+        transport = Transport(api_key="marqey_test_abc123", base_url="https://platform.example")
+        settings = transport._session.merge_environment_settings(
+            "https://platform.example/x", {}, None, None, None
+        )
+        assert settings["proxies"]["https"] == "http://proxy.example:3128"
