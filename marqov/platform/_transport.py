@@ -173,6 +173,37 @@ class _UnreadableSuccessBody(TransportError):
 # ---------------------------------------------------------------------------
 
 
+class _KeepRequestHeaders(requests.auth.AuthBase):
+    """Session auth that changes nothing about the prepared request."""
+
+    def __call__(self, request: requests.PreparedRequest) -> requests.PreparedRequest:
+        return request
+
+
+class _PlatformSession(requests.Session):
+    """A session whose ``Authorization`` header is never replaced from netrc.
+
+    With ``trust_env`` on, requests overwrites the header with the Basic
+    credentials of any ``~/.netrc`` entry for the host, on the first request
+    unless the session has auth of its own, and again on every redirect.
+    ``trust_env`` itself stays on, because proxies and CA bundles from the
+    environment must keep working.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.auth = _KeepRequestHeaders()
+
+    def rebuild_auth(
+        self, prepared_request: requests.PreparedRequest, response: requests.Response
+    ) -> None:
+        """Strip the header on a cross-host redirect, without consulting netrc."""
+        old_url = typing.cast(str, response.request.url)
+        new_url = typing.cast(str, prepared_request.url)
+        if "Authorization" in prepared_request.headers and self.should_strip_auth(old_url, new_url):
+            del prepared_request.headers["Authorization"]
+
+
 class Transport:
     """Low-level HTTP transport for the Marqov Platform API.
 
@@ -219,7 +250,7 @@ class Transport:
         self._closed = False
 
         # --- Build session --------------------------------------------------
-        self._session = requests.Session()
+        self._session = _PlatformSession()
         # Server expects a Bearer token in the Authorization header.
         self._session.headers.update({"Authorization": f"Bearer {resolved_key}"})
 
