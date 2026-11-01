@@ -43,6 +43,11 @@ release.
   rejected file, including an oversized or malformed one, is now a
   non-retryable task failure. A task's own exception is clipped to its last
   5000 characters, so it stays an ordinary, retryable failure.
+- A `~/.netrc` entry for the Marqov Platform host no longer replaces the API
+  key. `requests` swapped the `Authorization: Bearer` header for Basic
+  credentials from netrc, on the first request and after a redirect, so the
+  platform saw the wrong credentials. Proxy and CA settings from the
+  environment are unaffected.
 
 ## [0.11.0] - 2026-10-26
 
