@@ -141,6 +141,11 @@ def _serialize_execution_windows(device: "AwsDevice") -> list[dict[str, str]] | 
         return None
 
 
+def _queue_count(value: str) -> int:
+    """Read a Braket queue count: a digit string, or ``>N`` for a lower bound."""
+    return int(str(value).removeprefix(">"))
+
+
 class BraketExecutor(BaseExecutor):
     """Execute circuits on AWS Braket devices.
 
@@ -464,7 +469,7 @@ class BraketExecutor(BaseExecutor):
                 loop = asyncio.get_running_loop()
                 queue_info = await loop.run_in_executor(None, device.queue_depth)
                 if queue_info and queue_info.quantum_tasks:
-                    queue_depth = sum(queue_info.quantum_tasks.values())
+                    queue_depth = sum(_queue_count(n) for n in queue_info.quantum_tasks.values())
                     queue_time_seconds = queue_depth * 30
             except Exception:
                 pass
@@ -489,6 +494,9 @@ class BraketExecutor(BaseExecutor):
             device = await self._get_device()
             loop = asyncio.get_running_loop()
             queue_info = await loop.run_in_executor(None, device.queue_depth)
-            return dict(queue_info.quantum_tasks) if queue_info.quantum_tasks else {}
+            return {
+                getattr(queue, "value", queue): _queue_count(count)
+                for queue, count in (queue_info.quantum_tasks or {}).items()
+            }
         except Exception:
             return {}

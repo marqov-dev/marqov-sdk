@@ -137,6 +137,8 @@ def record(result: Any, observable_names: list[str] | None = None, *,
             f"observable_names has {len(names)} entries but result has "
             f"{len(expect)} observables."
         )
+    if len(set(names)) != len(names):
+        raise ValueError(f"observable_names has duplicate entries: {list(names)}")
     observables = {n: _coerce_series(a, n) for n, a in zip(names, expect)}
 
     payload: dict[str, Any] = {

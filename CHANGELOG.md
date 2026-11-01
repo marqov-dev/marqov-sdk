@@ -35,6 +35,25 @@ release.
   integer")` for zero, negative or non-integer shots, like the other
   executors. `shots=0` used to return empty counts, and a negative value
   surfaced numpy's "negative dimensions are not allowed".
+- Multi-qubit gates on a repeated qubit, such as `cnot(1, 1)` or
+  `ccx(0, 0, 1)`, raise `ValueError` when built or loaded with
+  `Circuit.from_dict()`. They used to be accepted, and then simulated a wrong
+  state or exported invalid Quil.
+- `IonQExecutorConfig` and `QuantinuumExecutorConfig` raise `ValueError` for a
+  `timeout_seconds` that is not finite and above zero. On IonQ such a value
+  submitted a billable job and cancelled it straight away. `None` still means
+  no timeout.
+- `@task` raises `ValueError` for `retries` or a `timeout` that Temporal cannot
+  represent: negative, non-numeric, NaN, infinite, zero, or too large.
+  `retries=-1` meant unlimited Temporal retries, and other bad values wedged
+  the workflow. A valid `timeout` is stored as a float, so a NumPy or
+  `Fraction` value no longer fails at submission.
+- Braket `get_status()` reports the real `queue_depth` and
+  `queue_time_seconds`, which were always `None`, and `get_queue_depth()`
+  returns `{"Normal": 7}` as its signature says, not enum keys and string
+  counts. A `>N` count is read as `N`.
+- `qutip.record()` raises `ValueError` for duplicate `observable_names`
+  instead of silently keeping only the last series.
 
 ## [0.11.0] - 2026-10-26
 

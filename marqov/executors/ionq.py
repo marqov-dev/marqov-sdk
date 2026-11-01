@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from marqov.executors._counts import allocate_counts
+from marqov.executors._params import validate_seconds
 from marqov.executors.base import (
     BaseExecutor,
     DeviceStatus,
@@ -110,6 +111,10 @@ class IonQExecutorConfig:
     api_version: str = "0.3"
 
     def __post_init__(self) -> None:
+        # A non-positive or NaN timeout would submit a billable job and then
+        # cancel it at once.
+        if self.timeout_seconds is not None:
+            self.timeout_seconds = validate_seconds("timeout_seconds", self.timeout_seconds)
         if self.api_version not in {"0.3", "0.4"}:
             raise ValueError("IonQ api_version must be 0.3 or 0.4")
         if self.base_url is None:

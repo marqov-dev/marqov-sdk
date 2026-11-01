@@ -164,3 +164,11 @@ def test_record_mcsolve_seeds_round_trip_reproduces_parallel_to_tolerance():
     seeds_json = json.loads(buf.getvalue())["seeds"]
     res2 = mcsolve(*args, seeds=[seed_from_json(s) for s in seeds_json], **kw)
     np.testing.assert_allclose(res.expect[0], res2.expect[0], atol=1e-12, rtol=0)
+
+
+def test_duplicate_observable_names_are_rejected():
+    from types import SimpleNamespace
+
+    result = SimpleNamespace(times=[0.0, 1.0], expect=[[1.0, 2.0], [3.0, 4.0]])
+    with pytest.raises(ValueError, match="duplicate"):
+        record(result, observable_names=["a", "a"])

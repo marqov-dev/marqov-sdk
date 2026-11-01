@@ -24,9 +24,11 @@ Example:
 
 from __future__ import annotations
 
+import numbers
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any
 
 # Context variable for tracking active workflow graph
@@ -43,6 +45,27 @@ def set_active_graph(graph: TransportGraph | None) -> None:
     _active_graph.set(graph)
 
 
+# maximum_attempts is an int32 holding retries + 1.
+_MAX_RETRIES = 2**31 - 2
+# The range of the protobuf Duration a timeout travels in.
+_MAX_TIMEOUT_SECONDS = 315_576_000_000
+
+
+def _temporal_seconds(value: Any) -> float:
+    """Return a timeout as JSON-ready float seconds Temporal can represent."""
+    message = f"timeout must be finite, above zero and under 10000 years, got {value!r}"
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise ValueError(message)
+    try:
+        seconds = float(value)
+    except OverflowError:
+        raise ValueError(message) from None
+    # NaN fails the range check; a value that rounds to zero fails the timedelta.
+    if not 0 < seconds <= _MAX_TIMEOUT_SECONDS or not timedelta(seconds=seconds):
+        raise ValueError(message)
+    return seconds
+
+
 @dataclass
 class TaskConfig:
     """Configuration for a task.
@@ -51,14 +74,28 @@ class TaskConfig:
         name: Display name for the task. Graph-local: not sent to Temporal.
         executor: Reserved. Recorded for introspection; not consulted when
             dispatching (see ``marqov.workflows.task``).
-        retries: Number of retry attempts on failure.
-        timeout_seconds: Maximum execution time.
+        retries: Number of retry attempts on failure, zero or more.
+        timeout_seconds: Maximum time for one attempt, finite and above zero.
     """
 
     name: str
     executor: str = "local"
     retries: int = 0
     timeout_seconds: float = 300.0
+
+    def __post_init__(self) -> None:
+        # Temporal reads maximum_attempts=0 as unlimited, so retries=-1 would
+        # retry forever. Anything else Temporal cannot represent raises inside
+        # the workflow, which wedges its workflow task rather than failing it.
+        retries = self.retries
+        if (
+            isinstance(retries, bool)
+            or not isinstance(retries, numbers.Integral)
+            or not 0 <= retries <= _MAX_RETRIES
+        ):
+            raise ValueError(f"retries must be an integer from 0 to {_MAX_RETRIES}, got {retries!r}")
+        self.retries = int(retries)
+        self.timeout_seconds = _temporal_seconds(self.timeout_seconds)
 
 
 @dataclass
