@@ -79,6 +79,8 @@ release.
   credentials from netrc, on the first request and after a redirect, so the
   platform saw the wrong credentials. Proxy and CA settings from the
   environment are unaffected.
+- `LICENSE` is now the verbatim Apache License 2.0 text. The previous file
+  had reworded definitions and terms, so tools could not identify the license.
 
 ## [0.11.0] - 2026-10-26
 
