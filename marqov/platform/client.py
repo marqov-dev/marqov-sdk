@@ -226,7 +226,6 @@ class MarqovClient:
             body["framework"] = req_framework
         if circuit_payload is not None:
             # Circuit path: "circuit" is a separate field, NOT inside inline_code.
-            # PROVISIONAL — see docstring §11 reconciliation note above.
             body["circuit"] = circuit_payload
 
         # --- POST to /api/jobs/submit (idempotent write — safe to retry) ---

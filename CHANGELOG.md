@@ -26,6 +26,9 @@ release.
   importing `marqov.platform`.
 - The wheel ships a `py.typed` marker (PEP 561), so type checkers read the
   package's annotations, and the package metadata links the documentation.
+- `Circuit.ccx()` and `Circuit.cswap()`, with `toffoli()` and `fredkin()`
+  aliases. `from_qiskit`, `from_cirq` and `from_pennylane` now import both
+  gates.
 
 ### Changed
 
