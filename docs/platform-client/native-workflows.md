@@ -186,9 +186,9 @@ unchanged.
 - **`submit()` does not run native programs.** `client.submit(str, ...)` sends
   the generic submission body, which the hosted API refuses for `@task`/`@workflow`
   and plain Python source (`422 execution_unavailable`). Use `submit_native()`.
-- **`Circuit` submission is not accepted.** `client.submit(Circuit, ...)` sends a
-  `circuit` field the hosted API does not accept, and the request is refused
-  (400).
+- **`Circuit` submission is free-simulator only.** `client.submit(Circuit, ...)`
+  runs on `backend="local"`. A paid backend refuses it with
+  `422 script_required`; use [saved-script execution](saved-scripts.md) there.
 - **`job.cancel()` does not work with an API key.** The hosted cancellation
   endpoint accepts only signed-in browser sessions, so an API key receives
   `403 api_key_not_supported`. Cancel from the job page in the Marqov app; this

@@ -252,10 +252,10 @@ platform client. It is only activated when you import it explicitly.
 > through `client.submit_native()`; `client.backends()`, `client.job()`,
 > `job.status()` and `job.result()` work for any job. The request shapes are
 > tested against the hosted API's contract; authenticated live verification is
-> pending. See [Current limitations](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/platform-client/native-workflows.md#current-limitations)
-> — in particular `client.submit()`, `Circuit` submission, API-key
-> `job.cancel()` and `platform_info()` do not currently work against the
-> hosted API.
+> pending. See [Current limitations](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/platform-client/native-workflows.md#current-limitations).
+> In particular, `client.submit()` works only for OpenQASM or a `Circuit` on
+> the free simulator (`backend="local"`), and API-key `job.cancel()` and
+> `platform_info()` do not currently work against the hosted API.
 
 ### Quickstart
 

@@ -142,15 +142,9 @@ class MarqovClient:
                          :class:`ValueError` (the circuit self-describes its
                          format; a framework override would be incorrect).
 
-                         .. warning::
-                             **PROVISIONAL — §11 reconciliation item.**
-                             The exact circuit-submission wire contract (the
-                             ``circuit`` body field) is pending the platform's
-                             circuit-submission variant (spec §8.6 #1), which is
-                             unbuilt at this revision.  This path is verified —
-                             or marked **BLOCKED** — by the Task 5b staging
-                             smoke test.  Do not assume it works against the
-                             current server.
+                         The hosted API runs a ``Circuit`` on the free
+                         simulator (``backend="local"``) and refuses it on a
+                         paid backend (``422 script_required``).
 
             backend:   Backend slug to run on (e.g. ``"sv1"``,
                        ``"dwave-sim"``).
@@ -202,15 +196,9 @@ class MarqovClient:
                     "Do not pass framework= when submitting a marqov.Circuit. "
                     "The circuit self-describes its format as QASM 3."
                 )
-            # PROVISIONAL — §11 reconciliation item pending the platform's
-            # circuit-submission variant (spec §8.6 #1).
-            #
             # The circuit rides as a SEPARATE body field ("circuit"), NOT inside
             # inline_code.  inline_code is executable server-side code and must
-            # not carry a JSON envelope.  The exact wire contract for "circuit"
-            # is unbuilt on the platform at this revision; this implementation
-            # will be verified — or marked BLOCKED — by the Task 5b staging
-            # smoke test.  Do NOT claim this path works against the current server.
+            # not carry a JSON envelope.
             qasm3_str = program.to_openqasm(version=3)
             circuit_payload = {"format": "qasm3", "payload": qasm3_str}
             inline_code = None

@@ -63,20 +63,20 @@ job: Job = client.submit(
 
 Submit a quantum program to the platform and return a `Job` handle.
 
-> **Not currently accepted by the hosted API.** This method sends the generic
-> submission body. The hosted API refuses it for `@task`/`@workflow` and plain
-> Python source (`422 execution_unavailable`), for inline code sent to a paid
-> backend (`422 script_required`, which surfaces as `MarqovPlatformError`
-> rather than `PaidBackendNotSupportedYet`), and for a `Circuit` (`400`).
-> For native programs use [`client.submit_native()`](#clientsubmit_native).
+> **Accepted only for OpenQASM on the free simulator.** This method sends the
+> generic submission body. The hosted API runs a `Circuit`, or an OpenQASM
+> string with `framework="openqasm"`, on `backend="local"`. It refuses
+> `@task`/`@workflow` and plain Python source (`422 execution_unavailable`) and
+> inline code or a `Circuit` sent to a paid backend (`422 script_required`,
+> which surfaces as `MarqovPlatformError` rather than
+> `PaidBackendNotSupportedYet`). For native programs use [`client.submit_native()`](#clientsubmit_native).
 
 **`program`:**
 
 - `str` — treated as inline executable code. `framework` is **required**;
   omitting it raises `ValueError`.
 - `Circuit` — serialised as OpenQASM 3 in a `circuit` field. `framework`
-  must **not** be supplied; passing it raises `ValueError`. The hosted API does
-  not accept the `circuit` field and refuses the request (`400`).
+  must **not** be supplied; passing it raises `ValueError`.
 
 **`backend`:** backend slug (e.g. `"marqov-sim"`). The client does not check
 the backend; the platform decides whether the program can run there.

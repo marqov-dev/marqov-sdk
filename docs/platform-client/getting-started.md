@@ -94,12 +94,13 @@ particular team or program can execute there. That is decided when you submit.
 
 ---
 
-## 5. Submit a raw script (not currently accepted by the hosted API)
+## 5. Submit a raw script (OpenQASM on the free simulator only)
 
-> **Does not currently work.** `client.submit(str, ...)` sends the generic
-> submission body. The hosted API refuses it for `@task`/`@workflow` and plain
-> Python source with `422 execution_unavailable`, and for inline code sent to a
-> paid backend with `422 script_required`. To run a native program, use
+> **Works only for OpenQASM on the free simulator.** `client.submit(str, ...)`
+> sends the generic submission body. The hosted API runs an OpenQASM string with
+> `framework="openqasm"` on `backend="local"`. It refuses `@task`/`@workflow` and
+> plain Python source with `422 execution_unavailable`, and inline code sent to
+> a paid backend with `422 script_required`. To run a native program, use
 > [`client.submit_native()`](native-workflows.md). The call shape below is kept
 > for reference.
 
@@ -194,21 +195,21 @@ zero cost) is distinct from `None` (not yet fetched).
 
 ---
 
-## 10. Circuit submission (not accepted by the hosted API)
+## 10. Circuit submission (free simulator only)
 
-`client.submit(Circuit, ...)` sends the circuit in a `circuit` field that the
-hosted API does not accept, with no source field, so the request is refused with
-`400`. There is no server-side circuit submission today. The call shape is
-(no `framework` argument — the circuit self-describes its format as OpenQASM 3):
+`client.submit(Circuit, ...)` sends the circuit as OpenQASM 3 in a `circuit`
+field. The hosted API runs it on the free simulator (`backend="local"`) and
+refuses it on a paid backend with `422 script_required`. To run a circuit on
+hardware, use [saved-script execution](saved-scripts.md). There is no
+`framework` argument, because the circuit self-describes its format:
 
 ```python
 from marqov.circuits import Circuit
 from marqov.platform import MarqovClient
 
-# Refused by the hosted API today (400) — see above
 client = MarqovClient()
 circuit = Circuit().h(0).cnot(0, 1)
-job = client.submit(circuit, backend="dwave-sim", shots=1000)
+job = client.submit(circuit, backend="local", shots=1000)
 result = job.result()
 print(result.counts)
 ```
