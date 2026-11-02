@@ -1,6 +1,6 @@
 # QuTiP: local simulation and result recording
 
-Marqov 0.6.1 adds an optional QuTiP installation extra. The existing
+Marqov has an optional QuTiP installation extra (added in 0.6.1). The existing
 `marqov.qutip.record` helper prints solver observables as JSON; it does not run a
 solver, submit a job, or upload files. These examples run locally without an
 account. Managed execution requires separately qualified compiler and execution
@@ -13,7 +13,7 @@ Use Python 3.12 or later in a virtual environment:
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install "marqov[qutip]==0.6.1"
+python -m pip install "marqov[qutip]"
 ```
 
 On Windows, activate with `.venv\Scripts\Activate.ps1` in PowerShell.

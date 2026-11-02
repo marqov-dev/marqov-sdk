@@ -19,6 +19,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Topic :: Scientific/Engineering :: Physics",
   "Topic :: Software Development :: Libraries :: Python Modules",
+  "Typing :: Typed",
 ]
 dependencies = [
     # Workflow engine
@@ -161,6 +162,7 @@ all = [
 
 [project.urls]
 Homepage = "https://github.com/marqov-dev/marqov-sdk"
+Documentation = "https://github.com/marqov-dev/marqov-sdk/tree/main/docs"
 Repository = "https://github.com/marqov-dev/marqov-sdk.git"
 Issues = "https://github.com/marqov-dev/marqov-sdk/issues"
 Changelog = "https://github.com/marqov-dev/marqov-sdk/blob/main/CHANGELOG.md"
