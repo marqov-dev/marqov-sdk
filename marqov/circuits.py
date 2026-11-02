@@ -36,6 +36,16 @@ def _json_numeric_scalar(value: Any) -> Any:
     return value
 
 
+def _require_distinct(*qubits: int) -> None:
+    """Reject a gate on a repeated qubit, which has no defined action.
+
+    QuantumFlow accepts one and simulates a wrong state, and exporters disagree:
+    Qiskit raises while pyQuil writes invalid Quil such as ``CNOT 1 1``.
+    """
+    if len(set(qubits)) != len(qubits):
+        raise ValueError(f"A multi-qubit gate needs distinct qubits, got {list(qubits)}")
+
+
 class Circuit:
     """Backend-agnostic quantum circuit.
 
@@ -188,6 +198,7 @@ class Circuit:
         Returns:
             Self for method chaining.
         """
+        _require_distinct(control, target)
         self._qf += qf.CNot(control, target)
         return self
 
@@ -213,6 +224,7 @@ class Circuit:
         Returns:
             Self for method chaining.
         """
+        _require_distinct(control, target)
         self._qf += qf.CZ(control, target)
         return self
 
@@ -226,6 +238,7 @@ class Circuit:
         Returns:
             Self for method chaining.
         """
+        _require_distinct(qubit0, qubit1)
         self._qf += qf.Swap(qubit0, qubit1)
         return self
 
@@ -245,6 +258,7 @@ class Circuit:
         Returns:
             Self for method chaining.
         """
+        _require_distinct(control1, control2, target)
         self._qf += qf.CCNot(control1, control2, target)
         return self
 
@@ -275,6 +289,7 @@ class Circuit:
         Returns:
             Self for method chaining.
         """
+        _require_distinct(control, target0, target1)
         self._qf += qf.CSwap(control, target0, target1)
         return self
 
@@ -1547,6 +1562,7 @@ class Circuit:
             )
         # XX/YY/ZZ records already contain QuantumFlow's angle/pi value.
         # Preserve parameters verbatim, including supported symbolic values.
+        _require_distinct(*qubits)
         self._qf += constructor(*params, *qubits)
 
     @classmethod

@@ -311,8 +311,8 @@ def task(
             executor parameter, so every task runs the same way whatever
             this says. It does not select a backend or supply credentials;
             see ``marqov.workflows`` for how provider credentials reach a task.
-        retries: Number of retry attempts on failure.
-        timeout: Maximum execution time in seconds.
+        retries: Number of retry attempts on failure, zero or more.
+        timeout: Maximum time for one attempt in seconds, finite and above zero.
 
     Returns:
         Decorated function that behaves as a task.

@@ -12,6 +12,7 @@ from functools import partial
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Mapping
 
+from marqov.executors._params import validate_seconds
 from marqov.executors.base import (
     BaseExecutor,
     DeviceStatus,
@@ -62,6 +63,10 @@ class QuantinuumExecutorConfig:
     poll_interval_seconds: float = 2.0
     timeout_seconds: float | None = 300.0
     optimisation_level: int = 2
+
+    def __post_init__(self) -> None:
+        if self.timeout_seconds is not None:
+            self.timeout_seconds = validate_seconds("timeout_seconds", self.timeout_seconds)
 
 # Options forwarded to pytket's process_circuit, which ignores keys it does not
 # read, so anything outside this set raises instead. Derived from what

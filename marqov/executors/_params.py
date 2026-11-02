@@ -16,6 +16,8 @@ It must not import anything from ``marqov.platform``.
 
 from __future__ import annotations
 
+import math
+import numbers
 import warnings
 from collections.abc import Mapping
 from typing import Any
@@ -109,3 +111,17 @@ def normalize_backend_params(params: Mapping[str, Any], *, stacklevel: int = 2) 
 def _is_blank(value: Any) -> bool:
     """``None`` and ``""`` both mean "not supplied" (``0`` and ``False`` do not)."""
     return value is None or (isinstance(value, str) and value == "")
+
+
+def validate_seconds(name: str, value: object) -> float:
+    """Return ``value`` as positive, finite float seconds, or raise ValueError."""
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise ValueError(f"{name} must be a real number of seconds, got {value!r}")
+    try:
+        seconds = float(value)
+    except OverflowError:
+        # An int too large for a float (e.g. 10**400) is not a usable timeout.
+        raise ValueError(f"{name} must be finite and > 0, got {value!r}") from None
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError(f"{name} must be finite and > 0, got {value!r}")
+    return seconds

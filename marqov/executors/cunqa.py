@@ -64,7 +64,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import numbers
 import threading
 import time
@@ -74,6 +73,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from marqov.executors._blocking import BlockingCalls
+from marqov.executors._params import validate_seconds as _validate_seconds
 from marqov.executors.base import (
     BaseExecutor,
     DeviceStatus,
@@ -225,21 +225,6 @@ def _validate_n_qpus(n_qpus: object) -> None:
         raise ValueError(f"n_qpus must be an int, got {n_qpus!r}")
     if n_qpus < 1:
         raise ValueError(f"n_qpus must be >= 1, got {n_qpus}")
-
-
-def _validate_seconds(name: str, value: object) -> float:
-    # A zero poll interval busy-polls get_QPUs, and a non-positive or NaN
-    # timeout fails before qraise can return, so both must be finite and > 0.
-    if isinstance(value, bool) or not isinstance(value, numbers.Real):
-        raise ValueError(f"{name} must be a real number of seconds, got {value!r}")
-    try:
-        seconds = float(value)
-    except OverflowError:
-        # An int too large for a float (e.g. 10**400) is not a usable timeout.
-        raise ValueError(f"{name} must be finite and > 0, got {value!r}") from None
-    if not math.isfinite(seconds) or seconds <= 0:
-        raise ValueError(f"{name} must be finite and > 0, got {value!r}")
-    return seconds
 
 
 class CUNQAExecutor(BaseExecutor):
