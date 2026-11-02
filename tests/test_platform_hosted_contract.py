@@ -33,9 +33,9 @@ from marqov.platform.job import Job
 GENERIC_SUBMIT_FIELDS = {
     "script_id", "script_slug", "inline_code", "framework", "backend", "params",
     "create_capsule", "capsule_name", "execution_mode", "analysis_id",
-    "warn_check_ids", "not_before", "hold_reason",
+    "warn_check_ids", "not_before", "hold_reason", "circuit",
 }
-GENERIC_SOURCE_FIELDS = {"script_id", "script_slug", "inline_code"}
+GENERIC_SOURCE_FIELDS = {"script_id", "script_slug", "inline_code", "circuit"}
 
 #: The versioned managed-native body (``marqov.public-submission/v1``). Closed:
 #: unknown keys are rejected with 400. A UUID ``Idempotency-Key`` is required.
@@ -145,22 +145,25 @@ def test_result_exposes_the_managed_native_result_projection_unchanged():
     assert result.counts is None  # a workflow result is not a counts histogram
 
 
-# ---------------------------------------------------------------------------
-# Known mismatches (reproduced; fail today).
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="Circuit submit sends a `circuit` field the hosted "
-                   "contract does not accept and no source field, so the server returns 400")
-def test_circuit_submit_body_carries_an_accepted_source_field():
+def test_circuit_submit_body_matches_the_accepted_circuit_field():
     pytest.importorskip("qiskit")
     from marqov import Circuit
 
     client, sent = _capturing_client()
-    client.submit(Circuit().h(0).cnot(0, 1), backend="marqov-sim")
+    client.submit(Circuit().h(0).cnot(0, 1), backend="local")
     body = sent[0]["json"]
     assert set(body) - {"sdk_version"} <= GENERIC_SUBMIT_FIELDS
-    assert set(body) & GENERIC_SOURCE_FIELDS
+    # The server refuses a circuit sent with any other source or a framework.
+    assert set(body) & GENERIC_SOURCE_FIELDS == {"circuit"}
+    assert "framework" not in body
+    assert set(body["circuit"]) == {"format", "payload"}
+    assert body["circuit"]["format"] == "qasm3"
+    assert body["circuit"]["payload"].startswith("OPENQASM 3")
+
+
+# ---------------------------------------------------------------------------
+# Known mismatches (reproduced; fail today).
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason="POST /api/jobs/{id}/cancel is session-only; an API "
