@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import errno
 import json
 import os
 import shutil
 import signal
+import stat
 import sys
 from collections import deque
 from pathlib import Path
@@ -212,6 +214,47 @@ def _serialize_value(value: Any) -> Any:
         return _cloudpickle_envelope(value)
 
 
+def _read_child_output(
+    path: Path, limit: int, node_id: str, oversize_hint: str = ""
+) -> bytes | None:
+    """Return the bytes of a child output file, or None if the child wrote none.
+
+    The child owns its workdir, so the path may be anything the task body put
+    there. A size check on the path would follow a symlink: /dev/zero reports
+    size 0 and then never stops reading, and a FIFO blocks the event loop on
+    open. So the file is opened without following links and without blocking,
+    must be a regular file, and at most ``limit`` bytes are read from it.
+    These failures are the task's own doing, so retrying cannot help.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        reason = "it is a symlink" if exc.errno == errno.ELOOP else _clip(f"{exc}")
+        raise ApplicationError(
+            f"Task {node_id} left a {path.name} that could not be opened: {reason}.",
+            non_retryable=True,
+        ) from exc
+
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise ApplicationError(
+            f"Task {node_id} left a {path.name} that is not a regular file.",
+            non_retryable=True,
+        )
+    with os.fdopen(fd, "rb") as output:
+        data = output.read(limit + 1)
+
+    if len(data) > limit:
+        raise ApplicationError(
+            f"Task {node_id} left a {path.name} over the {limit}-byte limit."
+            f"{oversize_hint}",
+            non_retryable=True,
+        )
+    return data
+
+
 def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
     """SIGKILL the child's whole process group.
 
@@ -276,7 +319,10 @@ async def execute_task(
     Raises:
         ApplicationError: Non-retryable, if the child wrote a result envelope
             that is not a JSON object with exactly ``node_id`` and ``result``,
-            or whose ``node_id`` does not match this activity's ``node_id``.
+            or whose ``node_id`` does not match this activity's ``node_id``;
+            or if ``result.json`` or ``error.json`` is a symlink, is not a
+            regular file, is over its size cap, or (for ``error.json``) is not
+            a JSON object.
     """
     workdir = new_task_workdir(node_id)
     # One heartbeat loop spans the child run AND the workdir removal: a large
@@ -423,53 +469,63 @@ async def _run_task_in_workdir(
 
     # --- Separate error channel -------------------------------------------
     # The child writes failures to error.json and successes to result.json.
-    # Reading error.json is safe: it's small, structured, and written by our
-    # own child wrapper code (not by user task code).
+    # Both are read through _read_child_output: the child owns its workdir, so
+    # neither file can be trusted to be small, or even to be a file.
     # The success path validates the result ENVELOPE and forwards the result
     # VALUE opaquely: the activity never calls cloudpickle.loads on it.
-    error_path = workdir / "error.json"
-    if error_path.exists():
-        error_size = error_path.stat().st_size
-        if error_size > MAX_ERROR_BYTES:
-            raise RuntimeError(
-                f"Task {node_id} error.json size {error_size} exceeds limit "
-                f"{MAX_ERROR_BYTES} bytes."
+    error_bytes = _read_child_output(workdir / "error.json", MAX_ERROR_BYTES, node_id)
+    if error_bytes is not None:
+        # A real failure is valid JSON from _task_child, clipped under the cap.
+        # Anything else was forged by the task, and must not earn a retry.
+        try:
+            error_data = json.loads(error_bytes.decode("utf-8"))
+        except (ValueError, RecursionError) as exc:
+            raise ApplicationError(
+                f"Task {node_id} left an error.json that could not be parsed as "
+                f"JSON: {_clip(f'{type(exc).__name__}: {exc}')}",
+                non_retryable=True,
+            ) from exc
+        if not isinstance(error_data, dict):
+            raise ApplicationError(
+                f"Task {node_id} left an error.json that is not a JSON object "
+                f"(got {type(error_data).__name__}).",
+                non_retryable=True,
             )
-        error_data = json.loads(error_path.read_text())
         raise RuntimeError(
             f"Task {node_id} failed in child process: {error_data.get('error', '(no message)')}"
         )
 
-    if result_path.exists():
-        result_size = result_path.stat().st_size
-        if result_size > MAX_RESULT_BYTES:
-            raise RuntimeError(
-                f"Task {node_id} result.json size {result_size} exceeds the "
-                f"{MAX_RESULT_BYTES}-byte limit (aligned with Temporal's ~4 MiB gRPC "
-                f"payload limit). Large results must spill to S3 + pass a reference "
-                f"(follow-up); returning multi-MiB results inline is unsupported."
-            )
+    result_bytes = _read_child_output(
+        result_path,
+        MAX_RESULT_BYTES,
+        node_id,
+        oversize_hint=(
+            " Large results must spill to S3 + pass a reference (follow-up); "
+            "returning multi-MiB results inline is unsupported."
+        ),
+    )
+    if result_bytes is not None:
         # The child owns its workdir, so result.json is whatever the child
         # chose to write. Validate the ENVELOPE before returning it: the
         # parent must not forward a node_id the child picked, and must not
         # hand malformed bytes to the workflow, where a json.loads failure
         # would wedge the workflow task (marqov-sdk#141).
         #
-        # Parsing the envelope here is bounded: the MAX_RESULT_BYTES check
-        # above runs first, so json.loads never sees more than the cap. The
+        # Parsing the envelope here is bounded: _read_child_output read at
+        # most the cap, so json.loads never sees more than that. The
         # security property that matters is unchanged: the activity still
         # never cloudpickle.loads the child's result. The result VALUE stays
         # opaque, it is re-serialised as-is and deserialised only by the next
         # task's child.
         #
-        # read_text and json.loads are both inside the try: non-UTF-8 bytes
+        # decode and json.loads are both inside the try: non-UTF-8 bytes
         # raise UnicodeDecodeError and deeply nested input raises
         # RecursionError, and neither is a JSONDecodeError. Uncaught, they
         # would surface as ordinary retryable activity failures rather than
         # the non-retryable failure a malformed envelope deserves.
         # (JSONDecodeError and UnicodeDecodeError are both ValueError.)
         try:
-            envelope = json.loads(result_path.read_text())
+            envelope = json.loads(result_bytes.decode("utf-8"))
         except (ValueError, RecursionError) as exc:
             raise ApplicationError(
                 f"Task {node_id} wrote a result.json that could not be parsed as "

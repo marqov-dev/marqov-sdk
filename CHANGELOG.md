@@ -54,6 +54,19 @@ release.
   counts. A `>N` count is read as `N`.
 - `qutip.record()` raises `ValueError` for duplicate `observable_names`
   instead of silently keeping only the last series.
+- A task can no longer exhaust or hang the worker through its output files.
+  `result.json` and `error.json` are opened without following symlinks and
+  without blocking, must be regular files, and are read only up to their size
+  cap: before, a symlink to `/dev/zero` passed the size check and was read
+  until the worker ran out of memory, and a FIFO blocked the event loop. A
+  rejected file, including an oversized or malformed one, is now a
+  non-retryable task failure. A task's own exception is clipped to its last
+  5000 characters, so it stays an ordinary, retryable failure.
+- A `~/.netrc` entry for the Marqov Platform host no longer replaces the API
+  key. `requests` swapped the `Authorization: Bearer` header for Basic
+  credentials from netrc, on the first request and after a redirect, so the
+  platform saw the wrong credentials. Proxy and CA settings from the
+  environment are unaffected.
 
 ## [0.11.0] - 2026-10-26
 
