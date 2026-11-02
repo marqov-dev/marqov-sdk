@@ -42,7 +42,8 @@ Independent tasks execute in parallel automatically. Marqov handles scheduling, 
 Outside a `@workflow`, calling a task runs the function directly. For an
 `async def` task that call returns a coroutine, and nothing runs until you
 await it; a coroutine that is never awaited is dropped with only a
-`RuntimeWarning` when it is garbage collected:
+`RuntimeWarning` when it is garbage collected. Continuing the example above,
+which defines `measure`:
 
 ```python
 import asyncio
@@ -219,10 +220,10 @@ from marqov.circuits import Circuit
 
 circuit = Circuit().h(0).cnot(0, 1)
 
-circuit.to_qiskit()   # qiskit.QuantumCircuit
+circuit.to_qiskit()   # qiskit.QuantumCircuit (requires marqov[qiskit])
 circuit.to_braket()   # braket.circuits.Circuit (requires marqov[braket])
-circuit.to_cirq()     # cirq.Circuit
-circuit.to_pyquil()   # pyquil.Program  (requires pip install marqov[pyquil])
+circuit.to_cirq()     # cirq.Circuit (requires marqov[cirq])
+circuit.to_pyquil()   # pyquil.Program (requires marqov[pyquil])
 circuit.to_pennylane()  # pennylane QuantumScript, gates only (requires marqov[pennylane])
 ```
 
@@ -232,7 +233,7 @@ Import from other formats:
 circuit = Circuit.from_qiskit(qiskit_circuit)
 circuit = Circuit.from_cirq(cirq_circuit)
 circuit = Circuit.from_pennylane(tape)
-circuit = Circuit.from_pyquil(pyquil_program)  # requires pip install marqov[pyquil]
+circuit = Circuit.from_pyquil(pyquil_program)  # requires marqov[pyquil]
 ```
 
 ---

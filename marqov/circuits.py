@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import quantumflow as qf
 
-from marqov._optional import require_braket
+from marqov._optional import require_braket, require_cirq, require_qiskit
 
 if TYPE_CHECKING:
     from braket.circuits import Circuit as BraketCircuit
@@ -351,6 +351,7 @@ class Circuit:
         Returns:
             Qiskit QuantumCircuit object.
         """
+        require_qiskit()
         from qiskit import QuantumCircuit, QuantumRegister
         from quantumflow import xqiskit
 
@@ -376,6 +377,7 @@ class Circuit:
         Returns:
             Cirq Circuit object.
         """
+        require_cirq()
         return qf.transpile(self._padded_qf(), output_format="cirq")
 
     # QuantumFlow gate name -> Quil gate name. The fork's map spells two of

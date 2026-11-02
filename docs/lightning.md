@@ -9,13 +9,17 @@ pip install "marqov[lightning-kokkos]"   # adds lightning.kokkos (Linux x86_64/a
 ```
 
 ```python
-from marqov import Circuit
+import asyncio
+from marqov.circuits import Circuit
 from marqov.executors import ExecutorFactory
 
-executor = ExecutorFactory.create_executor("lightning-qubit", {"provider": "PennyLane Lightning"})
-result = await executor.execute(Circuit().ry(0.9, 0).cnot(0, 1), shots=1000, seed=42)
-result.counts                                   # e.g. {"00": ..., "11": ...}
-result.metadata["reproducibility"]["seed"]      # 42
+async def main():
+    executor = ExecutorFactory.create_executor("lightning-qubit", {"provider": "PennyLane Lightning"})
+    result = await executor.execute(Circuit().ry(0.9, 0).cnot(0, 1), shots=1000, seed=42)
+    print(result.counts)                                # e.g. {"00": ..., "11": ...}
+    print(result.metadata["reproducibility"]["seed"])   # 42
+
+asyncio.run(main())
 ```
 
 A copy-and-run demo, including seed replay, is `examples/lightning_cpu_local.py`.

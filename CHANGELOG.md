@@ -24,6 +24,15 @@ release.
 - The `marqov` CLI offers commands registered under the `marqov.cli`
   entry-point group, which is how `watch` is added without the core CLI
   importing `marqov.platform`.
+- The wheel ships a `py.typed` marker (PEP 561), so type checkers read the
+  package's annotations, and the package metadata links the documentation.
+
+### Changed
+
+- `Circuit.to_qiskit()` and `Circuit.to_cirq()` without the framework
+  installed raise `ImportError` naming the extra to install
+  (`pip install "marqov[qiskit]"`, `pip install "marqov[cirq]"`) instead of a
+  bare `ModuleNotFoundError`.
 
 ### Fixed
 

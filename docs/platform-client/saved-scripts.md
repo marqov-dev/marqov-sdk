@@ -6,8 +6,8 @@ helpers expose that sequence to a Python coordinator. Run remains the code IDE;
 Scripts remains the library; Jobs tracks submissions; Projects holds Workspaces
 and Reports. This does not introduce another orchestration UI.
 
-The wire sequence was exercised by the marqov-hpc feedback and QPE studies using
-a separate HTTP adapter. This SDK change has contract tests, not a claim of
+The wire sequence was exercised by earlier hosted studies using a separate
+HTTP adapter. This SDK change has contract tests, not a claim of
 additional live runs or Slurm execution. The existing generic submit() method
 retains its documented hosted limitations.
 
@@ -55,8 +55,6 @@ unsupported; see the API reference for the browser-session cancellation limits.
 
 ## Evidence
 
-The existing free hosted runs and their precise limitations are recorded in
-[marqov-hpc feedback](https://github.com/marqov-dev/marqov-hpc/tree/main/experiments/workflow-feedback)
-and [QPE](https://github.com/marqov-dev/marqov-hpc/tree/main/experiments/workflow-qpe).
-They establish the saved-script HTTP path with the experiment adapter, not
-qualification of these new SDK wrappers, a paid provider or an HPC scheduler.
+The earlier free hosted runs established the saved-script HTTP path with the
+experiment adapter, not qualification of these new SDK wrappers, a paid
+provider or an HPC scheduler. Their records are not published with the SDK.
