@@ -32,6 +32,12 @@ release.
 
 ### Changed
 
+- `pip install marqov` no longer installs `azure-quantum`. Azure users install
+  `marqov[azure]` or `marqov[all]`; if you relied on the transitive install,
+  Azure paths now raise `ImportError` naming the extra. Both extras select
+  `azure-quantum[qiskit,cirq]>=3.12.0,<3.13.0`, because 3.13.0 requires
+  `cryptography<=46.0.3`, which held cryptography back for every install. The
+  lock now resolves azure-quantum 3.12.0 and cryptography 50.0.2 (marqov-sdk#300).
 - `Circuit.to_qiskit()` and `Circuit.to_cirq()` without the framework
   installed raise `ImportError` naming the extra to install
   (`pip install "marqov[qiskit]"`, `pip install "marqov[cirq]"`) instead of a

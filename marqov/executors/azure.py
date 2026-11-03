@@ -44,6 +44,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from marqov._optional import require_azure
 from marqov.executors._blocking import BlockingCalls
 from marqov.executors.base import (
     BaseExecutor,
@@ -142,6 +143,7 @@ class AzureQuantumExecutor(BaseExecutor):
         Returns:
             Workspace instance connected to Azure Quantum.
         """
+        require_azure()
         from azure.quantum import Workspace
 
         route = self._route

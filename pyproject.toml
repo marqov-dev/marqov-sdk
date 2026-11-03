@@ -28,8 +28,6 @@ dependencies = [
     "marqov-quantumflow==1.0.2",
     # Workflow serialization is core, independent of provider installations.
     "cloudpickle>=2.2.1",
-    # Azure Quantum
-    "azure-quantum>=1.0.0",
     # CLI
     "click>=8.0.0",
     # Configuration
@@ -128,7 +126,8 @@ openqasm = [
 azure = [
     # Select the vendor's adapter dependencies, including Q# for Qiskit and
     # its supported Cirq range. Installing frameworks alone is insufficient.
-    "azure-quantum[qiskit,cirq]>=3.13.0,<4.0.0",
+    # 3.13.0 caps cryptography<=46.0.3; widen once a release lifts the cap.
+    "azure-quantum[qiskit,cirq]>=3.12.0,<3.13.0",
     "qiskit>=1.0.0,<2.6",
     "cirq>=1.0.0",
 ]
@@ -144,7 +143,7 @@ watch = [
     "rich>=13.0.0,<16",
 ]
 all = [
-    "azure-quantum[qiskit,cirq]>=3.13.0,<4.0.0",
+    "azure-quantum[qiskit,cirq]>=3.12.0,<3.13.0",
     "amazon-braket-sdk>=1.117.0",
     "qutip>=5.3.0,<6.0.0",
     "qiskit>=1.0.0,<2.6",
