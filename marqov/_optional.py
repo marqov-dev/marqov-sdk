@@ -7,7 +7,7 @@ def _require(module: str, message: str) -> None:
     try:
         import_module(module)
     except ModuleNotFoundError as error:
-        if error.name != module:
+        if error.name is None or not (module == error.name or module.startswith(f"{error.name}.")):
             raise
         raise ImportError(message) from error
 
@@ -22,3 +22,8 @@ def require_qiskit() -> None:
 
 def require_cirq() -> None:
     _require("cirq", 'Cirq interop requires pip install "marqov[cirq]"')
+
+
+def require_azure() -> None:
+    # "azure" alone is a namespace other azure-* packages can provide.
+    _require("azure.quantum", 'Azure Quantum requires pip install "marqov[azure]"')

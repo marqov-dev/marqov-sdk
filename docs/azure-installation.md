@@ -2,14 +2,17 @@
 
 Install `marqov[azure]` for both Azure Qiskit and Cirq adapters, or `marqov[all]`
 for the broader backend bundle. Both select
-`azure-quantum[qiskit,cirq]>=3.13.0,<4.0.0`, so the vendor supplies its adapter
+`azure-quantum[qiskit,cirq]>=3.12.0,<3.13.0`, so the vendor supplies its adapter
 requirements, including Q# support and its supported Cirq range. Framework
-packages alone do not supply these dependencies. Core Azure dependencies remain
-available without enabling the adapter extras.
+packages alone do not supply these dependencies. A plain `pip install marqov`
+does not install `azure-quantum`; Azure paths then raise `ImportError` naming
+`marqov[azure]`.
 
-The 3.13 floor identifies the vendor release tested for this fix. It does not
-mean earlier Azure releases could never work with their own correct extras.
-The next major release requires a separate compatibility check.
+The range stops below 3.13.0 because that release requires
+`cryptography<=46.0.3`, which would hold back cryptography in the whole
+environment. 3.12.0 has no cryptography dependency. The 3.12 floor identifies
+the vendor release tested. Widen the ceiling once a later release is confirmed
+free of the cap, after a compatibility check.
 
 Credential-free checks can run outside the repository after installation:
 
@@ -17,9 +20,9 @@ Credential-free checks can run outside the repository after installation:
 python -c 'from azure.quantum.qiskit import AzureQuantumProvider; from azure.quantum.cirq import AzureQuantumService; print("Azure adapters imported")'
 ```
 
-The clean Python 3.12 wheel installation was checked with Azure Quantum 3.13.0,
-Qiskit 2.5.2, Q# (`qsharp`) 1.31.0, QDK 1.33.0, Cirq Core 1.6.1 and
-`marqov-quantumflow` 1.0.1. The Azure-only and all-extras wheel environments
+The clean Python 3.12 wheel installation was checked with Azure Quantum 3.12.0,
+Qiskit 2.5.2, Q# (`qsharp`) 1.31.0, QDK 1.33.1, Cirq Core 1.6.1 and
+`marqov-quantumflow` 1.0.2. The Azure-only and all-extras wheel environments
 resolve; the all-extras environment also undergoes installed-package tests.
 These versions record verification evidence rather than an exact user lock.
 Use the repository's updated `uv.lock` for its frozen development environment.

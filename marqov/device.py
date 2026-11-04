@@ -13,7 +13,7 @@ from marqov._braket_native import (
     validate_options,
     widen_logical_counts,
 )
-from marqov._optional import require_braket
+from marqov._optional import require_azure, require_braket
 from marqov.executors._params import (
     DEFAULT_AZURE_LOCATION,
     DEFAULT_IBM_OPTIMIZATION_LEVEL,
@@ -256,6 +256,7 @@ class MarqovDevice:
             self._provider_device = service.backend(self._backend)
 
         elif is_azure(self._params):
+            require_azure()
             from azure.quantum import Workspace
 
             workspace = Workspace(
