@@ -197,6 +197,11 @@ zero cost) is distinct from `None` (not yet fetched).
 
 ## 10. Circuit submission (free simulator only)
 
+> **Verified live on 2026-11-03.** A Bell circuit submitted with
+> `backend="local"` to `https://app.marqov.ai` completed and returned only
+> `00` and `11` counts. Paid-backend refusal (`422 script_required`) is
+> tested against the API contract, not live.
+
 `client.submit(Circuit, ...)` sends the circuit as OpenQASM 3 in a `circuit`
 field. The hosted API runs it on the free simulator (`backend="local"`) and
 refuses it on a paid backend with `422 script_required`. To run a circuit on
