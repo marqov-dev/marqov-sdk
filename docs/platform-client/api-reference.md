@@ -368,17 +368,19 @@ Uses the server's long-poll `wait` parameter as the primary waiting mechanism;
 client-side exponential back-off with jitter is applied between polls, capped
 at 10 seconds.
 
-**`timeout`:** overall wall-clock deadline in seconds. If the job has not
+**`timeout`:** overall wall-clock deadline in seconds, greater than zero
+(`math.inf` waits indefinitely). If the job has not
 completed in time, `TimeoutError` is raised. **The job continues running
 server-side on timeout**; it is not cancelled automatically. Each poll's HTTP
 timeout is capped at the time left in this budget, no retry or backoff runs
 after the deadline, and a `TransportError` from a poll that ends after the
 deadline is raised as `TimeoutError` instead.
 
-**`poll_interval`:** starting interval for client-side back-off (seconds).
-Doubles each round, capped at 10 seconds.
+**`poll_interval`:** starting interval for client-side back-off (seconds),
+positive and finite. Doubles each round, capped at 10 seconds.
 
 **Raises:**
+- `ValueError`: `timeout` is zero, negative, NaN or not a number, or `poll_interval` is not a positive finite number. Nothing is sent.
 - `JobFailed` — job reached `failed` or `dispatch_failed` (or `cancelled`) terminal state.
 - `TimeoutError` — deadline elapsed before the job completed.
 - `MarqovPlatformError`: transport error during polling, before the deadline.

@@ -33,6 +33,7 @@ Observable API contract notes:
 
 from __future__ import annotations
 
+import math
 import random
 import time
 from typing import TYPE_CHECKING
@@ -169,13 +170,15 @@ class Job:
         deadline has passed is reported as :class:`TimeoutError`.
 
         Args:
-            timeout:       Overall wall-clock deadline in seconds.  If the
-                           job has not reached a terminal state within this
-                           time a :class:`TimeoutError` is raised.  The job
-                           is **not** cancelled server-side on timeout.
+            timeout:       Overall wall-clock deadline in seconds, greater
+                           than zero (``math.inf`` waits indefinitely).  If
+                           the job has not reached a terminal state within
+                           this time a :class:`TimeoutError` is raised.  The
+                           job is **not** cancelled server-side on timeout.
             poll_interval: Starting interval (seconds) for client-side
-                           exponential back-off between polls.  Doubles each
-                           round, capped at :data:`_MAX_BACKOFF_SECONDS`.
+                           exponential back-off between polls, positive and
+                           finite.  Doubles each round, capped at
+                           :data:`_MAX_BACKOFF_SECONDS`.
 
         Returns:
             :class:`~marqov.platform._models.PlatformResult` wrapping the
@@ -184,10 +187,13 @@ class Job:
         Raises:
             :class:`~marqov.platform.errors.JobFailed`: The job reached the
                 ``failed`` or ``dispatch_failed`` terminal state.  The error
-                message is sourced from ``result["error"]`` in the response
-                if present, otherwise a generic message is used (the server's
+                message is ``"Job <id> failed: <result["error"]>"`` when the
+                response carries that key, otherwise a generic message is used (the server's
                 ``error_message`` field is **not** returned by the status
                 endpoint — see module docstring).
+            ValueError: ``timeout`` is not a number greater than zero (NaN
+                included), or ``poll_interval`` is not a positive finite
+                number.  Nothing is sent.
             :class:`TimeoutError`: The overall ``timeout`` elapsed before the
                 job completed, including when a poll in flight at the deadline
                 fails with a transport error (chained as ``__cause__``).  The
@@ -202,6 +208,13 @@ class Job:
             the four states recognised by
             :func:`~marqov.platform._models.is_terminal`.
         """
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not timeout > 0:
+            raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
+        if (isinstance(poll_interval, bool) or not isinstance(poll_interval, (int, float))
+                or not 0 < poll_interval < math.inf):
+            raise ValueError(
+                f"poll_interval must be a positive, finite number of seconds, got {poll_interval!r}"
+            )
         deadline = time.monotonic() + timeout
         backoff = poll_interval
         timeout_message = f"Job {self._job_id} did not complete within {timeout}s"
@@ -256,7 +269,7 @@ class Job:
                 result_field = resp.get("result") or {}
                 error_msg: str
                 if isinstance(result_field, dict) and "error" in result_field:
-                    error_msg = str(result_field["error"])
+                    error_msg = f"Job {self._job_id} failed: {result_field['error']}"
                 else:
                     error_msg = (
                         f"Job {self._job_id} failed (status={raw_status!r}). "

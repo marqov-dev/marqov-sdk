@@ -38,8 +38,8 @@ field — the server only ever returns `id`, `status`, `backend`,
 reaches `failed` or `dispatch_failed`, the client builds `.message` as
 follows:
 
-- If `result` is present and contains an `"error"` key, that value becomes
-  `.message`.
+- If `result` is present and contains an `"error"` key, `.message` is
+  `"Job <id> failed: <error>"`.
 - Otherwise `.message` is a generic fallback string (e.g. *"Job \<id\> failed
   (status='failed'). The server error_message is not returned by the status
   endpoint; check the platform dashboard for details."*) — this behaviour is
