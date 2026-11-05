@@ -217,6 +217,9 @@ def test_a_fresh_key_is_generated_per_submission_when_omitted():
     {},                                                              # no source
     {"script_id": "7b1e9c40-2d3f-0a51-9e8c-5f6a7b8c9d01"},           # not an RFC UUID
     {"script_id": "{7b1e9c40-2d3f-4a51-9e8c-5f6a7b8c9d01}"},         # braces refused
+    {"script_id": "7b1e9c40-2d3f-4a51-9e8c-5f6a7b8c9d01\n"},         # trailing newline
+    {"entrypoint": "native_canary\n", "script_id": SAVED["source"]["script_id"]},
+    {"source_sha256": "a" * 64 + "\n", "script_id": SAVED["source"]["script_id"]},
     {"team_id": "team-1", "script_id": SAVED["source"]["script_id"]},
     {"entrypoint": "1bad", "script_id": SAVED["source"]["script_id"]},
     {"entrypoint": "a" * 129, "script_id": SAVED["source"]["script_id"]},
