@@ -14,6 +14,8 @@ release.
   (`--project ID|NAME`), with `--limit`, `--refresh` and `--once` (one JSON
   snapshot). It refreshes on a paced interval, keeps the last good view marked
   STALE when a refresh fails, and stops after an authentication failure. The
+  title bar and snapshot show only the platform URL's scheme, host and port,
+  since the rest can carry credentials. The
   plain-text view needs no new dependency; `pip install "marqov[watch]"` adds
   Rich for a live, coloured table. See
   [docs/platform-client/watch.md](docs/platform-client/watch.md). This is the
