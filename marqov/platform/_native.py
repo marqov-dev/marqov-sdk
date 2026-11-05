@@ -49,7 +49,7 @@ _RECEIPT_KEYS = {"protocol_version", "job_id", "submission_id", "source_sha256",
 
 
 def require_uuid(value: Any, name: str) -> str:
-    if not isinstance(value, str) or not _UUID.match(value):
+    if not isinstance(value, str) or not _UUID.fullmatch(value):
         raise ValueError(f"{name} must be a UUID string (e.g. from the Marqov app), got {value!r}")
     return value
 
@@ -117,7 +117,7 @@ def build_public_submission(
     require_uuid(team_id, "team_id")
     if (script_id is None) == (source is None):
         raise ValueError("Pass exactly one of script_id (a saved script) or source (inline code)")
-    if not isinstance(entrypoint, str) or not _ENTRYPOINT.match(entrypoint):
+    if not isinstance(entrypoint, str) or not _ENTRYPOINT.fullmatch(entrypoint):
         raise ValueError("entrypoint must be a Python identifier of at most 128 characters")
     if programming_model not in PROGRAMMING_MODELS:
         raise ValueError(f"programming_model must be one of {PROGRAMMING_MODELS}")
@@ -125,7 +125,7 @@ def build_public_submission(
         raise ValueError("backend must be a non-empty string")
     if type(cap_cents) is not int or not 1 <= cap_cents <= MAX_CAP_CENTS:
         raise ValueError(f"cap_cents must be an int from 1 to {MAX_CAP_CENTS}")
-    if source_sha256 is not None and (not isinstance(source_sha256, str) or not _SHA256.match(source_sha256)):
+    if source_sha256 is not None and (not isinstance(source_sha256, str) or not _SHA256.fullmatch(source_sha256)):
         raise ValueError("source_sha256 must be 64 lowercase hex characters")
     if not isinstance(args, (list, tuple)):
         raise TypeError("args must be a list or tuple")
@@ -198,10 +198,10 @@ def check_receipt(
 
     if (not isinstance(response, dict) or set(response) != _RECEIPT_KEYS
             or response["protocol_version"] != ADMISSION_RECEIPT_PROTOCOL
-            or not isinstance(response["job_id"], str) or not _UUID.match(response["job_id"])
-            or not isinstance(response["submission_id"], str) or not _UUID.match(response["submission_id"])
-            or not isinstance(response["source_sha256"], str) or not _SHA256.match(response["source_sha256"])
-            or not isinstance(response["input_sha256"], str) or not _SHA256.match(response["input_sha256"])):
+            or not isinstance(response["job_id"], str) or not _UUID.fullmatch(response["job_id"])
+            or not isinstance(response["submission_id"], str) or not _UUID.fullmatch(response["submission_id"])
+            or not isinstance(response["source_sha256"], str) or not _SHA256.fullmatch(response["source_sha256"])
+            or not isinstance(response["input_sha256"], str) or not _SHA256.fullmatch(response["input_sha256"])):
         raise MarqovPlatformError(
             "The platform returned an unrecognised admission receipt; the submission may or may not "
             "have been admitted. Retry with the same idempotency_key to confirm.",

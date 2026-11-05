@@ -49,6 +49,18 @@ release.
   `from_cirq` and `from_openqasm` keep on the top wire to record the register
   width, as `qml.Identity`. It raised `NotImplementedError: unsupported gate
   'I'`, so importing such a circuit and exporting it to PennyLane failed.
+- `Job.result()` raises `ValueError` before polling when `timeout` is zero,
+  negative, NaN or not a number, or `poll_interval` is not a positive finite
+  number. A zero or negative `timeout` raised `TimeoutError` without polling
+  once, a NaN `timeout` never expired, and a zero `poll_interval` left no
+  client-side pause between polls. `math.inf` is still accepted as "wait indefinitely".
+- `JobFailed` raised from a failed job's `result["error"]` now names the job:
+  its message is `"Job <id> failed: <error>"`. The `JobFailed` docstring said
+  `code` might hold the job ID; it holds the terminal status.
+- `submit_native()` and `managed_runtimes()` refuse an ID, entrypoint or
+  `source_sha256` with a trailing newline, and `submit_native()` checks its
+  receipt's IDs and hashes as strictly. The patterns allowed one trailing
+  newline.
 - `ExecutorFactory.create_executor("local", {"provider": "Local", "seed": N})`
   now seeds the `LocalExecutor` it returns, so the seed reaches
   `metadata["reproducibility"]["seed"]`. It was silently dropped. A seed that

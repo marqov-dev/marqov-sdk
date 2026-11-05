@@ -109,9 +109,9 @@ class InvalidProgram(MarqovPlatformError):
 class JobFailed(MarqovPlatformError):
     """Raised when a job reaches the ``FAILED`` terminal state.
 
-    The server-side error reason (if available) is surfaced in
-    :attr:`message`.  The original job ID, if known, may appear in
-    :attr:`code`.
+    The message names the job and, when the status response carries one,
+    the server-side error reason.  :attr:`code` holds the terminal status
+    (``"failed"``, ``"dispatch_failed"`` or ``"cancelled"``).
     """
 
 

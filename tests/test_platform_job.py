@@ -222,6 +222,18 @@ class TestJobResultFailed:
 
         assert "circuit exceeds qubit limit" in str(exc_info.value)
 
+    def test_job_failed_from_result_error_names_the_job(self):
+        """A server-supplied reason still says which job failed."""
+        t = _make_transport()
+        t.request.return_value = _status_payload("failed", result={"error": "boom"})
+        job = _make_job(t)
+
+        with pytest.raises(JobFailed) as exc_info:
+            job.result()
+
+        assert exc_info.value.message == f"Job {job.id} failed: boom"
+        assert exc_info.value.code == "failed"
+
     def test_job_failed_generic_message_when_no_result_error(self):
         """JobFailed carries the generic fallback message when result has no error key.
 
@@ -272,6 +284,22 @@ class TestJobResultFailed:
 
 
 class TestJobResultTimeout:
+    @pytest.mark.parametrize("kwargs", [
+        {"timeout": 0}, {"timeout": -1}, {"timeout": float("nan")},
+        {"timeout": True}, {"timeout": "300"},
+        {"poll_interval": 0}, {"poll_interval": -1}, {"poll_interval": float("nan")},
+        {"poll_interval": float("inf")},
+    ])
+    def test_invalid_timeout_or_poll_interval_is_refused_before_polling(self, kwargs):
+        """A budget that cannot poll, a NaN that never expires, or a busy-loop interval raises."""
+        t = _make_transport()
+        t.request.return_value = _status_payload("completed", result={"counts": {}})
+        job = _make_job(t)
+
+        with pytest.raises(ValueError):
+            job.result(**kwargs)
+        t.request.assert_not_called()
+
     def test_raises_timeout_error_when_deadline_exceeded(self):
         """result() raises TimeoutError if job does not complete in time."""
         t = _make_transport()
