@@ -27,8 +27,8 @@ release.
 - The wheel ships a `py.typed` marker (PEP 561), so type checkers read the
   package's annotations, and the package metadata links the documentation.
 - `Circuit.ccx()` and `Circuit.cswap()`, with `toffoli()` and `fredkin()`
-  aliases. `from_qiskit`, `from_cirq` and `from_pennylane` now import both
-  gates.
+  aliases. `from_qiskit`, `from_cirq`, `from_pennylane` and `from_pyquil` now
+  import both gates, so `to_pyquil` output (`CCNOT`, `CSWAP`) imports again.
 
 ### Changed
 
@@ -45,6 +45,10 @@ release.
 
 ### Fixed
 
+- `Circuit.to_pennylane()` exports the identity gate that `from_braket`,
+  `from_cirq` and `from_openqasm` keep on the top wire to record the register
+  width, as `qml.Identity`. It raised `NotImplementedError: unsupported gate
+  'I'`, so importing such a circuit and exporting it to PennyLane failed.
 - `ExecutorFactory.create_executor("local", {"provider": "Local", "seed": N})`
   now seeds the `LocalExecutor` it returns, so the seed reaches
   `metadata["reproducibility"]["seed"]`. It was silently dropped. A seed that
