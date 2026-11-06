@@ -1117,10 +1117,27 @@ class TestFromPyquil:
     def test_not_implemented_for_unsupported_gate(self) -> None:
         """Quil-native gates outside the canonical set raise NotImplementedError."""
         from pyquil import Program
-        from pyquil.gates import CCNOT
+        from pyquil.gates import ISWAP
 
-        with pytest.raises(NotImplementedError, match="CCNOT"):
-            Circuit.from_pyquil(Program(CCNOT(0, 1, 2)))
+        with pytest.raises(NotImplementedError, match="ISWAP"):
+            Circuit.from_pyquil(Program(ISWAP(0, 1)))
+
+    def test_three_qubit_gates_roundtrip(self) -> None:
+        """CCX and CSWAP survive a PyQuil roundtrip (state preserved up to phase)."""
+        for original in (
+            Circuit().ry(0.7, 0).x(1).ccx(0, 1, 2),
+            Circuit().ry(0.7, 0).x(1).cswap(0, 1, 2),
+        ):
+            imported = Circuit.from_pyquil(original.to_pyquil())
+            assert _state_equiv(original, imported)
+
+    def test_three_qubit_gates_keep_argument_order(self) -> None:
+        """CCNOT/CSWAP map controls and targets in order, even out of index order."""
+        from pyquil import Program
+        from pyquil.gates import CCNOT, CSWAP
+
+        imported = Circuit.from_pyquil(Program(CCNOT(2, 0, 1), CSWAP(1, 2, 0)))
+        assert _state_equiv(imported, Circuit().ccx(2, 0, 1).cswap(1, 2, 0))
 
     def test_symbolic_rotation_parameter_raises_not_implemented(self) -> None:
         """Symbolic PyQuil rotation parameters fail with a clear error."""
@@ -1583,6 +1600,24 @@ class TestToPennylane:
         circuit = Circuit().rx(sympy.Symbol("theta"), 0)
         with pytest.raises(ValueError, match="unbound"):
             circuit.to_pennylane()
+
+    def test_imported_identity_wire_exports(self) -> None:
+        """An identity an importer keeps for the register width exports as qml.Identity."""
+        import cirq
+        import pennylane as qml
+
+        q = cirq.LineQubit.range(2)
+        imported = Circuit.from_cirq(cirq.Circuit([cirq.H(q[0]), cirq.I(q[1])]))
+        script = imported.to_pennylane()
+        assert sorted(script.wires.tolist()) == [0, 1]
+        qml.assert_equal(script.operations[-1], qml.Identity(wires=1))
+        assert Circuit.from_pennylane(script).num_qubits == imported.num_qubits == 2
+
+    def test_openqasm_id_gate_exports(self) -> None:
+        """A QASM 2 ``id`` on the top wire survives import and PennyLane export."""
+        qasm = 'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[2];\nh q[0];\nid q[1];\n'
+        script = Circuit.from_openqasm(qasm).to_pennylane()
+        assert sorted(script.wires.tolist()) == [0, 1]
 
     def test_gate_outside_canonical_set_is_refused(self) -> None:
         """A QuantumFlow gate with no mapping raises NotImplementedError."""

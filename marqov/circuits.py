@@ -515,6 +515,8 @@ class Circuit:
         "Swap": "SWAP",
         "CCNot": "Toffoli",
         "CSwap": "CSWAP",
+        # The importers keep an identity on the top wire to record the width.
+        "I": "Identity",
     }
 
     def to_pennylane(self) -> QuantumScript:
@@ -526,7 +528,8 @@ class Circuit:
         PennyLane operations with identical matrices (including phase), on
         the same integer wires. A script has no register width, so each
         identity wire (see ``num_qubits``) is a leading ``qml.Identity``;
-        ``from_pennylane`` drops those again.
+        ``from_pennylane`` drops those again. An identity gate an importer kept
+        on the top wire exports as ``qml.Identity`` in its place.
 
         The script carries no measurements and no shots: a ``Circuit`` is
         gate-only, and the executor decides what to measure (see
@@ -1228,6 +1231,8 @@ class Circuit:
         "CX": "cnot",
         "CZ": "cz",
         "SWAP": "swap",
+        "CCNOT": "ccx",
+        "CSWAP": "cswap",
     }
 
     _PYQUIL_ROTATION_GATES: set[str] = {"RX", "RY", "RZ"}
@@ -1402,10 +1407,8 @@ class Circuit:
             if name in cls._PYQUIL_ROTATION_GATES:
                 angle = cls._pyquil_float_param(instruction.params[0])
                 getattr(circuit, method_name)(angle, qubits[0])
-            elif len(qubits) == 1:
-                getattr(circuit, method_name)(qubits[0])
             else:
-                getattr(circuit, method_name)(qubits[0], qubits[1])
+                getattr(circuit, method_name)(*qubits)
 
         circuit._drop_inner_identities()
         return circuit
