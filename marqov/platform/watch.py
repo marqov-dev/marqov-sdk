@@ -120,7 +120,7 @@ def snapshot_for(
     return {
         "schema_version": SCHEMA_VERSION,
         "source": "platform-api",
-        "platform_url": platform_url,
+        "platform_url": _display_url(platform_url),
         "scope": {
             "kind": "project" if project else "team",
             "project_id": project.id if project else None,
@@ -236,6 +236,19 @@ def _cells(job: dict[str, Any]) -> tuple[str, ...]:
         "-" if cost is None else f"{cost:.2f}",
         _clean(job["hold_reason"] or "", 80),
     )
+
+
+def _display_url(url: str) -> str:
+    """Return only the scheme, host and port of ``url``.
+
+    The rest (userinfo, path, query, fragment) can hold credentials. A URL
+    with no host is not shown at all, since its parts cannot be told apart.
+    """
+    parts = urlparse(url)
+    host = parts.netloc.rpartition("@")[2]
+    if not parts.scheme or not host:
+        return "(unrecognised URL)"
+    return f"{parts.scheme}://{host}"
 
 
 def _title(snapshot: dict[str, Any]) -> str:

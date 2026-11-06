@@ -108,6 +108,9 @@ quit.
 }
 ```
 
+`platform_url` is only the scheme, host and port of the platform URL, and the
+title bar shows only the host and port: the rest of a URL can carry credentials.
+A URL with no host shows as `(unrecognised URL)`.
 `scope.kind` is `"team"` for `--all`, with `project_id` and `project_name`
 null. `--once` always reports `"freshness": "fresh"`: a failed read exits with
 an error instead of printing a snapshot. `actual_cost_usd` is filled for team

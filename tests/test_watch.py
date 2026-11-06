@@ -139,6 +139,33 @@ class TestOnce:
         assert ("recent_jobs", 2) == fake.calls[-1][:2]
         assert fake.closed
 
+    def test_url_credentials_and_query_are_not_shown(self, fake, frozen_now):
+        """Userinfo, query and fragment in MARQOV_PLATFORM_URL stay off screen and out of --once."""
+        fake.base_url = "https://alice:s3cret@platform.example.test:8443/base?token=abc#frag"
+        result = CliRunner().invoke(cli, ["watch", "--all", "--once"])
+        assert result.exit_code == 0, result.output
+        snapshot = json.loads(result.output)
+        assert snapshot["platform_url"] == "https://platform.example.test:8443"
+        title = watch_mod.render_plain(snapshot, now=NOW).splitlines()[0]
+        assert "platform.example.test:8443" in title
+        for secret in ("alice", "s3cret", "token", "abc", "frag"):
+            assert secret not in result.output and secret not in title
+
+    @pytest.mark.parametrize(("url", "shown"), [
+        ("https://host.test/alice:s3cret@tenant/base", "https://host.test"),
+        ("https://host.test/base;password=s3cret/next", "https://host.test"),
+        ("alice:s3cret@host.test/base?token=abc", "(unrecognised URL)"),
+    ])
+    def test_only_scheme_host_and_port_are_shown(self, fake, frozen_now, url, shown):
+        """The path, and a URL with no host, can carry credentials too."""
+        fake.base_url = url
+        result = CliRunner().invoke(cli, ["watch", "--all", "--once"])
+        assert result.exit_code == 0, result.output
+        snapshot = json.loads(result.output)
+        assert snapshot["platform_url"] == shown
+        title = watch_mod.render_plain(snapshot, now=NOW).splitlines()[0]
+        assert "s3cret" not in result.output and "s3cret" not in title
+
     def test_project_selected_by_name_ignoring_case(self, fake, frozen_now):
         result = CliRunner().invoke(cli, ["watch", "--project", "bell STUDY", "--once"])
         assert result.exit_code == 0, result.output
