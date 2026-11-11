@@ -31,6 +31,33 @@ node ID, run `pytest --collect-only` on it. Several tests pin doc/code sync
 (provider lists, the fallback-message wording); expect CI to fail if prose
 and code drift apart.
 
+## What the hosted platform uses from this SDK
+
+Do not assume the hosted Marqov Platform runs this SDK's code. It runs users'
+work with its own code. Before ranking a change as important "for hosted
+users" or "for the platform release", check which side runs it.
+
+- **Used by hosted users:** writing programs (`marqov.circuits.Circuit` and its
+  OpenQASM export, the `@task` and `@workflow` decorators as source text) and
+  the `marqov.platform` client (`MarqovClient`, `Job`, `marqov watch`).
+  `client.submit(Circuit)` sends `to_openqasm(version=3)`; `submit_native()`
+  sends source that the platform compiles and runs with the SDK version in
+  its own images, which can be older than the user's.
+- **Not used by the hosted platform:** the Temporal workflow engine in
+  `marqov/workflows/` (`temporal_workflow.py`, `activity.py`, the worker CLI),
+  the provider executors in `marqov/executors/`, `ExecutorFactory`, and
+  `MarqovDevice` / `get_device()`. These run where someone operates the SDK
+  themselves, with their own Temporal service or provider accounts. A defect
+  there is real for those users and does not affect a hosted job.
+- **Limits differ.** The hosted platform enforces its own limits (for example
+  on task result size). A limit in this repository says nothing about the
+  hosted one. See `docs/platform-client/native-workflows.md`.
+
+The platform's maintainers keep a dated map of how work runs in production.
+If a task depends on how the hosted product behaves and that map is not
+available to you, say so and ask, instead of inferring it from this
+repository.
+
 ## Architecture boundary
 
 Core SDK code (everything under `marqov/` except `marqov/platform/`) must
