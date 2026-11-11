@@ -53,8 +53,10 @@ class Circuit:
     to any supported backend (Braket, Qiskit, Cirq, PyQuil).
 
     Qubits are nonnegative integer indices. The circuit width is the largest
-    index any gate touches plus one, so ``Circuit().x(2)`` has three qubits:
-    an index below the largest that no gate touches is an identity wire, kept
+    index any gate touches plus one, or the declared width if that is larger
+    (``Circuit(num_qubits=6)``, or a Qiskit or OpenQASM import, which keeps
+    the source's declared qubits). So ``Circuit().x(2)`` has three qubits:
+    an index below the width that no gate touches is an identity wire, kept
     in simulation and in counts keys rather than removed. Qubit ``i`` is
     always register index ``i`` in an export (labels are never compacted),
     and character ``i`` of a counts key from ``LocalExecutor``, so qubit 0 is
@@ -67,9 +69,27 @@ class Circuit:
         >>> result = circuit.simulate()
     """
 
-    def __init__(self) -> None:
-        """Initialize an empty circuit."""
+    def __init__(self, num_qubits: int | None = None) -> None:
+        """Initialize an empty circuit.
+
+        Args:
+            num_qubits: Declared width. The circuit has at least this many
+                qubits even if no gate touches the upper ones. ``None`` (the
+                default) infers the width from the gates alone.
+
+        Raises:
+            ValueError: If ``num_qubits`` is not a nonnegative integer.
+        """
+        if num_qubits is not None and (
+            isinstance(num_qubits, (bool, np.bool_))
+            or not isinstance(num_qubits, Integral)
+            or num_qubits < 0
+        ):
+            raise ValueError(
+                f"num_qubits must be a nonnegative integer, got {num_qubits!r}"
+            )
         self._qf = qf.Circuit()
+        self._declared_width: int | None = None if num_qubits is None else int(num_qubits)
 
     # Single-qubit gates
 
@@ -610,9 +630,10 @@ class Circuit:
         Use explicit gates such as ``cnot`` or decompose modified instructions
         before importing; their modifiers would be lost by the converter.
         Terminal measurements (nothing after them touches the measured qubit)
-        are skipped; as in ``from_qiskit``, a qubit that only a measurement
-        touches gets no gate in the returned circuit (it is still an identity
-        wire when a higher index is used, see ``num_qubits``). An identity
+        are skipped. A qubit that only a measurement touches gets no gate in
+        the returned circuit, but it counts toward the width as an identity
+        wire (see ``num_qubits``), as a measured qubit does in ``from_qiskit``.
+        An identity
         (``i``) gate is dropped when another gate touches a higher index, and
         kept as an ``I`` gate otherwise so the width is kept. Result types (e.g.
         ``probability()``) are not imported: the returned circuit carries
@@ -638,6 +659,7 @@ class Circuit:
 
         instructions = list(braket_circuit.instructions)
         gate_instructions = []
+        measured: set[int] = set()
         # Validate the entire input before the converter can strip modifiers.
         for index, instruction in enumerate(instructions):
             if isinstance(instruction.operator, Measure):
@@ -652,6 +674,7 @@ class Circuit:
                         "these qubits, so dropping the measurement would silently change "
                         "what the circuit computes."
                     )
+                measured |= measured_qubits
                 continue
             if not isinstance(instruction.operator, braket_circuits.Gate):
                 raise NotImplementedError(
@@ -671,6 +694,7 @@ class Circuit:
             gate_instructions.append(instruction)
         circuit._qf = qf.braket_to_circuit(braket_circuits.Circuit(gate_instructions))
         circuit._drop_inner_identities()
+        circuit._declare_at_least(max(measured, default=-1) + 1)
         return circuit
 
     # Qiskit gate name -> Circuit fluent method mapping.
@@ -735,6 +759,10 @@ class Circuit:
         stays in the width, see ``num_qubits``), and kept as an ``I`` gate
         otherwise so the width is kept.
 
+        The imported circuit declares ``qiskit_circuit.num_qubits`` as its
+        width, so qubits that no gate touches stay in ``num_qubits`` and in
+        counts keys, including unused qubits at the end of the register.
+
         Requires Qiskit to be installed (``pip install marqov[qiskit]``).
 
         Args:
@@ -777,7 +805,7 @@ class Circuit:
             optimization_level=0,
         )
 
-        circuit = cls()
+        circuit = cls(num_qubits=qiskit_circuit.num_qubits)
 
         for index, instruction in enumerate(decomposed.data):
             name = instruction.operation.name
@@ -989,6 +1017,8 @@ class Circuit:
         gate type is reported to Sentry for observability. An identity gate
         is dropped when another gate touches a higher index (the wire stays in
         the width, see ``num_qubits``), and kept as an ``I`` gate otherwise.
+        A terminal measurement is skipped, but the qubits it measures count
+        toward the width.
 
         Requires Cirq to be installed (``pip install marqov[cirq]``).
 
@@ -1040,6 +1070,8 @@ class Circuit:
         for index, op in enumerate(flat_operations):
             if isinstance(op.gate, cirq.MeasurementGate):
                 if index in terminal_measurement_indices:
+                    # A measured qubit counts toward the width.
+                    circuit._declare_at_least(max(q.x for q in op.qubits) + 1)
                     continue
                 raise ValueError(
                     f"Circuit.from_cirq() does not support mid-circuit measurement "
@@ -1314,7 +1346,8 @@ class Circuit:
         SWAP is accepted either as a native ``SWAP`` instruction or as the
         standard three-``CNOT`` decomposition. Classical declarations and
         terminal measurements (nothing after them touches the measured qubit)
-        are skipped. An ``I`` gate is dropped when another gate touches a
+        are skipped, but a measured qubit counts toward the width (see
+        ``num_qubits``). An ``I`` gate is dropped when another gate touches a
         higher qubit, and kept otherwise so the width is kept. Gate modifiers (including ``DAGGER``, ``CONTROLLED`` and
         ``FORKED``), Quil-native gates outside the canonical set, and mid-circuit
         measurements raise ``NotImplementedError`` so callers can decompose
@@ -1375,6 +1408,8 @@ class Circuit:
                 if isinstance(instruction, Measurement):
                     measured_qubits = set(instruction.get_qubit_indices())
                     if cls._pyquil_measurement_is_terminal(instructions, this_index, measured_qubits):
+                        # A measured qubit counts toward the width.
+                        circuit._declare_at_least(max(measured_qubits) + 1)
                         continue
                     raise NotImplementedError(
                         f"Circuit.from_pyquil() does not support mid-circuit measurement "
@@ -1420,7 +1455,9 @@ class Circuit:
         Auto-detects the QASM version from the header and parses via Qiskit,
         then imports with ``from_qiskit``, which handles a QASM 2 ``id`` gate
         as an identity. Qiskit's QASM 3 reader turns ``id`` into a ``U`` gate,
-        which is decomposed instead.
+        which is decomposed instead. The program's declared qubits set the
+        width, as in ``from_qiskit``: ``qreg q[6];`` imports six qubits wide
+        even if no gate touches the upper ones.
 
         Args:
             qasm_string: OpenQASM program string.
@@ -1492,6 +1529,10 @@ class Circuit:
         guaranteed to be JSON-serializable. Matrix-bearing gates are not
         losslessly represented by this gate-sequence format.
 
+        A ``"num_qubits"`` key holds the declared width, and is present only
+        when that width is larger than the gates alone imply. Every other
+        circuit serializes to ``{"gates": [...]}`` alone.
+
         Returns:
             Dictionary representation of the circuit.
         """
@@ -1508,7 +1549,13 @@ class Circuit:
                 "qubits": qubits,
                 "params": params,
             })
-        return {"gates": gates}
+        data: dict = {"gates": gates}
+        # Written only when it adds information: a declared width the gates
+        # already reach leaves the dictionary exactly as it was before.
+        declared = getattr(self, "_declared_width", None)
+        if declared is not None and declared > self._inferred_width():
+            data["num_qubits"] = declared
+        return data
 
     # Explicit constructors for the gate records emitted by the importers.
     # Do not resolve arbitrary attributes from serialized input. UnitaryGate,
@@ -1575,7 +1622,8 @@ class Circuit:
         """Reconstruct a circuit from the gate records produced by to_dict().
 
         Restores standard gates supported by the importers without changing
-        their parameter conventions or the dictionary schema. Unknown gates
+        their parameter conventions or the dictionary schema, and the declared
+        width from an optional ``"num_qubits"`` key. Unknown gates
         raise rather than disappearing. In particular, UnitaryGate cannot be
         restored because its matrix is absent from the serialized record.
         Parameters are preserved in memory; symbolic values are not converted
@@ -1589,10 +1637,12 @@ class Circuit:
 
         Raises:
             ValueError: If a gate is unsupported or its qubit/parameter counts
-                do not match its constructor. The message identifies the gate
-                and its zero-based index.
+                do not match its constructor (the message identifies the gate
+                and its zero-based index), or if ``"num_qubits"`` is neither
+                a nonnegative integer nor ``None``. A missing or ``None``
+                value declares no width, so the width is inferred.
         """
-        circuit = cls()
+        circuit = cls(num_qubits=data.get("num_qubits"))
         for index, gate_data in enumerate(data.get("gates", [])):
             circuit._append_serialized_gate(gate_data, index)
         return circuit
@@ -1603,9 +1653,14 @@ class Circuit:
     def num_qubits(self) -> int:
         """Return the circuit width: the largest qubit index touched, plus one.
 
-        Indices below the largest that no gate touches are identity wires and
-        still count, so ``Circuit().x(2).num_qubits == 3`` and an empty
-        circuit has width 0. An identity gate counts toward the width, but a
+        A declared width (``Circuit(num_qubits=n)``, or a Qiskit or OpenQASM
+        import) is a floor: the width is whichever of the two is larger, so a
+        gate above the declared width widens the circuit.
+
+        Indices below the width that no gate touches are identity wires and
+        still count, so ``Circuit().x(2).num_qubits == 3``. A circuit with no
+        gates has width 0 unless a width is declared
+        (``Circuit(num_qubits=6).num_qubits == 6``). An identity gate counts toward the width, but a
         wire it alone touches is an identity wire too. Counts keys from ``LocalExecutor`` have this many
         characters, with qubit 0 the leftmost: ``Circuit().x(2)`` yields
         ``{"001": shots}``.
@@ -1613,6 +1668,16 @@ class Circuit:
         Raises:
             ValueError: If a qubit label is not a nonnegative integer.
         """
+        # getattr: a Circuit pickled before the field existed has no attribute.
+        return max(self._inferred_width(), getattr(self, "_declared_width", None) or 0)
+
+    def _declare_at_least(self, width: int) -> None:
+        """Raise the declared width to ``width`` if it is lower."""
+        if width > (getattr(self, "_declared_width", None) or 0):
+            self._declared_width = width
+
+    def _inferred_width(self) -> int:
+        """Return the width the gates alone imply: the largest index touched, plus one."""
         qubits = self._qf.qubits
         for qubit in qubits:
             if isinstance(qubit, (bool, np.bool_)) or not isinstance(qubit, Integral) or qubit < 0:

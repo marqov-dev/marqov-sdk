@@ -464,7 +464,12 @@ class IonQExecutor(BaseExecutor):
             raise ValueError("IonQ shots must be an integer between 1 and 1000000")
         labels = {q for gate in circuit.to_dict()["gates"] for q in gate["qubits"]}
         if labels != set(range(circuit.num_qubits)) or any(type(q) is not int for q in labels):
-            raise ValueError("IonQ v0.4 requires dense integer wires starting at zero")
+            idle = sorted(set(range(circuit.num_qubits)) - labels)
+            raise ValueError(
+                "IonQ v0.4 requires dense integer wires starting at zero: every qubit "
+                f"below the circuit width ({circuit.num_qubits}) needs a gate"
+                + (f", but this circuit has idle wires {idle}" if idle else "")
+            )
         qc = circuit.to_qiskit()  # type: ignore[no-untyped-call]
         if not qc.num_qubits:
             raise ValueError("IonQ v0.4 requires at least one qubit")

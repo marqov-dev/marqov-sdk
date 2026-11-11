@@ -58,7 +58,7 @@ positions; `metadata.measured_qubits` lists them. `to_pyquil()` exports no
 identity gate, so untouched qubits, and qubits that only identity gates touch,
 are not named in the program and are never measured. Counts keys still follow
 the SDK width convention: they have `Circuit.num_qubits` characters (the
-largest index plus one), character i is qubit i with qubit 0 at the left, and
+largest index plus one, or the declared width if that is larger), character i is qubit i with qubit 0 at the left, and
 an index no non-identity gate touches (listed in `metadata.identity_wires`)
 reads `0`, since such a wire is always in state 0. For `Circuit().x(2)`,
 the mapping is `[2]` and counts are `{"001": shots}`; for wires 0, 1 and 3,

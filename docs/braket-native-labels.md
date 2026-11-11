@@ -8,7 +8,7 @@ conversion also keeps logical labels, but translates gates. It sends no
 identity gate to Braket (not every Braket QPU lists the `i` gate), so on that
 path `BraketExecutor` and `MarqovDevice` insert a `'0'` at each index that no
 non-identity gate touches in the returned counts keys, giving keys of length
-`Circuit.num_qubits` (the largest index plus one). A circuit whose only gates
+`Circuit.num_qubits` (the largest index plus one, or the declared width if that is larger). A circuit whose only gates
 are identities would be an empty Braket program, so both entry points raise
 `ValueError` before any provider call. Counts from `preserve_qubit_labels=True`
 are returned as the provider reported them.
