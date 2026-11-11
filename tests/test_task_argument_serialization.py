@@ -514,3 +514,15 @@ def test_tuple_key_dict_without_task_results_is_pickled_with_its_keys():
     encoded = _transport_arg({(0, 1): 0.5})
     assert set(encoded) == {"__cloudpickle__", "data"}
     assert _decode_leaf(encoded) == {(0, 1): 0.5}
+
+
+def test_oversize_argument_error_says_what_to_do():
+    from marqov.workflows.activity import MAX_RESULT_BYTES
+    from marqov.workflows.decorators import _transport_input
+
+    with pytest.raises(ValueError) as exc:
+        _transport_input("takes_blob", "positional argument 0", "x" * MAX_RESULT_BYTES)
+    message = str(exc.value)
+    assert "Pass less" in message
+    assert "storage" in message and "pass its location" in message
+    assert "by reference" not in message

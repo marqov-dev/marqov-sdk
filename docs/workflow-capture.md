@@ -87,7 +87,7 @@ child unpickles, so it arrives as the same type (a dict keeps its keys). An
 argument that cannot be cloudpickled, or that hides a task reference inside a
 set, a frozenset, an object attribute or a dict with non-string keys (where it
 would never be resolved), raises `TypeError` naming the task and argument. An
-argument whose encoded JSON exceeds 3 MiB (the same limit as a task result)
+argument whose encoded JSON exceeds 2 MB (2,000,000 bytes, the same limit as a task result, and Temporal's limit for one payload; see [task result and argument size](platform-client/native-workflows.md#task-result-and-argument-size))
 raises `ValueError` naming the task and argument, and so does a task whose arguments together exceed it,
 naming the total. All of these are raised before anything is submitted. The
 graph and the capture keep the original argument objects. A manually

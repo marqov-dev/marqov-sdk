@@ -50,12 +50,24 @@ _CHILD_SCRIPT = str(Path(__file__).parent / "_task_child.py")
 # Size caps for child output files.  A child must never return so much data
 # that reading it exhausts the worker process.
 # error.json is small and structured (our code); 64 KiB is generous.
-# result.json cap is aligned with Temporal's default gRPC payload limit (~4 MiB):
-# a larger result would pass this cap but then be rejected by Temporal itself — a
-# confusing failure at demo scale. Kept UNDER 4 MiB for envelope/protocol headroom.
-# Results larger than this need spill-to-S3 + a reference (follow-up, not this build).
+# Temporal rejects any single payload (one activity argument or result) over
+# 2 MB. The limit is fixed on Temporal Cloud and is the default on a self-hosted
+# service. The 4 MB gRPC limit applies to a whole request, not to one payload.
+# 2 MB is taken as decimal here, which leaves headroom under 2 MiB for the
+# payload's metadata.
+TEMPORAL_PAYLOAD_LIMIT_BYTES: int = 2_000_000
+# result.json is capped at that limit: a larger result would pass a higher cap
+# and then be rejected by Temporal itself, a confusing failure. The same cap
+# applies to task arguments (see decorators._transport_input).
+# Storing larger results outside Temporal and passing a reference is not built yet.
 MAX_ERROR_BYTES: int = 64 * 1024         # 64 KiB
-MAX_RESULT_BYTES: int = 3 * 1024 * 1024  # 3 MiB — under Temporal's ~4 MiB gRPC limit
+MAX_RESULT_BYTES: int = TEMPORAL_PAYLOAD_LIMIT_BYTES
+
+# Appended to every "result too large" error: what the user can do about it.
+_OVERSIZE_RESULT_HINT: str = (
+    " Return less (for example counts instead of a full statevector), or save "
+    "the data to storage your task can reach and return its location."
+)
 
 # The child's stderr is drained continuously (see _StderrTail) so that a chatty
 # task cannot fill the OS pipe and block forever in write().  Only the last
@@ -500,8 +512,8 @@ async def _run_task_in_workdir(
         MAX_RESULT_BYTES,
         node_id,
         oversize_hint=(
-            " Large results must spill to S3 + pass a reference (follow-up); "
-            "returning multi-MiB results inline is unsupported."
+            " That is the most one task may return (Temporal's limit for one "
+            "payload)." + _OVERSIZE_RESULT_HINT
         ),
     )
     if result_bytes is not None:
@@ -561,7 +573,20 @@ async def _run_task_in_workdir(
 
         # Re-serialise from the parsed object with the activity's own node_id,
         # so the returned bytes are the activity's envelope, not the child's.
-        return json.dumps({"node_id": node_id, "result": envelope["result"]})
+        returned = json.dumps({"node_id": node_id, "result": envelope["result"]})
+        # Temporal encodes this string as JSON again, so quotes, backslashes
+        # and non-ASCII characters in it grow. Measure what Temporal receives:
+        # a result under the file cap can still be over its payload limit.
+        payload_bytes = len(json.dumps(returned).encode("utf-8"))
+        if payload_bytes > TEMPORAL_PAYLOAD_LIMIT_BYTES:
+            raise ApplicationError(
+                f"Task {node_id} returned a result that is {payload_bytes} bytes as a "
+                f"Temporal payload, over Temporal's {TEMPORAL_PAYLOAD_LIMIT_BYTES}-byte "
+                "limit for one payload (encoding makes quotes, backslashes and "
+                "non-ASCII characters larger)." + _OVERSIZE_RESULT_HINT,
+                non_retryable=True,
+            )
+        return returned
 
     # No result file — child crashed before writing anything.
     rc = proc.returncode
