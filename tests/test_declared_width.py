@@ -197,7 +197,7 @@ class TestMeasuredQubitsCountTowardTheWidth:
 
     def test_from_pyquil(self):
         pyquil = pytest.importorskip("pyquil")
-        from pyquil.gates import H, MEASURE
+        from pyquil.gates import MEASURE, H
 
         program = pyquil.Program()
         ro = program.declare("ro", "BIT", 2)
