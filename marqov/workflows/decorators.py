@@ -219,8 +219,9 @@ def _transport_input(func_name: str, label: str, value: Any) -> tuple[Any, int]:
     if size > MAX_RESULT_BYTES:
         raise ValueError(
             f"Task {func_name!r}: {label} encodes to {size} bytes, over the "
-            f"{MAX_RESULT_BYTES}-byte limit (the task result limit, aligned with "
-            f"Temporal's ~4 MiB gRPC payload limit). Pass large data by reference."
+            f"{MAX_RESULT_BYTES}-byte limit (the task result limit, which is "
+            f"Temporal's 2 MB limit for one payload). Pass less, or save the data "
+            f"to storage your task can reach and pass its location."
         )
     return encoded, size
 
@@ -253,8 +254,9 @@ def _transport_inputs(
     if total > MAX_RESULT_BYTES:
         raise ValueError(
             f"Task {func_name!r}: its arguments together encode to {total} bytes, "
-            f"over the {MAX_RESULT_BYTES}-byte limit (the task result limit, aligned "
-            f"with Temporal's ~4 MiB gRPC payload limit). Pass large data by reference."
+            f"over the {MAX_RESULT_BYTES}-byte limit (the task result limit, which is "
+            f"Temporal's 2 MB limit for one payload). Pass less, or save the data "
+            f"to storage your task can reach and pass its location."
         )
     return encoded_args, encoded_kwargs
 
@@ -485,7 +487,7 @@ class WorkflowDispatch:
                 message names the task and the argument position or keyword.
             ValueError: If an encoded task argument's JSON, or a node's args
                 and kwargs together, exceed ``activity.MAX_RESULT_BYTES``
-                (3 MiB); the message names the task, and the argument position
+                (2 MB); the message names the task, and the argument position
                 or keyword or the total.
         """
         # Get execution levels (parallel groups)

@@ -463,6 +463,15 @@ async def test_success_path_never_cloudpickle_loads_result_value(mock_activity_c
 # ---------------------------------------------------------------------------
 
 
+def _assert_says_what_to_do(message: str) -> None:
+    """An oversize error tells the user how to get under the limit."""
+    assert "Return less" in message
+    assert "counts instead of a full statevector" in message
+    assert "storage" in message and "return its location" in message
+    # Internal shorthand a user cannot act on.
+    assert "follow-up" not in message and "spill" not in message
+
+
 async def _run_task_expecting_rejection(task: Any, node_id: str) -> ApplicationError:
     """Run ``task`` and return the non-retryable failure the activity must raise."""
     with pytest.raises(ApplicationError) as excinfo:
@@ -487,7 +496,44 @@ async def test_oversized_result_is_rejected(mock_activity_ctx):
         os._exit(0)
 
     error = await _run_task_expecting_rejection(writes_oversized_result, "node-big")
-    assert "limit" in str(error) and "S3" in str(error)
+    assert "limit" in str(error)
+    _assert_says_what_to_do(str(error))
+
+
+def test_result_cap_is_within_temporals_payload_limit():
+    """Temporal rejects a single payload over 2 MB (fixed on Temporal Cloud)."""
+    import marqov.workflows.activity as activity_mod
+
+    assert activity_mod.TEMPORAL_PAYLOAD_LIMIT_BYTES == 2_000_000
+    assert activity_mod.MAX_RESULT_BYTES <= activity_mod.TEMPORAL_PAYLOAD_LIMIT_BYTES
+
+
+@pytest.mark.asyncio
+async def test_result_that_grows_past_temporals_limit_when_encoded_is_rejected(mock_activity_ctx):
+    """A result under the file cap can still exceed Temporal's limit once encoded.
+
+    The activity returns the envelope as a JSON string, and Temporal encodes
+    that string as JSON again, so every quote and backslash in it grows. The
+    check is on the size Temporal receives, not on the size of the file.
+    """
+    import marqov.workflows.activity as activity_mod
+
+    limit = activity_mod.TEMPORAL_PAYLOAD_LIMIT_BYTES
+
+    def writes_quote_heavy_result() -> None:
+        workdir = Path(os.environ["MARQOV_TASK_WORKDIR"])
+        envelope = {"node_id": "node-quotes", "result": '"' * 700_000}
+        (workdir / "result.json").write_text(json.dumps(envelope))
+        os._exit(0)
+
+    raw_size = len(json.dumps({"node_id": "node-quotes", "result": '"' * 700_000}))
+    assert raw_size < activity_mod.MAX_RESULT_BYTES
+
+    error = await _run_task_expecting_rejection(writes_quote_heavy_result, "node-quotes")
+    message = str(error)
+    assert str(limit) in message
+    assert "Temporal" in message
+    _assert_says_what_to_do(message)
 
 
 @pytest.mark.asyncio

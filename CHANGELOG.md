@@ -39,6 +39,18 @@ release.
 
 ### Changed
 
+- **Task results and task arguments are capped at 2 MB (2,000,000 bytes),
+  down from 3 MiB, when you run the SDK's Temporal worker yourself.** The
+  hosted platform applies its own limit and is not affected. Temporal rejects any single payload over 2 MB, so a
+  result or argument between the two limits passed the SDK's check and then
+  failed inside Temporal with an error that did not say why. It is now
+  refused by the SDK with a message that names the task and the limit and
+  says what to do (return less, or save the data and return its location). A
+  result is also measured as Temporal receives it: the activity returns a
+  JSON string that Temporal encodes again, so a result under the cap that
+  grows past the limit when encoded is refused too. Results and arguments
+  under 2 MB are unaffected. Not covered: the combined earlier results a workflow
+  passes when it resolves a later task's inputs are not size-checked.
 - **`Circuit.from_qiskit()` and `Circuit.from_openqasm()` keep the declared
   qubits.** A register's unused qubits at the end were dropped: `qreg q[6];`
   with gates on `q[0]` and `q[3]` imported 4 qubits wide. It now imports 6

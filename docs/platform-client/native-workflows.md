@@ -197,3 +197,44 @@ unchanged.
   `/api/meta`.
 - **One runtime backend.** Managed native execution currently runs on
   `marqov-sim`, for teams where it is enabled.
+- **Task results are size-limited.** See the next section.
+
+## Task result and argument size
+
+The size of a result is only known once the task has finished. So a task
+whose result is too large runs to completion first, and then the job fails.
+
+### On the hosted platform
+
+The platform checks each task's result itself, whatever SDK version you have
+installed. The limit is currently about 1 MiB per task result. A job that
+fails this way is reported as failed without saying that size was the cause,
+so check the size of what your tasks return if a job fails right after a task
+finishes.
+
+What to do:
+
+- **Return less.** Return counts, expectation values or a summary instead of a
+  full statevector.
+- **Split the work.** Return a large sweep as several tasks' results instead
+  of one.
+
+### When you run the SDK's Temporal worker yourself
+
+Each task result, and each task's arguments, travels as one Temporal payload,
+and Temporal accepts at most 2 MB per payload. From SDK 0.12.0 the SDK refuses
+a result or an argument over 2,000,000 bytes with an error that names the
+task, the size and the limit, and says what to do.
+
+A result is measured as Temporal receives it. Encoding makes quotes,
+backslashes and non-ASCII characters larger, so a result slightly under
+2,000,000 bytes on disk can still be refused. A statevector returned as a
+NumPy array goes over the limit at 17 qubits, and one returned as a plain list
+of numbers at 16.
+
+What to do: return less or split the work, as above, or save the data to
+storage your task can reach and return its location (a path or URL).
+
+The results of several earlier tasks that feed one later task are not
+size-checked together, so a task with many large inputs can still fail inside
+Temporal with a payload-size error.
