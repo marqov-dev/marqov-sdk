@@ -25,7 +25,10 @@ This opt-in route supports the ideal `simulator` only, with no noise model.
 QPU/noisy execution is refused. Inputs must use dense integer wire labels from
 zero and concrete gates that convert to the canonical Qiskit builder basis:
 H/X/Y/Z/S/T/Rx/Ry/Rz/CX/CZ/SWAP. Empty circuits, sparse labels, unresolved
-parameters and other converted operations are refused before submission.
+parameters and other converted operations are refused before submission. Idle
+wires are refused whether they come from sparse labels or from a declared
+width (`Circuit(num_qubits=n)`, or a Qiskit or OpenQASM import with unused
+qubits); the error lists them.
 
 The SDK emits [OpenQASM 3](https://docs.ionq.com/api-reference/v0.4/openqasm3)
 as `type=ionq.qasm3.v1`, `backend=simulator`, with individual final measurements

@@ -310,8 +310,8 @@ class TestFromBraket:
         with pytest.raises(NotImplementedError, match=f"'{name}' at index {index}"):
             Circuit.from_braket(source(bk))
 
-    def test_measured_idle_qubit_is_dropped_like_from_qiskit(self) -> None:
-        """A qubit only a measurement touches is dropped, as from_qiskit does."""
+    def test_measured_idle_qubit_is_kept_in_the_width_like_from_qiskit(self) -> None:
+        """A qubit only a measurement touches gets no gate but stays in the width."""
         from braket.circuits import Circuit as BK
         from qiskit import QuantumCircuit
 
@@ -323,6 +323,7 @@ class TestFromBraket:
         imported = Circuit.from_braket(BK().h(0).measure([0, 1]))
         assert list(imported._qf.qubits) == list(expected._qf.qubits) == [0]
         assert imported.to_dict() == expected.to_dict()
+        assert imported.num_qubits == expected.num_qubits == 2
 
     def test_result_types_are_dropped(self) -> None:
         from braket.circuits import Circuit as BK

@@ -31,8 +31,34 @@ release.
 - `Circuit.ccx()` and `Circuit.cswap()`, with `toffoli()` and `fredkin()`
   aliases. `from_qiskit`, `from_cirq`, `from_pennylane` and `from_pyquil` now
   import both gates, so `to_pyquil` output (`CCNOT`, `CSWAP`) imports again.
+- `Circuit(num_qubits=n)` declares a width. The circuit is at least `n` qubits
+  wide even if no gate touches the upper ones, and a gate above `n` widens
+  it. `Circuit()` still infers its width from the gates. `to_dict()` writes a
+  `"num_qubits"` key only when the declared width is larger than the gates
+  imply, and `from_dict()` reads it.
 
 ### Changed
+
+- **`Circuit.from_qiskit()` and `Circuit.from_openqasm()` keep the declared
+  qubits.** A register's unused qubits at the end were dropped: `qreg q[6];`
+  with gates on `q[0]` and `q[3]` imported 4 qubits wide. It now imports 6
+  wide, so `num_qubits`, exports and counts keys for such a circuit grow to
+  the declared width (`{'100100': N}` where it was `{'1001': N}`). Circuits
+  whose gates reach the last declared qubit are unchanged. A round trip
+  through `to_braket()` or `to_pyquil()` still loses unused qubits at the
+  end, since those formats declare no width, and a Circuit pickled by this
+  version loses its declared width when an older `marqov` loads it.
+- **A measured qubit counts toward the width on import.** `from_braket`,
+  `from_cirq` and `from_pyquil` still skip terminal measurements, but a qubit
+  that only a measurement touches is no longer dropped when it is above
+  every gate: `Circuit().h(0).measure([0, 1])` from Braket imports 2 qubits
+  wide (it was 1). `from_qiskit` and `from_openqasm` already keep it through
+  the declared register.
+- The opt-in IonQ v0.4 route still refuses circuits with idle wires, and its
+  error now lists them. A Qiskit or OpenQASM import with unused qubits at the
+  end ran there as a narrower circuit before; it is now refused, because the
+  imported circuit keeps those qubits. The default v0.3 route accepts idle
+  wires and declares the full width (`qreg q[6];`).
 
 - `pip install marqov` no longer installs `azure-quantum`. Azure users install
   `marqov[azure]` or `marqov[all]`; if you relied on the transitive install,
