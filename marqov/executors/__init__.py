@@ -7,7 +7,7 @@ Available executors:
 - CudaqExecutor: NVIDIA CUDA-Q (GPU/CPU statevector, direct IQM)
 - CUNQAExecutor: CESGA CUNQA distributed-QC emulator (Slurm-based vQPUs)
 - BraketExecutor: AWS Braket (simulators and QPUs)
-- AzureQuantumExecutor: Azure Quantum (Quantinuum, PASQAL, IonQ, Rigetti)
+- AzureQuantumExecutor: Azure Quantum (Quantinuum, IonQ, Rigetti)
 - QuantinuumExecutor: Quantinuum devices and emulators (via pytket-quantinuum)
 - IBMExecutor: IBM Quantum (Heron r2, Eagle, etc. via Qiskit Runtime)
 - IonQExecutor: IonQ Direct API (native REST, no Braket intermediary)

@@ -62,7 +62,7 @@ class ExecutorFactory:
     Supported Providers:
         - AWS Braket: Simulators (SV1, DM1, TN1) and QPUs (IonQ, Rigetti, IQM, QuEra)
         - IBM Quantum: Heron r2, Eagle processors via Qiskit Runtime SamplerV2
-        - Azure Quantum: Quantinuum, PASQAL, IonQ, Rigetti (Qiskit/Cirq support)
+        - Azure Quantum: Quantinuum, IonQ, Rigetti (Qiskit/Cirq support; PASQAL is refused)
         - Quantinuum: Quantinuum devices and emulators (via pytket-quantinuum)
         - Rigetti QCS: Native pyQuil submission to Rigetti QPUs or the local QVM
         - CUDA-Q: NVIDIA GPU/CPU simulation, or IQM hardware via CUDA-Q's IQM target

@@ -85,6 +85,26 @@ release.
 
 ### Fixed
 
+- **Azure Quantum: circuits no longer carry a barrier.** With
+  `framework="qiskit"`, `AzureQuantumExecutor` added measurements with
+  Qiskit's `measure_all()`, which inserts a barrier first. azure-quantum
+  3.12.0 hands the circuit to qdk without its barrier-removal pass, so the
+  barrier reached the submitted QIR, and Rigetti targets refused the job
+  (`QATTransformationFailed`, `__quantum__qis__barrier__body ... not allowed`).
+  The circuit now has every barrier removed and each qubit `i` measured
+  explicitly into bit `i` of a register named `meas`. Counts are still keyed
+  with qubit 0 leftmost. See [docs/azure-installation.md](docs/azure-installation.md).
+- **`MarqovDevice` can run on Azure Quantum.** Its Azure branch passed a
+  Qiskit circuit to a raw `Target.submit()`, which takes an already encoded
+  payload, so no Azure run could succeed. It now submits through the same
+  route and program as `AzureQuantumExecutor`
+  (`AzureQuantumProvider(workspace).get_backend(target).run(...)`), with the
+  device's backend name as the Azure target name, and returns the same
+  counts.
+- Azure Quantum refuses, before Azure is contacted and naming the target,
+  a PASQAL target (it takes pulse-level programs, and azure-quantum has no
+  Qiskit or Cirq backend for it) and, on the Qiskit route, a circuit with no
+  qubits. A failed Azure job's `RuntimeError` names the target.
 - `Circuit.to_pennylane()` exports the identity gate that `from_braket`,
   `from_cirq` and `from_openqasm` keep on the top wire to record the register
   width, as `qml.Identity`. It raised `NotImplementedError: unsupported gate

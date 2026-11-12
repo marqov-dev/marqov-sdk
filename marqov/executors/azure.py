@@ -1,9 +1,13 @@
 """Azure Quantum executor for running circuits on Azure Quantum devices.
 
 This module provides AzureQuantumExecutor for executing quantum circuits on
-Azure Quantum backends including Quantinuum, PASQAL, IonQ, and Rigetti.
+Azure Quantum gate-model targets (IonQ, Quantinuum and Rigetti). PASQAL
+targets take pulse-level programs and are refused.
 
-Supports both Qiskit and Cirq frameworks for maximum backend compatibility.
+The Qiskit framework (the default) submits through azure-quantum's Qiskit
+provider, ``AzureQuantumProvider(...).get_backend(target).run(...)``, with
+the circuit from ``marqov.executors._azure_qiskit.prepare_circuit``. The Cirq
+framework submits through azure-quantum's Cirq service.
 
 Example (Qiskit):
     >>> from marqov.circuits import bell_state
@@ -45,6 +49,11 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from marqov._optional import require_azure
+from marqov.executors._azure_qiskit import (
+    counts_from_result,
+    prepare_circuit,
+    refuse_unsupported_target,
+)
 from marqov.executors._blocking import BlockingCalls
 from marqov.executors.base import (
     BaseExecutor,
@@ -101,9 +110,9 @@ class AzureQuantumExecutorConfig:
 class AzureQuantumExecutor(BaseExecutor):
     """Execute circuits on Azure Quantum devices.
 
-    Supports Quantinuum H2 (20-32 qubits), PASQAL Fresnel (100 qubits),
-    IonQ, and Rigetti QPUs via Azure Quantum. Uses Qiskit or Cirq framework
-    depending on backend compatibility.
+    Runs on IonQ, Quantinuum and Rigetti targets via Azure Quantum, using
+    the Qiskit or Cirq framework. A PASQAL target raises ValueError before
+    Azure is contacted.
 
     Example:
         >>> config = AzureQuantumExecutorConfig(
@@ -242,11 +251,14 @@ class AzureQuantumExecutor(BaseExecutor):
 
         Raises:
             RuntimeError: If job fails or device is unavailable.
+            ValueError: If the target is a PASQAL target, or (Qiskit
+                framework) the circuit has no qubits; both before submission.
             NotImplementedError: If framework is not supported.
             TypeError: If any keyword option is supplied.
         """
         reject_unsupported_options("AzureQuantumExecutor.execute()", kwargs)
         circuit = self._validate_circuit(circuit)
+        refuse_unsupported_target(self._route["backend"])
 
         start_time = time.perf_counter()
 
@@ -286,14 +298,8 @@ class AzureQuantumExecutor(BaseExecutor):
         # Get Qiskit backend
         backend = await self._get_qiskit_backend()
 
-        # Convert circuit to Qiskit
-        qiskit_circuit = circuit.to_qiskit()
-
-        # Azure Quantum requires explicit measurements for QIR compilation
-        # Add measurement to all qubits if not already present
-        if not qiskit_circuit.cregs:
-            # No classical registers, need to add measurements
-            qiskit_circuit.measure_all()
+        # No barrier, and every qubit measured into "meas" (see prepare_circuit).
+        qiskit_circuit = prepare_circuit(circuit, self._route["backend"])
 
         identity = {
             "provider": "Azure Quantum",
@@ -347,23 +353,8 @@ class AzureQuantumExecutor(BaseExecutor):
             result_call, job.cancel, job_id=identity["job_id"], timeout=timeout,
         )
 
-        # Check if job succeeded
-        if not result.success:
-            error_msg = "Job failed"
-            if hasattr(result, "status"):
-                error_msg = f"Job failed with status: {result.status}"
-            if hasattr(result, "results") and result.results:
-                exp_result = result.results[0]
-                if hasattr(exp_result, "status"):
-                    error_msg += f", experiment status: {exp_result.status}"
-                if hasattr(exp_result, "header") and hasattr(exp_result.header, "status_msg"):
-                    error_msg += f", message: {exp_result.header.status_msg}"
-            raise RuntimeError(error_msg)
-
-        # Extract counts — reverse bitstrings from Qiskit's little-endian
-        # (qubit 0 = rightmost) to Marqov's big-endian (qubit 0 = leftmost).
-        raw_counts = dict(result.get_counts())
-        counts = {k.replace(" ", "")[::-1]: v for k, v in raw_counts.items()}
+        # Raises on a failed job; keys come back with qubit 0 leftmost.
+        counts = counts_from_result(result, identity["backend"])
 
         metadata = dict(identity)
 

@@ -212,7 +212,7 @@ AZURE_CANONICAL = {"subscription_id": "sub", "resource_group": "rg", "workspace_
 
 @pytest.fixture
 def fake_workspace(monkeypatch):
-    """Stub azure.quantum.Workspace, the provider SDK boundary of the Azure branch."""
+    """Stub azure.quantum's Workspace and Qiskit provider, the Azure branch's SDK boundary."""
     import sys
     import types
 
@@ -222,13 +222,21 @@ def fake_workspace(monkeypatch):
         def __init__(self, **kwargs):
             captured["kwargs"] = kwargs
 
-        def get_targets(self, name=None):
+    class FakeProvider:
+        def __init__(self, workspace):
+            captured["workspace"] = workspace
+
+        def get_backend(self, name=None):
             captured["target"] = name
             return object()
 
     module = types.ModuleType("azure.quantum")
     module.Workspace = FakeWorkspace
+    module.__path__ = []  # a package, so azure.quantum.qiskit resolves to the stub below
+    qiskit_module = types.ModuleType("azure.quantum.qiskit")
+    qiskit_module.AzureQuantumProvider = FakeProvider
     monkeypatch.setitem(sys.modules, "azure.quantum", module)
+    monkeypatch.setitem(sys.modules, "azure.quantum.qiskit", qiskit_module)
     return captured
 
 
@@ -241,6 +249,7 @@ def test_device_azure_branch_reads_canonical_keys_and_defaults_location(fake_wor
     assert fake_workspace["kwargs"] == {
         "subscription_id": "sub", "resource_group": "rg", "name": "ws", "location": "eastus",
     }
+    assert fake_workspace["target"] == "ionq.simulator"
 
 
 def test_factory_azure_defaults_location_to_eastus():
