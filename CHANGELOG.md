@@ -85,6 +85,12 @@ release.
 
 ### Fixed
 
+- **IonQ: a second cancellation during timeout cleanup is no longer swallowed.**
+  When a job timed out, `IonQExecutor` sent a best-effort cancel request and
+  ignored every error from it, including a cancellation of the calling task
+  that arrived while the request was in flight. The caller's cancellation now
+  propagates in place of the `TimeoutError`; request failures are still
+  ignored.
 - **Azure Quantum: circuits no longer carry a barrier.** With
   `framework="qiskit"`, `AzureQuantumExecutor` added measurements with
   Qiskit's `measure_all()`, which inserts a barrier first. azure-quantum
