@@ -2,10 +2,11 @@
 
 Usage::
 
+    from marqov.circuits import Circuit
     from marqov.platform import MarqovClient
 
     client = MarqovClient(api_key="marqey_live_...")
-    job    = client.submit("from marqov import task; ...", backend="sv1", framework="marqov")
+    job    = client.submit(Circuit().h(0).cnot(0, 1), backend="local")
     result = job.result(timeout=120.0)
     print(result.counts)
 
@@ -80,7 +81,7 @@ class MarqovClient:
     Example::
 
         with MarqovClient(api_key="marqey_live_abc123") as client:
-            job    = client.submit(circuit, backend="sv1")
+            job    = client.submit(circuit, backend="local")
             result = job.result()
     """
 

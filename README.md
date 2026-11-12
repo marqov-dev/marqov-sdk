@@ -83,6 +83,9 @@ pip install "marqov[ibm]"
 # Azure Quantum (Qiskit and Cirq adapters)
 pip install "marqov[azure]"
 
+# Submit a Circuit to the hosted platform (OpenQASM 3 export)
+pip install "marqov[openqasm]"
+
 # QuTiP solvers and Marqov's result-recording helper
 pip install "marqov[qutip]"
 
