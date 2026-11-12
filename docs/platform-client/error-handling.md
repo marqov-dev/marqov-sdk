@@ -20,7 +20,7 @@ message.
 |-----------|-------------------|--------|
 | `AuthenticationError` | API key is missing, invalid, or has been revoked — raised at construction if no key is found, or on HTTP 401 | No — fix the key first |
 | `PermissionTierError` | Your plan does not permit access to the requested resource (HTTP 403) | No — upgrade plan or contact support |
-| `PaidBackendNotSupportedYet` | The server rejected the backend with `analysis_required` because it requires a pre-run cost analysis (paid backends); the client does not check the slug itself | No — choose a free backend (e.g. `dwave-sim`) |
+| `PaidBackendNotSupportedYet` | The server rejected the backend with `analysis_required` because it requires a pre-run cost analysis (paid backends); the client does not check the slug itself | No: choose a free backend (e.g. `local`) |
 | `BackendUnavailable` | The requested backend is known but currently offline or unrecognised | Maybe — retry with back-off or choose another backend |
 | `InvalidProgram` | The submitted program was rejected by the server (bad QASM, unsupported gates, too many qubits, malformed body) | No — fix the program |
 | `JobFailed` | The job reached the `failed` or `dispatch_failed` terminal state | Depends — inspect `message`, but see caveat below |
@@ -161,11 +161,11 @@ except TimeoutError:
 swallow failures: any non-2xx response raises `MarqovPlatformError`, same as
 any other API call.
 
-> **The cancel endpoint is not yet confirmed on the platform.** `cancel()` is
-> implemented against a provisional path (see `job.cancel()` in
-> [`api-reference.md`](api-reference.md)) — until the platform ships a
-> confirmed cancellation route, calling it against the real service will
-> typically raise `MarqovPlatformError` rather than cancel the job.
+> **`cancel()` does not work with an API key.** The hosted cancellation
+> endpoint accepts only signed-in browser sessions; an API key receives
+> `403 api_key_not_supported`, which the client raises as
+> `PermissionTierError`. Cancel from the job page in the Marqov app instead
+> (see `job.cancel()` in [`api-reference.md`](api-reference.md)).
 
 This matters for cleanup code. A pattern like:
 
@@ -188,8 +188,8 @@ finally:
         pass  # best-effort — cancellation isn't guaranteed to reach the server
 ```
 
-If cancellation does succeed server-side, the job ends in the `cancelled`
-state. When `result()` polls and encounters `cancelled`, it raises
+If a cancellation is accepted (for example from a browser session), the job
+ends in the `cancelled` state. When `result()` polls and encounters `cancelled`, it raises
 `JobFailed` (the job reached a terminal state that produced no result).
 
 ---
@@ -226,6 +226,7 @@ from marqov.platform import (
 
 ```python
 import time
+from marqov.circuits import Circuit
 from marqov.platform import MarqovClient
 from marqov.platform import (
     AuthenticationError,
@@ -239,14 +240,14 @@ from marqov.platform import (
 
 client = MarqovClient()  # reads MARQOV_PLATFORM_KEY
 
-script = "from marqov import task; ..."
+circuit = Circuit().h(0).cnot(0, 1)
 
 try:
-    job = client.submit(script, backend="dwave-sim", framework="marqov")
+    job = client.submit(circuit, backend="local")
 except AuthenticationError as e:
     print("Auth failed:", e)
 except PaidBackendNotSupportedYet:
-    print("Paid backends require a future update — use dwave-sim for now")
+    print("Paid backends require a future update; use backend=\"local\" for now")
 except BackendUnavailable as e:
     print("Backend offline:", e)
 except InvalidProgram as e:

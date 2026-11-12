@@ -107,7 +107,7 @@ package itself is imported only when an executor is built without an injected
 client, so the factory stays importable where `cunqa` is not installed.
 
 **`qilisdk` and `qristal` aren't `marqov[...]` extras.** Both are installed
-separately (`pip install qilisdk`, or build `qristal` from source/Docker for
+separately (`pip install qilisdk==0.3.0`, or build `qristal` from source/Docker for
 Quantum Brilliance) rather than declared in `[project.optional-dependencies]`.
 For `qristal` it's simply not on PyPI. For `qilisdk`, a formal extra was tried
 and reverted: `uv` locks the union of all declared extras together, so

@@ -231,3 +231,17 @@ class TestPreflightReportsOnlyWhatItDoes:
                 )
             assert "ibm_token" in caplog.text
             assert "secret" not in caplog.text
+
+
+class TestWarningSummaryMessage:
+    """The summary line must not name a bypass flag that does not exist."""
+
+    def test_summary_does_not_mention_force_flag(self, caplog) -> None:
+        with caplog.at_level(logging.WARNING, logger=preflight_module.logger.name):
+            preflight(experiment_config={}, output_sample={})
+        assert "--force" not in caplog.text
+        assert "advisory" in caplog.text
+        assert "does not block" in caplog.text
+
+    def test_module_docstring_does_not_mention_force_flag(self) -> None:
+        assert "--force" not in (preflight_module.__doc__ or "")

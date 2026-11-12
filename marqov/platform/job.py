@@ -18,10 +18,9 @@ Observable API contract notes:
     (seconds) and caps it at 22 seconds.  Values below 0 are clamped to 0.
   - Terminal states: ``"completed"``, ``"failed"``, ``"cancelled"``,
     ``"dispatch_failed"``.
-  - Cancel endpoint: **DOES NOT EXIST** as a user-facing route (§11 TBC).
-      :meth:`Job.cancel` is implemented against the **mocked path**
-      ``/api/jobs/{id}/cancel`` (POST).  Once the platform ships a real
-      cancel endpoint this path must be updated.
+  - Cancel endpoint: ``POST /api/jobs/{id}/cancel`` exists but accepts only
+      signed-in browser sessions; an API key receives
+      ``403 api_key_not_supported`` (see :meth:`Job.cancel`).
 
 .. note::
     ``dispatch_failed`` is one of the four terminal states (with ``completed``,
@@ -337,14 +336,11 @@ class Job:
         network failure raises rather than replaying the cancel.
 
         .. warning::
-            **§11 TBC assumption**: The ``/api/jobs/{id}/cancel`` endpoint
-            does **not** currently exist in the platform.  The only known
-            job sub-routes are ``status`` and ``traces``; no user-facing
-            cancel/revoke endpoint is present at this revision.  This method
-            is implemented against the mocked path so that test-suite
-            infrastructure and caller code can be written today.  When the
-            platform ships a real cancel endpoint, update the path here (and
-            remove this warning).
+            **Does not work with an API key.**  The hosted cancellation
+            endpoint accepts only signed-in browser sessions; an API key
+            receives ``403 api_key_not_supported``, raised as
+            :class:`~marqov.platform.errors.PermissionTierError`.  Cancel
+            from the job page in the Marqov app instead.
 
         Raises:
             :class:`~marqov.platform.errors.MarqovPlatformError`: If the

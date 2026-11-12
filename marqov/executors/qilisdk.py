@@ -44,7 +44,7 @@ class QiliSDKExecutorConfig:
     Attributes:
         simulator: Which qilisdk backend to run on — "qilisim" (their C++
             simulator, ships in the base `qilisdk` package, `pip install
-            qilisdk`) or "qutip" (pure-Python reference sim, `pip install
+            qilisdk==0.3.0`) or "qutip" (pure-Python reference sim, `pip install
             "qutip>=5.2.2" "qutip-qip>=0.4.0"`).
     """
 
@@ -112,7 +112,7 @@ class QiliSDKExecutor(BaseExecutor):
         except ImportError as exc:
             extra = _SIMULATOR_EXTRA.get(self.config.simulator, "")
             raise ImportError(
-                f"qilisdk is required for QiliSDKExecutor. Install with: pip install qilisdk{extra}"
+                f"qilisdk is required for QiliSDKExecutor. Install with: pip install qilisdk==0.3.0{extra}"
             ) from exc
 
     async def execute(
