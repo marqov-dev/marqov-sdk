@@ -645,15 +645,18 @@ class IonQExecutor(BaseExecutor):
         Called when the executor stops waiting on a job that has not reached a
         terminal state (a timeout, or cancellation of the awaiting task), so the
         remote job does not keep running and billing with nobody watching it.
-        Failures are swallowed: the original TimeoutError or CancelledError is
-        the interesting one, and a failed cancel must not mask it.
+        Request failures are swallowed: the original TimeoutError or
+        CancelledError is the interesting one, and a failed cancel must not mask
+        it. A second cancellation of the task during cleanup is not swallowed.
 
         Args:
             job_id: The IonQ job id to cancel.
         """
-        # cancel() already swallows request failures; the suppress here covers a
-        # further cancellation arriving while the cancel request is in flight.
-        with contextlib.suppress(Exception, asyncio.CancelledError):
+        # cancel() already swallows request failures. A further cancellation
+        # arriving while the request is in flight is deliberately not
+        # suppressed: it is the caller's own, and it replaces the interruption
+        # that started this cleanup.
+        with contextlib.suppress(Exception):
             await self.cancel(job_id)
 
     async def _submit_job(self, payload: dict[str, Any]) -> dict[str, Any]:

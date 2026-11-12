@@ -7,6 +7,7 @@ to run against the real API via the IONQ_API_KEY environment variable.
 
 import asyncio
 import math
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -575,6 +576,43 @@ class TestIonQPollingTerminalStates:
         with _patch_qasm(num_qubits=1):
             with pytest.raises(TimeoutError):
                 await executor.execute(Circuit().h(0), shots=10)
+
+    @pytest.mark.asyncio
+    async def test_second_cancellation_during_cleanup_propagates(self) -> None:
+        """A cancellation arriving while the cancel request is in flight is not eaten.
+
+        The timeout starts the best-effort cancel; the caller then cancels the
+        task while that request is still in flight. The caller's cancellation
+        must win over the TimeoutError that triggered the cleanup.
+        """
+        in_flight = threading.Event()
+        release = threading.Event()
+
+        def router(method, url, **kwargs):  # noqa: ANN001, ANN202
+            if method == "POST":
+                return {"id": "job-2c", "status": "submitted"}
+            if method == "PUT":
+                in_flight.set()
+                release.wait(timeout=5)
+                return {}
+            return {"status": "running"}
+
+        config = IonQExecutorConfig(
+            api_key="k", poll_interval_seconds=0.0, timeout_seconds=0.05
+        )
+        executor = IonQExecutor(config, session=_make_session(router))
+
+        with _patch_qasm(num_qubits=1):
+            task = asyncio.ensure_future(executor.execute(Circuit().h(0), shots=10))
+            try:
+                while not in_flight.is_set():
+                    await asyncio.sleep(0.01)
+                task.cancel()
+                await asyncio.sleep(0.01)
+            finally:
+                release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
 
 class TestRequestHeaders:
