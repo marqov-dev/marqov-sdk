@@ -5,16 +5,16 @@ the hosted Marqov Platform from your existing Python code.  It is independent
 of the rest of the SDK — you can use it whether or not you use `@task`,
 `@workflow`, or any executor.
 
-> **What works today.** To run a Python `@task`/`@workflow` program on the
-> hosted platform, use `client.submit_native()` — see
+> **What works today.** `client.submit()` runs a `Circuit` or an OpenQASM
+> string on the free simulator (`backend="local"`); see sections 5 and 10. To
+> run a Python `@task`/`@workflow` program on the hosted platform, use
+> `client.submit_native()`; see
 > [Native workflows on the hosted platform](native-workflows.md). Listing
-> backends, polling status and reading results work for any job. The request
-> shapes are tested against the hosted API's contract; authenticated live
-> verification is pending.
+> backends, polling status and reading results work for any job.
 >
-> **Does not currently work against the hosted API:** `client.submit()`
-> (sections 5 and 10 below), API-key `job.cancel()` and `platform_info()`.
-> See [Current limitations](native-workflows.md#current-limitations).
+> **Does not currently work against the hosted API:** `client.submit()` on a
+> paid backend, API-key `job.cancel()` and `platform_info()`. See
+> [Current limitations](native-workflows.md#current-limitations).
 
 ---
 
@@ -28,6 +28,16 @@ pip install marqov
 
 `requests` (a core dependency as of `marqov` 0.3.0) is the only new
 transitive dependency.
+
+To submit a `Circuit` (section 10), also install the `openqasm` extra.
+`client.submit(Circuit)` converts the circuit to OpenQASM 3 with Qiskit, and a
+plain install raises `ImportError` at that point:
+
+```bash
+pip install "marqov[openqasm]"
+```
+
+Submitting an OpenQASM string (section 5) needs no extra.
 
 ---
 
@@ -194,7 +204,8 @@ zero cost) is distinct from `None` (not yet fetched).
 > `00` and `11` counts. Paid-backend refusal (`422 script_required`) is
 > tested against the API contract, not live.
 
-`client.submit(Circuit, ...)` sends the circuit as OpenQASM 3 in a `circuit`
+`client.submit(Circuit, ...)` needs the `openqasm` extra (section 1). It
+sends the circuit as OpenQASM 3 in a `circuit`
 field. The hosted API runs it on the free simulator (`backend="local"`) and
 refuses it on a paid backend with `422 script_required`. To run a circuit on
 hardware, use [saved-script execution](saved-scripts.md). There is no
