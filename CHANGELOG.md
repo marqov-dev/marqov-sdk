@@ -49,8 +49,10 @@ release.
   result is also measured as Temporal receives it: the activity returns a
   JSON string that Temporal encodes again, so a result under the cap that
   grows past the limit when encoded is refused too. Results and arguments
-  under 2 MB are unaffected. Not covered: the combined earlier results a workflow
-  passes when it resolves a later task's inputs are not size-checked.
+  under 2 MB are unaffected. Not covered: the dependency results a workflow
+  passes when it resolves a task's inputs are not size-checked together, so a
+  task whose upstream results add up to more than 2 MB still fails inside
+  Temporal.
 - **`Circuit.from_qiskit()` and `Circuit.from_openqasm()` keep the declared
   qubits.** A register's unused qubits at the end were dropped: `qreg q[6];`
   with gates on `q[0]` and `q[3]` imported 4 qubits wide. It now imports 6
@@ -91,6 +93,26 @@ release.
   that arrived while the request was in flight. The caller's cancellation now
   propagates in place of the `TimeoutError`; request failures are still
   ignored.
+- **A workflow sends each task only its own dependencies' results when it
+  resolves the task's inputs, and resolves a level's tasks concurrently, when
+  you run the SDK's Temporal worker yourself.** The hosted platform does not
+  run this workflow and is not affected. `JobWorkflow` sent every earlier
+  result in the run to `prepare_node_inputs`, once per task and one task
+  after another, so the payload grew with the run rather than with the
+  task's inputs: four tasks in a chain whose results were each about 1.5 MB,
+  each under the 2 MB limit, gave the fourth task's resolve a payload of
+  about 4.5 MB. A level's resolve calls also ran one at a time before any
+  task in the level started. Results, the `_workflow_metadata` envelope and
+  its `task_timeline` order are unchanged. A dependency with no completed
+  result now fails the workflow with a non-retryable `ApplicationError`
+  naming the task and the dependency (marqov-sdk#147).
+  **Drain running workflows before upgrading the worker.** The workflow now
+  schedules a level's resolve activities together instead of one at a time,
+  and the SDK does not version its workflow code (`workflow.patched`), so a
+  workflow that started on an earlier version and has reached a level with
+  more than one task hits a nondeterminism error when the upgraded worker
+  replays it, and stops making progress. Workflows whose levels each hold
+  one task replay unchanged.
 - **Azure Quantum: circuits no longer carry a barrier.** With
   `framework="qiskit"`, `AzureQuantumExecutor` added measurements with
   Qiskit's `measure_all()`, which inserts a barrier first. azure-quantum
