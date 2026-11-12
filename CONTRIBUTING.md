@@ -14,6 +14,13 @@ pip install -e ".[all,dev]"
 pytest tests/ -v
 ```
 
+Commit messages are checked against the same private-reference patterns as the
+files (see `tests/test_no_private_references.py`). CI runs
+`tools/check_commit_messages.py` over the commits a pull request or push adds.
+To check before pushing, run `python tools/check_commit_messages.py origin/main..HEAD`,
+or save that line as `.git/hooks/pre-push`. Cite public issues as
+`marqov-sdk#123`, with the repository name, never a bare issue number.
+
 ## §1 — Canonical Gate Set
 
 All executor and circuit converter contributions must support the following
