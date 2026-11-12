@@ -84,10 +84,30 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: the commit-message guard walks the event's commit range.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - name: Install (core + test runner only)
         run: pip install uv && uv pip install --system -e . "pytest>=8.0.0" "pytest-asyncio>=0.23.0" "pyyaml>=6.0.0"
+      - name: Commit messages carry no private references
+        # Same patterns as the file-content guard, applied to the commits this
+        # event introduces: PR base..head, or the pushed before..sha range (an
+        # unknown `before`, as on a force-push, checks only the tip commit).
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            range="$PR_BASE..$PR_HEAD"
+          else
+            range="$PUSH_BEFORE..$PUSH_AFTER"
+          fi
+          python tools/check_commit_messages.py "$range"
       - name: Doc-pinning tests
         run: >-
           pytest -q
