@@ -94,45 +94,37 @@ particular team or program can execute there. That is decided when you submit.
 
 ---
 
-## 5. Submit a raw script (OpenQASM on the free simulator only)
+## 5. Submit an OpenQASM string (free simulator only)
 
 > **Works only for OpenQASM on the free simulator.** `client.submit(str, ...)`
 > sends the generic submission body. The hosted API runs an OpenQASM string with
 > `framework="openqasm"` on `backend="local"`. It refuses `@task`/`@workflow` and
 > plain Python source with `422 execution_unavailable`, and inline code sent to
 > a paid backend with `422 script_required`. To run a native program, use
-> [`client.submit_native()`](native-workflows.md). The call shape below is kept
-> for reference.
+> [`client.submit_native()`](native-workflows.md).
 
-Pass a Python string as the program together with a `framework` identifier and
-a backend slug:
+Pass an OpenQASM string as the program together with a `framework` identifier
+and the free backend slug:
 
 ```python
-script = """
-import asyncio
-from marqov import task
-
-@task
-async def bell(shots):
-    from marqov.circuits import Circuit
-    from marqov.executors import LocalExecutor
-    result = await LocalExecutor().execute(
-        Circuit().h(0).cnot(0, 1), shots=shots
-    )
-    return result.counts
-
-# An async @task called outside a @workflow isn't awaited automatically
-# (see marqov/workflows/decorators.py for details) — drive it with
-# asyncio.run() rather than calling bell(1000) bare.
-asyncio.run(bell(1000))
+qasm = """OPENQASM 3.0;
+include "stdgates.inc";
+qubit[2] q;
+bit[2] c;
+h q[0];
+cx q[0], q[1];
+c = measure q;
 """
 
-job = client.submit(script, backend="dwave-sim", framework="marqov", shots=1000)
+job = client.submit(qasm, backend="local", framework="openqasm", shots=1000)
 print("Submitted job:", job.id)
 ```
 
 `framework` is **required** when the program is a string — it tells the
 platform how to interpret your code.  Omitting it raises `ValueError`.
+
+A program submitted as text is measured as written, as described in
+section 10.
 
 ---
 
@@ -221,6 +213,14 @@ print(result.counts)
 
 Passing `framework=` with a `Circuit` raises `ValueError` immediately (the
 circuit already identifies its format).
+
+A `Circuit` built or imported in the SDK has no classical register or
+measurement map yet: `to_openqasm(version=3)` writes the gates on a register `q`
+of `circuit.num_qubits` qubits (the larger of the declared width and the
+highest qubit the gates touch) and no `measure` statements, so results from a
+submitted `Circuit` report every qubit of the circuit, including idle ones. An
+OpenQASM program submitted directly as text (section 5) is different: it
+carries its own `measure` statements and is measured as written.
 
 ---
 

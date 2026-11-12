@@ -1,7 +1,8 @@
 """Pre-flight validation for expensive experiment runs.
 
-Client-side advisory layer. Warns but does not block.
-Use --force to bypass warnings.
+Client-side advisory layer. Warns but does not block: ``preflight()`` only
+returns a result and logs warnings, and there is no flag to bypass. Your own
+script decides whether to continue after warnings (see the usage example).
 
 This module performs no budget comparison and enforces no spending
 limit; nothing here blocks a run on cost. Any server-side
@@ -24,7 +25,7 @@ Usage in experiment scripts:
         estimated_cost=340,
         estimated_circuits=1200,
     )
-    if check.warnings and not force:
+    if check.warnings:
         for w in check.warnings:
             print(w)
         confirm = input("Continue? [y/N] ")
@@ -160,7 +161,8 @@ def preflight(
         for w in warnings:
             logger.warning(w)
         logger.warning(
-            "Pre-flight: %d warning(s). Use --force to bypass.",
+            "Pre-flight: %d warning(s). Pre-flight is advisory and does not "
+            "block the run; your script decides whether to continue.",
             len(warnings),
         )
     else:

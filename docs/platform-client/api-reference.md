@@ -78,7 +78,7 @@ Submit a quantum program to the platform and return a `Job` handle.
 - `Circuit` — serialised as OpenQASM 3 in a `circuit` field. `framework`
   must **not** be supplied; passing it raises `ValueError`.
 
-**`backend`:** backend slug (e.g. `"marqov-sim"`). The client does not check
+**`backend`:** backend slug (e.g. `"local"`, the free simulator). The client does not check
 the backend; the platform decides whether the program can run there.
 
 **`shots`:** number of measurement shots. Default: `1000`.
