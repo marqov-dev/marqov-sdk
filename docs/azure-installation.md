@@ -36,3 +36,41 @@ No Azure credentials, workspace requests or provider jobs are required.
 This resolves the installation gap in marqov-sdk#223. Import and offline tests
 do not qualify connected execution, billing or deployed runtime compatibility.
 Those require the platform's separate adoption and qualification process.
+
+## How circuits are submitted
+
+`AzureQuantumExecutor` with `framework="qiskit"` (the default) and the Azure
+branch of `MarqovDevice` submit the same way, through azure-quantum's Qiskit
+provider: `AzureQuantumProvider(workspace).get_backend(target).run(circuit,
+shots=shots)`. `MarqovDevice` uses its backend name as the Azure target name.
+In azure-quantum 3.12.0, `get_backend` returns the QIR backend for IonQ,
+Quantinuum and Rigetti targets, so the provider and qdk translate the circuit
+to QIR. `framework="cirq"` submits through azure-quantum's Cirq service
+instead and is not changed by this section.
+
+The circuit passed to `run` (`prepare_circuit` in
+`marqov/executors/_azure_qiskit.py`):
+
+- has every barrier removed. A barrier never changes the counts, and
+  azure-quantum 3.12.0 calls qdk with `skip_transpilation=True`, while qdk
+  removes barriers only during transpilation. A barrier would reach the QIR,
+  which Rigetti's adaptor refuses (`QATTransformationFailed`).
+- measures every qubit `i` into bit `i` of one classical register named
+  `meas`, explicitly. It never uses Qiskit's `measure_all()`, which inserts a
+  barrier first. Qubits no gate touches are measured too, so every counts key
+  has `circuit.num_qubits` characters, with qubit 0 leftmost, as elsewhere in
+  the SDK.
+
+Refused before Azure is contacted, with a `ValueError` naming the target:
+
+- PASQAL targets (`pasqal.*`), on both frameworks: they take pulse-level
+  Pulser programs, and azure-quantum has no Qiskit or Cirq backend for them.
+- A circuit with no qubits, on the Qiskit route: there is nothing to measure.
+
+A job that does not succeed raises `RuntimeError` naming the target.
+
+`tests/test_azure_provider_route.py` checks this offline: it builds the real
+provider over an offline workspace and replaces only the upload, then
+inspects the circuit given to `run`, the QIR it becomes (no barrier, one
+`meas` register measured in qubit order) and the counts keys. As above,
+offline tests do not qualify a connected run on any target.

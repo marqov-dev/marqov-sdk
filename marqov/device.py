@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 from marqov.backends import is_azure, is_braket, is_ibm, is_simulator
 from marqov.circuits import Circuit
@@ -51,135 +50,6 @@ def _run_loop_safe(fn):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
         return ex.submit(_worker).result()
-
-
-def _qir_outcome_to_qiskit_bitstring(outcome: Any) -> str:
-    """Join an Azure QIR outcome into a bitstring the way Qiskit sees it.
-
-    Mirrors ``AzureQuantumJob._qir_to_qiskit_bitstring`` in the azure-quantum
-    Qiskit provider: a display string is a Python literal, a tuple is one
-    classical register per item, and a list is the bits of one register.
-    Reproducing it here keeps MarqovDevice's Azure counts identical to the
-    ones AzureQuantumExecutor gets from that provider.
-    """
-    import ast
-    import re
-
-    value = outcome
-    if isinstance(value, str) and not re.match(r"[\d\s]+$", value):
-        try:
-            value = ast.literal_eval(value)
-        except (ValueError, SyntaxError):
-            pass  # already a raw bitstring, e.g. '01'
-
-    if isinstance(value, tuple):
-        return " ".join(_qir_outcome_to_qiskit_bitstring(term) for term in value)
-    if isinstance(value, list):
-        return "".join(str(bit) for bit in value)
-    return str(value)
-
-
-def _qir_outcome_to_bitstring(outcome: Any) -> str:
-    """Convert an Azure QIR outcome to the SDK's qubit-0-leftmost bitstring.
-
-    The reversal is the same one AzureQuantumExecutor applies to the Qiskit
-    provider's counts, so both paths agree on endianness.
-    """
-    return _qir_outcome_to_qiskit_bitstring(outcome).replace(" ", "")[::-1]
-
-
-def _azure_results_payload(job: Any) -> dict[str, Any]:
-    """Download and decode the raw Azure results blob.
-
-    ``Job.get_results()`` is deliberately not used: for both Microsoft output
-    formats it returns normalized probabilities keyed by display strings such
-    as '[0]', which is neither the declared return type of run() nor a
-    bitstring. The raw blob still carries the shot counts.
-    """
-    import json
-
-    payload = job.download_data(job.details.output_data_uri)
-    if isinstance(payload, bytes):
-        payload = payload.decode("utf8")
-    if isinstance(payload, str):
-        payload = json.loads(payload)
-    if not isinstance(payload, dict):
-        raise ValueError(
-            "Azure job results are not a JSON object; cannot extract counts "
-            f"(got {type(payload).__name__})."
-        )
-    return payload
-
-
-def _azure_counts_from_job(job: Any, shots: int) -> dict[str, int]:
-    """Return measurement counts for a completed Azure Quantum job.
-
-    Args:
-        job: A completed azure-quantum Job.
-        shots: The number of shots requested, used to allocate counts when the
-            provider reports probabilities rather than counts.
-
-    Returns:
-        Mapping of bitstring (qubit 0 leftmost) to integer count.
-
-    Raises:
-        ValueError: If the job's output data format is one this path cannot
-            turn into counts.
-    """
-    output_format = getattr(job.details, "output_data_format", None)
-    payload = _azure_results_payload(job)
-
-    if output_format == "microsoft.quantum-results.v2":
-        results = payload.get("Results")
-        if not results:
-            raise ValueError(
-                "Azure job results are missing the 'Results' array required "
-                "by the microsoft.quantum-results.v2 output format."
-            )
-        histogram = results[0].get("Histogram")
-        if histogram is None:
-            raise ValueError(
-                "Azure job results are missing the 'Histogram' array required "
-                "by the microsoft.quantum-results.v2 output format."
-            )
-        # The v2 histogram carries the raw per-outcome Count, which
-        # get_results() divides away into a probability.
-        counts: dict[str, int] = {}
-        for entry in histogram:
-            bitstring = _qir_outcome_to_bitstring(entry["Display"])
-            counts[bitstring] = counts.get(bitstring, 0) + int(entry["Count"])
-        return counts
-
-    if output_format == "microsoft.quantum-results.v1":
-        histogram = payload.get("Histogram")
-        if histogram is None:
-            raise ValueError(
-                "Azure job results are missing the 'Histogram' array required "
-                "by the microsoft.quantum-results.v1 output format."
-            )
-        if len(histogram) % 2 != 0:
-            raise ValueError(
-                "Azure 'Histogram' array is malformed: an even number of "
-                "items (display, probability) is expected."
-            )
-        # v1 reports probabilities only, so allocate the requested shots with
-        # the largest-remainder method rather than rounding each bin.
-        probabilities: dict[str, float] = {}
-        for i in range(0, len(histogram), 2):
-            bitstring = _qir_outcome_to_bitstring(histogram[i])
-            probabilities[bitstring] = probabilities.get(bitstring, 0.0) + float(
-                histogram[i + 1]
-            )
-        from marqov.executors._counts import allocate_counts
-
-        return allocate_counts(probabilities, shots)
-
-    raise ValueError(
-        f"Azure output data format '{output_format}' is not supported by "
-        "MarqovDevice.run: counts can only be extracted from the "
-        "microsoft.quantum-results.v1 and microsoft.quantum-results.v2 "
-        "formats."
-    )
 
 
 class MarqovDevice:
@@ -258,6 +128,7 @@ class MarqovDevice:
         elif is_azure(self._params):
             require_azure()
             from azure.quantum import Workspace
+            from azure.quantum.qiskit import AzureQuantumProvider
 
             workspace = Workspace(
                 subscription_id=self._backend_params["subscription_id"],
@@ -265,8 +136,11 @@ class MarqovDevice:
                 name=self._backend_params["workspace_name"],
                 location=self._backend_params.get("location", DEFAULT_AZURE_LOCATION),
             )
-            targets = workspace.get_targets(name=self._backend)
-            self._provider_device = targets
+            # The provider route AzureQuantumExecutor uses: the backend
+            # translates the Qiskit circuit for its target. A raw Target's
+            # submit() takes an already encoded payload, not a circuit.
+            provider = AzureQuantumProvider(workspace=workspace)
+            self._provider_device = provider.get_backend(self._backend)
 
         elif is_braket(self._params):
             from braket.aws import AwsDevice
@@ -369,7 +243,9 @@ class MarqovDevice:
         """Convert a marqov.Circuit to the target backend's native format.
 
         - Braket backends (local, AWS): .to_braket() — auto-measures all qubits
-        - IBM/Azure backends: .to_qiskit() + measure_all() if no measurements present
+        - IBM backends: .to_qiskit() + measure_all() if no measurements present
+        - Azure backends: the executor's prepared Qiskit circuit, without
+          barriers and with every qubit measured into register ``meas``
         """
         # Local/marqov-sim always run on the Braket LocalSimulator (see
         # _get_provider_device and run()), regardless of any stray
@@ -380,11 +256,19 @@ class MarqovDevice:
         if self._backend in ("local", "marqov-sim"):
             return marqov_circuit.to_braket()
 
-        if is_ibm(self._params) or is_azure(self._params):
+        if is_ibm(self._params):
             qc = marqov_circuit.to_qiskit()
             if not qc.cregs:
                 qc.measure_all()
             return qc
+
+        if is_azure(self._params):
+            from marqov.executors._azure_qiskit import prepare_circuit, refuse_unsupported_target
+
+            # The same program AzureQuantumExecutor submits: no barrier, and
+            # every qubit measured into "meas". Both checks run before Azure.
+            refuse_unsupported_target(self._backend)
+            return prepare_circuit(marqov_circuit, self._backend)
 
         # Braket format: local simulators and AWS Braket devices
         return marqov_circuit.to_braket()
@@ -487,9 +371,10 @@ class MarqovDevice:
             return extract_sampler_counts(result)
 
         elif is_azure(self._params):
-            job = device.submit(native_circuit, shots=shots)
-            job.wait_until_completed()
-            return _azure_counts_from_job(job, shots)
+            from marqov.executors._azure_qiskit import counts_from_result
+
+            job = device.run(native_circuit, shots=shots)
+            return counts_from_result(job.result(), self._backend)
 
         elif is_braket(self._params):
             s3_folder = self._params.get("s3_destination_folder")
