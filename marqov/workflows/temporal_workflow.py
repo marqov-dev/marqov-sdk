@@ -74,23 +74,49 @@ class JobWorkflow:
         task_timeline: list[dict[str, Any]] = []
 
         for level_idx, level in enumerate(execution_levels):
-            # Prepare and execute all nodes at this level in parallel
+            # Each node is sent only its own dependencies' results, so the
+            # resolve payload grows with the node's fan-in, not with the run.
+            # All subsets are built before any activity is scheduled, so a
+            # missing dependency fails the level before it starts.
+            dependency_results: list[dict[str, Any]] = []
+            for node_id in level:
+                subset: dict[str, Any] = {}
+                for dep_id in nodes[node_id].get("dependencies", []):
+                    if dep_id not in completed_results:
+                        raise ApplicationError(
+                            f"Node {node_id!r} depends on {dep_id!r}, which has "
+                            f"no completed result before level {level_idx}",
+                            non_retryable=True,
+                        )
+                    subset[dep_id] = completed_results[dep_id]
+                dependency_results.append(subset)
+
+            # Resolve inputs for every node at this level concurrently.
+            # Activity referenced by string name - no import needed!
+            resolve_coros = [
+                workflow.execute_activity(
+                    "prepare_node_inputs",
+                    args=[json.dumps(nodes[node_id]), json.dumps(subset)],
+                    start_to_close_timeout=timedelta(seconds=30),
+                )
+                for node_id, subset in zip(level, dependency_results)
+            ]
+            resolved_outcomes = await asyncio.gather(
+                *resolve_coros, return_exceptions=True
+            )
+            # Raise the first failure in level order, as the serial loop did.
+            resolved_payloads: list[Any] = []
+            for outcome in resolved_outcomes:
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                resolved_payloads.append(outcome)
+
+            # Execute all nodes at this level in parallel
             tasks = []
             task_metas: list[dict[str, Any]] = []
 
-            for node_id in level:
+            for node_id, resolved_json in zip(level, resolved_payloads):
                 node_data = nodes[node_id]
-
-                # Resolve dependencies using completed results
-                # Activity referenced by string name - no import needed!
-                resolved_json = await workflow.execute_activity(
-                    "prepare_node_inputs",
-                    args=[
-                        json.dumps(node_data),
-                        json.dumps(completed_results),
-                    ],
-                    start_to_close_timeout=timedelta(seconds=30),
-                )
 
                 # A malformed payload must fail the workflow, not its workflow
                 # task: a bare JSONDecodeError/TypeError/KeyError is not a
