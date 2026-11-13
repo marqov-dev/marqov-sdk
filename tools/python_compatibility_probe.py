@@ -87,7 +87,8 @@ elif profile == "qutip":
     result = qutip.mesolve(qutip.sigmaz(), qutip.basis(2, 0), [0, 0.1], e_ops=[qutip.sigmaz()])
     with contextlib.redirect_stdout(stream):
         record(result, observable_names=["z"])
-    assert json.loads(stream.getvalue())["observables"]["z"] == [1.0, 1.0]
+    recorded = json.loads(stream.getvalue())["observables"]["z"]
+    assert np.allclose(recorded, [1.0, 1.0]), recorded
 elif profile == "lightning-kokkos":
     from marqov.executors import LightningExecutor, LightningExecutorConfig
 
