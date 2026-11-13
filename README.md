@@ -63,9 +63,10 @@ asyncio.run(main())  # from sync code, asyncio.run(measure(1000)) also works
 The current release is on [PyPI](https://pypi.org/project/marqov/). The
 [changelog](https://github.com/marqov-dev/marqov-sdk/blob/main/CHANGELOG.md) lists every change by release, with an Upgrading
 section for anything that can alter existing code. If you are upgrading from
-0.10.x, read the [0.11.0 release notes](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/releases/0.11.0.md)
-first: circuits on sparse qubit indices keep each qubit at its own position, so
-their counts keys get wider, and backend parameter names are unified.
+0.11.x, read the [0.12.0 release notes](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/releases/0.12.0.md)
+first: Qiskit and OpenQASM imports keep the declared qubits, so counts keys can
+get wider, and Azure Quantum needs the `marqov[azure]` extra. From 0.10.x, read
+the [0.11.0 release notes](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/releases/0.11.0.md) as well.
 
 ```bash
 pip install marqov
