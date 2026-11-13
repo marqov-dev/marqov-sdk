@@ -7,6 +7,25 @@ release.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-13
+
+### Upgrading
+
+- **Counts keys can get wider for imported circuits.** `from_qiskit()` and
+  `from_openqasm()` keep a register's unused qubits at the end, and
+  `from_braket`, `from_cirq` and `from_pyquil` keep a qubit that only a
+  measurement touches. `qreg q[6];` with gates on `q[0]` and `q[3]` now gives
+  6-character keys (it gave 4). Circuits whose gates reach the last declared
+  qubit are unchanged.
+- **Azure needs the extra.** `pip install marqov` no longer installs
+  `azure-quantum`; install `marqov[azure]` or `marqov[all]`.
+- **If you run the SDK's Temporal worker yourself:** task results and
+  arguments are capped at 2 MB (it was 3 MiB), and you should drain running
+  workflows before upgrading the worker (see the workflow entry under Fixed).
+  The hosted platform is not affected by either.
+- A Circuit pickled by this version loses its declared width when an older
+  `marqov` loads it. Keep both sides of a pickle boundary on the same version.
+
 ### Added
 
 - `marqov watch`, a read-only terminal view of Marqov Platform jobs: the
