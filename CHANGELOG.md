@@ -7,6 +7,15 @@ release.
 
 ## [Unreleased]
 
+### Documentation
+
+- **Changing an object after passing it to a task.** The README, the workflow
+  capture guide and the native workflows guide now say that inside a
+  `@workflow`, changing a mutable object after passing it to a task can change
+  what that task receives, including an object inside a list or dict, and that
+  the task should be given a fresh object or an independent copy
+  (marqov-sdk#314). The behaviour itself is unchanged.
+
 ## [0.12.0] - 2026-11-13
 
 ### Upgrading

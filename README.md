@@ -56,6 +56,31 @@ async def main():
 asyncio.run(main())  # from sync code, asyncio.run(measure(1000)) also works
 ```
 
+Inside a `@workflow`, changing a mutable object after passing it to a task can
+change what that task receives. A task call is recorded, not run, and its
+arguments are read later, when the workflow is dispatched or captured. This
+also applies to an object inside a list or dict. If the task should see the
+earlier value, pass a fresh object or an independent copy:
+
+```python
+from marqov import Circuit, task, workflow
+
+@task
+def gate_names(circuit):
+    return [g["gate"] for g in circuit.to_dict()["gates"]]
+
+@workflow
+def reused():
+    c = Circuit().h(0)
+    first = gate_names(c)
+    c.x(0)                    # also changes what the call above receives
+    return [first, gate_names(c)]
+
+@workflow
+def sweep(angles):
+    return [gate_names(Circuit().rx(angle, 0)) for angle in angles]  # a fresh circuit per call
+```
+
 ---
 
 ## Installation
