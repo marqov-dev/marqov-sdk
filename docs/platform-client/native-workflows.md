@@ -197,6 +197,12 @@ unchanged.
   `/api/meta`.
 - **One runtime backend.** Managed native execution currently runs on
   `marqov-sim`, for teams where it is enabled.
+- **Do not change an object after passing it to a task.** A workflow submitted
+  with `submit_native()` is built the same way as one you run yourself: inside a
+  `@workflow`, changing a mutable object (a `Circuit`, an array, or one inside a
+  list or dict) after passing it to a task can change what that task receives.
+  Pass a fresh object or an independent copy for each call, for example
+  `measure(Circuit().rx(angle, 0))`.
 - **Task results are size-limited.** See the next section.
 
 ## Task result and argument size

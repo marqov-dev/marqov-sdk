@@ -41,7 +41,11 @@ This is an in-process representation, **not a wire format**. The graph is mutabl
 opaque leaf values are shared rather than copied, and calling capture later reads
 the retained result object at that time. Adapters must select a versioned artifact
 codec and compatible runtime, validate dependencies and bounds, and retain their
-own stable execution identity. Random SDK node IDs identify this capture; running
+own stable execution identity. Because leaves are shared, an adapter that reads
+the graph after the workflow function has returned sees each argument as it is
+then, not as it was when the task was called: a workflow body that changes an
+object after passing it to a task changes what the adapter reads for that
+earlier call. Random SDK node IDs identify this capture; running
 the workflow again is a new capture, not recovery of an accepted task attempt.
 Graph/function/argument/result data must not be assumed safe to deserialize in a
 trusted process. Neither requested configuration nor a capture grants authority.
