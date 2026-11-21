@@ -7,6 +7,17 @@ release.
 
 ## [Unreleased]
 
+### Changed
+
+- The lockfile (`uv.lock`, dev and CI only) upgrades oauthlib to 4.0.1 and
+  setuptools to 84.2.1, past their advisories. setuptools was held at 81.0.0
+  by an exact pin in Amazon Braket's schemas and default simulator, so the
+  lockfile also moves amazon-braket-sdk to 1.127.8, amazon-braket-schemas to
+  1.32.2 and amazon-braket-default-simulator to 1.43.1, which drop that pin.
+  `uv audit` reports no known vulnerabilities in the locked set. Nothing a
+  PyPI user installs changes: the declared `amazon-braket-sdk>=1.117.0` floor
+  is the same. (marqov-sdk#186)
+
 ### Documentation
 
 - **Changing an object after passing it to a task.** The README, the workflow
