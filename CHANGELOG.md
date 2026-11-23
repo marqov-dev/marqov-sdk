@@ -7,6 +7,31 @@ release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`marqov run --arg` binds by name.** `--arg b=2 --arg a=1` used to call
+  `run(2, 1)`: the names were dropped and the values passed in the order
+  given. Values now bind to the workflow's `run()` parameters by name and
+  reach Temporal in parameter order. An unknown name or a missing required
+  parameter exits 1 and names the valid parameters; a repeated name, a
+  keyword-only parameter (Temporal passes positional arguments only), or a
+  skipped parameter whose default is not JSON-encodable also exits 1 with
+  an explanation. A skipped parameter is sent with the default from the
+  module the CLI loaded. `run()` is read the way Python binds it on an
+  instance: the instance parameter is dropped whatever it is named, and a
+  `@staticmethod` `run()` has none. A workflow whose `run()` takes only
+  `*args`, or is wrapped by a decorator that hides its signature (one
+  without `functools.wraps`), cannot receive `--arg` values.
+- **CLI timeouts.** `marqov run`, `status` and `list` stop waiting for a
+  connection to Temporal after 30 seconds with a one-line error instead of
+  a traceback. `--timeout SECONDS` on all three sets that limit; the
+  Temporal client may give up sooner on its own. On `marqov run` the same
+  limit also covers starting the workflow and, with `--wait`, waiting for
+  its result, and the command exits 1 when it expires. Without `--timeout`,
+  `--wait` waits as long as the workflow runs. When the limit expires the
+  workflow is not cancelled: it may already have started, and keeps
+  running.
+
 ### Documentation
 
 - **Changing an object after passing it to a task.** The README, the workflow

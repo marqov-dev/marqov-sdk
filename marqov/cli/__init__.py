@@ -19,8 +19,11 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import inspect
 import json
+import math
 import sys
+import time
 import uuid
 from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
@@ -100,6 +103,8 @@ def parse_args(args: tuple[str, ...]) -> dict[str, Any]:
             raise ValueError(f"Invalid argument format: {arg}. Expected: key=value")
 
         key, value = arg.split("=", 1)
+        if key in result:
+            raise ValueError(f"Argument '{key}' given more than once")
 
         # Try to parse as JSON for complex types
         try:
@@ -109,6 +114,129 @@ def parse_args(args: tuple[str, ...]) -> dict[str, Any]:
             result[key] = value
 
     return result
+
+
+DEFAULT_CONNECT_TIMEOUT = 30.0
+
+
+def _validate_timeout(ctx: click.Context, param: click.Parameter, value: float | None) -> float | None:
+    """Reject a --timeout that is not a positive, finite number of seconds."""
+    if value is not None and not (math.isfinite(value) and value > 0):
+        raise click.BadParameter("must be a positive, finite number of seconds", param=param)
+    return value
+
+
+def _timeout_option(help_text: str) -> Any:
+    return click.option(
+        "--timeout",
+        type=float,
+        default=None,
+        callback=_validate_timeout,
+        metavar="SECONDS",
+        help=help_text,
+    )
+
+
+async def _connect(host: str, port: int, timeout: float | None) -> Client:
+    """Connect to Temporal, giving up after ``timeout`` seconds (default 30)."""
+    limit = DEFAULT_CONNECT_TIMEOUT if timeout is None else timeout
+    deadline = asyncio.timeout(limit)
+    try:
+        async with deadline:
+            return await Client.connect(f"{host}:{port}")
+    except TimeoutError:
+        if not deadline.expired():
+            raise
+        click.echo(f"Error: timed out after {limit:g}s connecting to Temporal at {host}:{port}", err=True)
+        raise SystemExit(1)
+
+
+_AN_INSTANCE = object()
+
+
+def _run_parameters(run_method: Any, owner: type | None) -> list[inspect.Parameter]:
+    """The parameters ``run`` takes when Temporal calls it on a workflow instance.
+
+    With the owning class, ``run`` is bound the way Python binds it on an
+    instance (its descriptor's ``__get__``), so the instance parameter is
+    dropped for a plain function, a ``functools.partialmethod`` or a wrapper
+    with ``__get__``, whatever it is named, and kept for a ``staticmethod``.
+    Without the class, a bound method is taken as it is, and otherwise a first
+    parameter named ``self`` or ``cls`` is taken to be the instance.
+    """
+    if inspect.ismethod(run_method):
+        return list(inspect.signature(run_method).parameters.values())
+    if owner is not None:
+        static = inspect.getattr_static(owner, "run", None)
+        bind = getattr(type(static), "__get__", None)
+        if static is not None and bind is not None:
+            try:
+                bound = bind(static, _AN_INSTANCE, owner)
+                return list(inspect.signature(bound).parameters.values())
+            except (TypeError, ValueError):
+                pass
+        elif static is not None:
+            return list(inspect.signature(run_method).parameters.values())
+    params = list(inspect.signature(run_method).parameters.values())
+    if (
+        params
+        and params[0].kind in (params[0].POSITIONAL_ONLY, params[0].POSITIONAL_OR_KEYWORD)
+        and params[0].name in ("self", "cls")
+    ):
+        params = params[1:]
+    return params
+
+
+def bind_workflow_args(
+    run_method: Any, named: dict[str, Any], *, owner: type | None = None
+) -> list[Any]:
+    """Bind ``--arg`` values to a workflow's ``run`` signature by name.
+
+    Temporal's client takes positional arguments, so the values are returned
+    in parameter order. A parameter that is skipped between two supplied ones
+    gets its default. Pass the workflow class as ``owner`` so the instance
+    parameter is recognised by how ``run`` is defined, not by its name.
+
+    Raises:
+        ValueError: On an unknown name, a keyword-only or variadic target
+            that cannot be passed by name, or a missing required parameter.
+    """
+    params = _run_parameters(run_method, owner)
+    passable = [p for p in params if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+    kw_only = [p for p in params if p.kind is p.KEYWORD_ONLY]
+    names = [p.name for p in passable]
+    valid = ", ".join(names) if names else "(none)"
+    kw_note = "--arg cannot pass keyword-only parameters (Temporal passes positional arguments only)"
+
+    for key in named:
+        if any(p.name == key for p in kw_only):
+            raise ValueError(f"'{key}' is a keyword-only parameter; {kw_note}")
+        if key not in names:
+            raise ValueError(f"unknown argument '{key}'. Valid parameters: {valid}")
+
+    required_kw = [p.name for p in kw_only if p.default is p.empty]
+    if required_kw:
+        raise ValueError(f"required keyword-only parameter(s) {', '.join(required_kw)}: {kw_note}")
+
+    values: list[Any] = []
+    last = max((i for i, p in enumerate(passable) if p.name in named), default=-1)
+    for param in passable[: last + 1]:
+        if param.name in named:
+            values.append(named[param.name])
+        elif param.default is not param.empty:
+            try:
+                json.dumps(param.default)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"parameter '{param.name}' is skipped and its default cannot be sent as JSON; "
+                    f"pass --arg {param.name}=... explicitly"
+                )
+            values.append(param.default)
+    # Any required parameter not supplied is an error, even beyond `last`.
+    missing = [p.name for p in passable if p.default is p.empty and p.name not in named]
+    if missing:
+        raise ValueError(f"missing required argument(s): {', '.join(missing)}. Valid parameters: {valid}")
+    return values
 
 
 class _MarqovGroup(click.Group):
@@ -146,6 +274,11 @@ def main() -> None:
 @click.option("--port", default=7233, help="Temporal server port")
 @click.option("--task-queue", default="marqov", help="Temporal task queue")
 @click.option("--wait/--no-wait", default=True, help="Wait for workflow completion")
+@_timeout_option(
+    "Give up after SECONDS. Covers connecting (default 30s), starting the workflow "
+    "and, with --wait, waiting for the result; without it only connecting is limited. "
+    "The workflow is not cancelled when the limit expires."
+)
 def run(
     workflow: str,
     arg: tuple[str, ...],
@@ -153,10 +286,14 @@ def run(
     port: int,
     task_queue: str,
     wait: bool,
+    timeout: float | None,
 ) -> None:
     """Run a quantum workflow.
 
     WORKFLOW should be in the format: module.py::ClassName
+
+    --arg values bind to the workflow's run() parameters by name, in any
+    order. An unknown name or a missing required parameter is an error.
 
     Examples:
         marqov run examples/temporal_bell_state.py::BellStateWorkflow --arg shots=1000
@@ -180,6 +317,12 @@ def run(
         click.echo(f"Error parsing arguments: {e}", err=True)
         raise SystemExit(1)
 
+    try:
+        args_list = bind_workflow_args(workflow_class.run, workflow_args, owner=workflow_class)
+    except (ValueError, TypeError, AttributeError) as e:
+        click.echo(f"Error binding arguments: {e}", err=True)
+        raise SystemExit(1)
+
     click.echo(f"Workflow: {class_name}")
     click.echo(f"Module: {module_path}")
     if workflow_args:
@@ -188,7 +331,8 @@ def run(
     async def execute():
         # Connect to Temporal
         click.echo(f"\nConnecting to Temporal at {host}:{port}...")
-        client = await Client.connect(f"{host}:{port}")
+        started = time.monotonic()
+        client = await _connect(host, port, timeout)
 
         # Generate workflow ID
         workflow_id = f"{class_name.lower()}-{uuid.uuid4().hex[:8]}"
@@ -196,23 +340,48 @@ def run(
         # Start the workflow
         click.echo(f"Starting workflow: {workflow_id}")
 
-        # Convert args dict to positional args for workflow.run
-        # Workflows typically take positional args, so we pass as list
-        args_list = list(workflow_args.values()) if workflow_args else []
+        def remaining() -> float | None:
+            if timeout is None:
+                return None
+            return max(timeout - (time.monotonic() - started), 0.001)
 
-        handle = await client.start_workflow(
-            workflow_class.run,
-            args=args_list if args_list else None,
-            id=workflow_id,
-            task_queue=task_queue,
-        )
+        limit = asyncio.timeout(remaining())
+        try:
+            async with limit:
+                handle = await client.start_workflow(
+                    workflow_class.run,
+                    args=args_list if args_list else None,
+                    id=workflow_id,
+                    task_queue=task_queue,
+                )
+        except TimeoutError:
+            if not limit.expired():
+                raise
+            click.echo(
+                f"Error: timed out after {timeout:g}s starting workflow {workflow_id}. "
+                f"It may or may not have started; check it with: marqov status {workflow_id}",
+                err=True,
+            )
+            raise SystemExit(1)
 
         click.echo(f"Workflow started: {handle.id}")
         click.echo(f"View in Temporal UI: http://{host}:8088/namespaces/default/workflows/{handle.id}")
 
         if wait:
             click.echo("\nWaiting for result...")
-            result = await handle.result()
+            limit = asyncio.timeout(remaining())
+            try:
+                async with limit:
+                    result = await handle.result()
+            except TimeoutError:
+                if not limit.expired():
+                    raise
+                click.echo(
+                    f"Error: timed out after {timeout:g}s waiting for the result. "
+                    f"Workflow {handle.id} may still be running; check it with: marqov status {handle.id}",
+                    err=True,
+                )
+                raise SystemExit(1)
             click.echo(f"\nResult: {json.dumps(result, indent=2, default=str)}")
         else:
             click.echo("\nWorkflow started in background (--no-wait)")
@@ -224,7 +393,8 @@ def run(
 @click.argument("workflow_id")
 @click.option("--host", default="localhost", help="Temporal server host")
 @click.option("--port", default=7233, help="Temporal server port")
-def status(workflow_id: str, host: str, port: int) -> None:
+@_timeout_option("Connection timeout in seconds (default 30)")
+def status(workflow_id: str, host: str, port: int, timeout: float | None) -> None:
     """Check status of a running workflow.
 
     Examples:
@@ -234,7 +404,7 @@ def status(workflow_id: str, host: str, port: int) -> None:
 
     async def check_status():
         click.echo(f"Connecting to Temporal at {host}:{port}...")
-        client = await Client.connect(f"{host}:{port}")
+        client = await _connect(host, port, timeout)
 
         try:
             handle = client.get_workflow_handle(workflow_id)
@@ -352,7 +522,8 @@ def worker_start(
 @click.option("--host", default="localhost", help="Temporal server host")
 @click.option("--port", default=7233, help="Temporal server port")
 @click.option("--limit", default=10, help="Maximum number of workflows to list")
-def list_workflows(host: str, port: int, limit: int) -> None:
+@_timeout_option("Connection timeout in seconds (default 30)")
+def list_workflows(host: str, port: int, limit: int, timeout: float | None) -> None:
     """List recent workflows.
 
     Examples:
@@ -362,7 +533,7 @@ def list_workflows(host: str, port: int, limit: int) -> None:
 
     async def _run():
         click.echo(f"Connecting to Temporal at {host}:{port}...")
-        client = await Client.connect(f"{host}:{port}")
+        client = await _connect(host, port, timeout)
 
         click.echo(f"\nRecent workflows (limit {limit}):")
         click.echo("-" * 60)
