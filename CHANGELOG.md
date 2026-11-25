@@ -7,6 +7,18 @@ release.
 
 ## [Unreleased]
 
+### Added
+
+- **`ClifftExecutor`, an opt-in exact near-Clifford simulator.** Install with
+  `pip install "marqov[clifft]"` (also in `[all]`), which pins `clifft==0.14.0`;
+  the executor refuses any other installed Clifft version. It samples every
+  qubit of a noiseless gate circuit with counts keyed qubit 0 leftmost, takes a
+  `seed` option, and records versions, seed, the requested and selected
+  execution configuration, the program text and the compiled peak active width
+  in `metadata["reproducibility"]`. It suits wide circuits whose non-Clifford
+  gates keep the active state narrow; see `docs/clifft.md`. It is used directly,
+  not through `ExecutorFactory`.
+
 ### Documentation
 
 - **Changing an object after passing it to a task.** The README, the workflow

@@ -588,6 +588,21 @@ wheels = [
 ]
 
 [[package]]
+name = "clifft"
+version = "0.14.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/51/e8/68d47ee8dc8dfdaa858a7e1c974bbfb030ef879690a401c504c35d95ba5d/clifft-0.14.0.tar.gz", hash = "sha256:1e57581140a139ce79bf7ce0b04e59a5c12c7d5d51978440a079dd5328d5ac9a", size = 5975727, upload-time = "2026-11-24T17:14:50.346Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5e/8b/6cc0a34e0840e2f24bc6bb56a705b89042db577c1b21ef5a771fe28ed278/clifft-0.14.0-cp312-abi3-macosx_15_0_arm64.whl", hash = "sha256:1a0351519938ffe74874d1a19c2321b4bc78f6a5be8cf4b88af2731a6e95b8f3", size = 1080694, upload-time = "2026-11-24T17:14:44.113Z" },
+    { url = "https://files.pythonhosted.org/packages/05/58/6e75ae7ca357b46086d768309e126d3f9b461bb996ac1d3f1e020ee30fde/clifft-0.14.0-cp312-abi3-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:2020eb748115122cefa04a7012905d068298453283186f5f8c3df8072156265e", size = 1528168, upload-time = "2026-11-24T17:14:45.782Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/7b/d094423dbecbf43af1372e81dcdfa1872607ba2fb43f4c45ea38d06e3e33/clifft-0.14.0-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0e8daf9a80fefceadd624899783bd339a6fff7b98087b0b9826703bc977af8ee", size = 1729692, upload-time = "2026-11-24T17:14:47.513Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/66/936bcf56e218ac9ef923fddaf4829a0e8cb2a27db0bae5fd363730c8d740/clifft-0.14.0-cp312-abi3-win_amd64.whl", hash = "sha256:baa508273e0b78b2b2a9fe81202f06843ef931bb4212b04d7f08184f7e4677f7", size = 1283060, upload-time = "2026-11-24T17:14:48.949Z" },
+]
+
+[[package]]
 name = "cloudpickle"
 version = "2.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1500,6 +1515,7 @@ all = [
     { name = "amazon-braket-sdk" },
     { name = "azure-quantum", extra = ["cirq", "qiskit"] },
     { name = "cirq-core" },
+    { name = "clifft", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
     { name = "pennylane" },
     { name = "pennylane-lightning" },
     { name = "pyquil" },
@@ -1523,11 +1539,15 @@ braket = [
 cirq = [
     { name = "cirq-core" },
 ]
+clifft = [
+    { name = "clifft", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
+]
 cudaq = [
     { name = "cudaq", marker = "sys_platform == 'linux'" },
     { name = "qiskit" },
 ]
 dev = [
+    { name = "clifft", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1596,6 +1616,9 @@ requires-dist = [
     { name = "cirq-core", marker = "extra == 'all'", specifier = ">=1.0.0" },
     { name = "cirq-core", marker = "extra == 'cirq'", specifier = ">=1.0.0" },
     { name = "click", specifier = ">=8.0.0" },
+    { name = "clifft", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'all') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'all') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'all') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'all')", specifier = "==0.14.0" },
+    { name = "clifft", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'clifft') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'clifft') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'clifft') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'clifft')", specifier = "==0.14.0" },
+    { name = "clifft", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'dev') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'dev') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'dev') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'dev')", specifier = "==0.14.0" },
     { name = "cloudpickle", specifier = ">=2.2.1" },
     { name = "cudaq", marker = "sys_platform == 'linux' and extra == 'cudaq'", specifier = ">=0.14.2" },
     { name = "marqov-quantumflow", specifier = "==1.0.2" },
@@ -1651,7 +1674,7 @@ requires-dist = [
     { name = "structlog", specifier = ">=24.0.0" },
     { name = "temporalio", specifier = ">=1.7.0" },
 ]
-provides-extras = ["all", "azure", "braket", "cirq", "cudaq", "dev", "ibm", "ionq", "lightning-kokkos", "openqasm", "pennylane", "pyquil", "pytket", "qiskit", "quantinuum", "qutip", "rigetti", "watch"]
+provides-extras = ["all", "azure", "braket", "cirq", "clifft", "cudaq", "dev", "ibm", "ionq", "lightning-kokkos", "openqasm", "pennylane", "pyquil", "pytket", "qiskit", "quantinuum", "qutip", "rigetti", "watch"]
 
 [[package]]
 name = "marqov-quantumflow"
