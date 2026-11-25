@@ -56,11 +56,14 @@ async def main():
 asyncio.run(main())  # from sync code, asyncio.run(measure(1000)) also works
 ```
 
-Inside a `@workflow`, changing a mutable object after passing it to a task can
-change what that task receives. A task call is recorded, not run, and its
-arguments are read later, when the workflow is dispatched or captured. This
-also applies to an object inside a list or dict. If the task should see the
-earlier value, pass a fresh object or an independent copy:
+Inside a `@workflow`, a task call is recorded, not run, and its arguments are
+recorded with it. Changing a mutable object after passing it to a task,
+including an object inside a list or dict, does not change what that earlier
+call receives when you run the workflow with this SDK. A workflow submitted
+with `submit_native()` is run with the SDK version in the hosted platform's
+images, which can be older (see
+[Native workflows](docs/platform-client/native-workflows.md)), so a fresh
+object or an independent copy per call is still the safe pattern:
 
 ```python
 from marqov import Circuit, task, workflow
@@ -73,7 +76,7 @@ def gate_names(circuit):
 def reused():
     c = Circuit().h(0)
     first = gate_names(c)
-    c.x(0)                    # also changes what the call above receives
+    c.x(0)                    # the call above still receives h(0)
     return [first, gate_names(c)]
 
 @workflow

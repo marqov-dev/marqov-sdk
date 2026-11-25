@@ -42,10 +42,15 @@ opaque leaf values are shared rather than copied, and calling capture later read
 the retained result object at that time. Adapters must select a versioned artifact
 codec and compatible runtime, validate dependencies and bounds, and retain their
 own stable execution identity. Because leaves are shared, an adapter that reads
-the graph after the workflow function has returned sees each argument as it is
-then, not as it was when the task was called: a workflow body that changes an
-object after passing it to a task changes what the adapter reads for that
-earlier call. Random SDK node IDs identify this capture; running
+a node's `args` and `kwargs` after the workflow function has returned sees each
+argument as it is then, not as it was when the task was called: a workflow body
+that changes an object after passing it to a task changes what `args` shows for
+that earlier call. Each `@task` call also records `node.snapshot`, an
+`ArgumentSnapshot` made at the call. By default it holds the SDK's own Temporal
+encoding, which is what `run()` and `dispatch()` send. An adapter that promises
+call-time values enters `argument_capture(encoder, name=...)` before calling the
+workflow function and reads `node.snapshot` instead of `args`; see the
+`argument_capture` docstring. Random SDK node IDs identify this capture; running
 the workflow again is a new capture, not recovery of an accepted task attempt.
 Graph/function/argument/result data must not be assumed safe to deserialize in a
 trusted process. Neither requested configuration nor a capture grants authority.

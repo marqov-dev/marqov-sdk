@@ -7,14 +7,32 @@ release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A task receives its arguments as they were when it was called**
+  (marqov-sdk#314). Inside a `@workflow`, task arguments were read when the
+  workflow was dispatched, so changing a mutable object after passing it to a
+  task changed what that earlier task received. Each call now records its
+  arguments at the call (`TaskNode.snapshot`), and `run()`, `dispatch()` and
+  the other Temporal paths send that record. An argument that cannot be
+  encoded still fails at dispatch, not inside the workflow function.
+  `capture()` still hands adapters the caller's own objects; an adapter that
+  needs call-time values supplies its own encoder with the new
+  `argument_capture()` and reads `node.snapshot`. A workflow built under
+  `argument_capture()` with a custom encoder, or with capture switched off,
+  cannot be dispatched to Temporal.
+
 ### Documentation
 
 - **Changing an object after passing it to a task.** The README, the workflow
-  capture guide and the native workflows guide now say that inside a
-  `@workflow`, changing a mutable object after passing it to a task can change
-  what that task receives, including an object inside a list or dict, and that
-  the task should be given a fresh object or an independent copy
-  (marqov-sdk#314). The behaviour itself is unchanged.
+  capture guide and the native workflows guide say what a task receives when
+  a mutable object, including one inside a list or dict, is changed after
+  being passed to it (marqov-sdk#314). With the fix above, a workflow run with
+  this SDK is not affected. A workflow submitted with `submit_native()` runs
+  with the SDK version in the hosted platform's images, so the guides still
+  advise a fresh object or an independent copy per call there. The capture
+  guide says that `node.args` still shows the caller's own objects and that
+  `node.snapshot` holds the call-time record.
 
 ## [0.12.0] - 2026-11-13
 
