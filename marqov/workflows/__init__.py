@@ -40,11 +40,12 @@ workflow and activity classes directly:
 from dataclasses import dataclass
 
 from marqov.workflows.decorators import (
+    argument_capture,
     task,
     workflow,
     WorkflowDispatch,
 )
-from marqov.workflows.graph import TransportGraph, TaskProxy
+from marqov.workflows.graph import ArgumentSnapshot, TaskCall, TransportGraph, TaskProxy
 from marqov.workflows.capture import WorkflowCapture, TaskResultReference
 from marqov.workflows.temporal_workflow import JobWorkflow
 from marqov.workflows.runner import create_worker
@@ -81,6 +82,9 @@ __all__ = [
     "TaskResultReference",
     "TransportGraph",
     "TaskProxy",
+    "argument_capture",
+    "ArgumentSnapshot",
+    "TaskCall",
     "JobWorkflow",
     "create_worker",
     "execute_task",

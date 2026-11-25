@@ -24,6 +24,10 @@ Example:
 from __future__ import annotations
 
 import base64
+import weakref
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, TypeVar, overload
 
@@ -33,6 +37,9 @@ if TYPE_CHECKING:
     from marqov.workflows.capture import WorkflowCapture
 
 from marqov.workflows.graph import (
+    TEMPORAL_ARGUMENT_ENCODER,
+    ArgumentSnapshot,
+    TaskCall,
     TaskConfig,
     TaskNode,
     TaskProxy,
@@ -261,6 +268,214 @@ def _transport_inputs(
     return encoded_args, encoded_kwargs
 
 
+ArgumentEncoder = Callable[[TaskCall], Any]
+
+# None: the built-in Temporal encoder. (None, None): capture switched off.
+_CaptureSetting = tuple[str | None, ArgumentEncoder | None] | None
+_argument_capture: ContextVar[_CaptureSetting] = ContextVar("marqov_argument_capture", default=None)
+# The setting in force when each workflow was entered. Every task call in that
+# workflow uses it, whatever the body does to the context afterwards.
+_graph_capture: weakref.WeakKeyDictionary[TransportGraph, _CaptureSetting] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+@contextmanager
+def argument_capture(encoder: ArgumentEncoder | None, *, name: str | None = None) -> Iterator[None]:
+    """Choose how task arguments are captured for workflows built inside the block.
+
+    A task call inside a ``@workflow`` records its arguments when it is made,
+    so a later change to an argument object does not reach the task. By
+    default the SDK encodes them for its own Temporal dispatch. A consumer
+    that executes a captured workflow another way enters this block BEFORE
+    calling the workflow function and supplies its own encoder. The encoder in
+    force when a workflow function is entered is used for every task call in
+    that workflow, exactly once per call, at the call; entering or leaving a
+    block inside the body does not change it. A workflow called inside the body
+    takes the encoder in force at its own entry::
+
+        with argument_capture(my_encoder, name="my-runner/1"):
+            dispatch = my_workflow(...)
+        for node in dispatch.capture().graph.nodes.values():
+            node.snapshot  # ArgumentSnapshot(encoder="my-runner/1", ...)
+
+    Args:
+        encoder: Called with a ``TaskCall`` for each task call; what it returns
+            is stored as ``node.snapshot.value`` and never decoded by the SDK.
+            An ``Exception`` it raises is recorded as a failed snapshot (type
+            name and message only) and not raised into the workflow function.
+            Pass None to switch capture off: nodes get an ``"absent"``
+            snapshot and ``node.args`` is all a consumer has.
+        name: Identifies the encoder and its format; required with an encoder.
+
+    A workflow built under a custom encoder, or with capture switched off,
+    cannot be dispatched to Temporal: that would mean reading arguments after
+    the workflow function has returned.
+    """
+    if encoder is None:
+        setting: tuple[str | None, ArgumentEncoder | None] = (None, None)
+    else:
+        if not isinstance(name, str) or not name or name == TEMPORAL_ARGUMENT_ENCODER:
+            raise ValueError("argument_capture needs a name of its own for the encoder")
+        setting = (name, encoder)
+    token = _argument_capture.set(setting)
+    try:
+        yield
+    finally:
+        _argument_capture.reset(token)
+
+
+def _own_encoding(encoded: Any, payloads: dict[str, str]) -> Any:
+    """Copy an encoded argument's containers, sharing equal payload strings.
+
+    The encoding holds only JSON values, so this never touches a caller's
+    object. ``payloads`` maps each long string to the first equal one seen, so
+    the same array passed to many tasks is held once.
+    """
+    if isinstance(encoded, list):
+        return [_own_encoding(item, payloads) for item in encoded]
+    if isinstance(encoded, dict):
+        return {key: _own_encoding(value, payloads) for key, value in encoded.items()}
+    # Exact str only: a subclass may define its own equality and hashing.
+    if type(encoded) is str and len(encoded) > 256:
+        return payloads.setdefault(encoded, encoded)
+    return encoded
+
+
+def _temporal_snapshot(payloads: dict[str, str], call: TaskCall) -> ArgumentSnapshot:
+    """Encode one task call for the Temporal workflow input, at the call.
+
+    Uses ``_transport_arg``, as dispatch does for a node built by hand. Nothing
+    is decoded and no size limit is applied; dispatch checks sizes. On a
+    failure the arguments encoded before it are kept, so dispatch can apply
+    its checks in the same order as before.
+    """
+    encoded_args: list[Any] = []
+    encoded_kwargs: dict[str, Any] = {}
+    try:
+        for position, arg in enumerate(call.args):
+            encoded = _encode_input(call.func_name, f"positional argument {position}", arg)
+            encoded_args.append(_own_encoding(encoded, payloads))
+        for key, value in call.kwargs.items():
+            encoded = _encode_input(call.func_name, f"keyword argument {key!r}", value)
+            encoded_kwargs[key] = _own_encoding(encoded, payloads)
+    except Exception as exc:
+        return ArgumentSnapshot.failure(
+            TEMPORAL_ARGUMENT_ENCODER, exc, call.dependencies, (encoded_args, encoded_kwargs)
+        )
+    return ArgumentSnapshot(
+        encoder=TEMPORAL_ARGUMENT_ENCODER,
+        status="ok",
+        value=(encoded_args, encoded_kwargs),
+        dependencies=call.dependencies,
+    )
+
+
+def _snapshot_call(graph: TransportGraph, call: TaskCall) -> ArgumentSnapshot:
+    """Run the one argument encoder in force for this task call.
+
+    The encoder is the one in force when the call's workflow was entered. It
+    runs with no workflow active, as encoding at dispatch did: a task called
+    from a reducer or from the encoder runs directly and adds no node.
+    """
+    if graph in _graph_capture:
+        setting = _graph_capture[graph]
+    else:
+        setting = _argument_capture.get()
+    set_active_graph(None)
+    try:
+        if setting is None:
+            return _temporal_snapshot(graph.payloads, call)
+        name, encoder = setting
+        if encoder is None or name is None:
+            return ArgumentSnapshot(encoder=None, status="absent", dependencies=call.dependencies)
+        try:
+            value = encoder(call)
+        except Exception as exc:
+            return ArgumentSnapshot.failure(name, exc, call.dependencies)
+        return ArgumentSnapshot(
+            encoder=name, status="ok", value=value, dependencies=call.dependencies
+        )
+    finally:
+        set_active_graph(graph)
+
+
+def _encode_input(func_name: str, label: str, value: Any) -> Any:
+    """Encode one argument with ``_transport_arg``, naming the task and argument on failure."""
+    try:
+        return _transport_arg(value)
+    except TypeError as exc:
+        raise TypeError(
+            f"Task {func_name!r}: {label} cannot be sent to the task: {exc}"
+        ) from exc
+
+
+def _recorded_inputs(node: TaskNode, snapshot: ArgumentSnapshot) -> tuple[list[Any], dict[str, Any]]:
+    """Return a task call's recorded Temporal encoding, checked as dispatch checks it.
+
+    Sizes are checked here, at dispatch, against the limit in force now. The
+    order matches ``_transport_inputs``: each argument's size in turn, then a
+    recorded encoding failure, then the total.
+
+    Raises:
+        RuntimeError: If the call was recorded by another encoder or with
+            capture switched off, or its dependencies changed after the call.
+        TypeError, ValueError: As ``_transport_inputs`` raises them.
+    """
+    import json
+
+    from marqov.workflows.activity import MAX_RESULT_BYTES
+
+    name = node.func_name
+    if snapshot.encoder != TEMPORAL_ARGUMENT_ENCODER:
+        how = (
+            "with argument capture switched off"
+            if snapshot.encoder is None
+            else f"by the argument encoder {snapshot.encoder!r}"
+        )
+        raise RuntimeError(
+            f"Task {name!r} was recorded {how}, so its arguments were not captured "
+            f"for Temporal when it was called. Build the workflow outside "
+            f"argument_capture() to dispatch it to Temporal."
+        )
+    if list(node.dependencies) != list(snapshot.dependencies):
+        raise RuntimeError(
+            f"Task {name!r}: its dependencies were changed after the task was called."
+        )
+
+    encoded_args, encoded_kwargs = snapshot.value
+
+    def checked(label: str, encoded: Any) -> int:
+        size = _encoded_size(encoded)
+        if size > MAX_RESULT_BYTES:
+            raise ValueError(
+                f"Task {name!r}: {label} encodes to {size} bytes, over the "
+                f"{MAX_RESULT_BYTES}-byte limit (the task result limit, which is "
+                f"Temporal's 2 MB limit for one payload). Pass less, or save the data "
+                f"to storage your task can reach and pass its location."
+            )
+        return size
+
+    # Byte counts follow json.dumps' default separators, as in _transport_inputs.
+    total = 2 + 2 + 2 * max(len(encoded_args) - 1, 0) + 2 * max(len(encoded_kwargs) - 1, 0)
+    for position, encoded in enumerate(encoded_args):
+        total += checked(f"positional argument {position}", encoded)
+    for key, encoded in encoded_kwargs.items():
+        size = checked(f"keyword argument {key!r}", encoded)
+        total += len(json.dumps(key).encode("utf-8")) + 2 + size
+    if snapshot.status != "ok":
+        raise snapshot.error()
+    if total > MAX_RESULT_BYTES:
+        raise ValueError(
+            f"Task {name!r}: its arguments together encode to {total} bytes, "
+            f"over the {MAX_RESULT_BYTES}-byte limit (the task result limit, which is "
+            f"Temporal's 2 MB limit for one payload). Pass less, or save the data "
+            f"to storage your task can reach and pass its location."
+        )
+    # Copies of the containers: a caller cannot change the record through them.
+    return _own_encoding(encoded_args, {}), _own_encoding(encoded_kwargs, {})
+
+
 @overload
 def task(func: F) -> F: ...
 
@@ -301,6 +516,12 @@ def task(
         result = measure(circuit)        # wrong: nothing runs
         result = await measure(circuit)  # right, inside async code
         result = asyncio.run(measure(circuit))  # right, from sync code
+
+    The workflow being built is tracked per context, and a plain
+    ``threading.Thread`` starts with an empty one. A task called from such a
+    thread inside a ``@workflow`` therefore runs immediately, like a call
+    outside a workflow, and is not recorded in the graph. Call tasks from the
+    workflow function's own thread.
 
     Args:
         func: The function to decorate.
@@ -376,14 +597,33 @@ def task(
                 # Inside lattice: create graph node, don't execute
                 dependencies = extract_dependencies(args, kwargs)
 
+                node_id = generate_node_id()
+                node_args = [_serialize_arg(arg) for arg in args]
+                node_kwargs = {k: _serialize_arg(v) for k, v in kwargs.items()}
+                # Record the arguments now, with the one encoder in force, so a
+                # later change to the caller's objects cannot change what this
+                # call's consumer receives. Nothing is decoded here.
+                snapshot = _snapshot_call(
+                    graph,
+                    TaskCall(
+                        node_id=node_id,
+                        func_name=fn.__name__,
+                        args=node_args,
+                        kwargs=node_kwargs,
+                        dependencies=tuple(dependencies),
+                        graph=graph,
+                    ),
+                )
+
                 node = TaskNode(
-                    id=generate_node_id(),
+                    id=node_id,
                     func_name=fn.__name__,
                     func_ref=_func_ref(),
-                    args=list(_serialize_arg(arg) for arg in args),
-                    kwargs={k: _serialize_arg(v) for k, v in kwargs.items()},
+                    args=node_args,
+                    kwargs=node_kwargs,
                     config=config,
                     dependencies=dependencies,
+                    snapshot=snapshot,
                 )
 
                 return TaskProxy(node, graph)
@@ -496,7 +736,12 @@ class WorkflowDispatch:
         # Serialize all nodes as dicts
         nodes: dict[str, dict[str, Any]] = {}
         for node_id, node in self.graph.nodes.items():
-            args, kwargs = _transport_inputs(node.func_name, node.args, node.kwargs)
+            if node.snapshot is not None:
+                # Recorded when the task was called.
+                args, kwargs = _recorded_inputs(node, node.snapshot)
+            else:
+                # A node built by hand: encode it now.
+                args, kwargs = _transport_inputs(node.func_name, node.args, node.kwargs)
             nodes[node_id] = {
                 "node_id": node.id,
                 "func_name": node.func_name,
@@ -714,6 +959,7 @@ def workflow(
         def wrapper(*args: Any, **kwargs: Any) -> WorkflowDispatch:
             # Create new transport graph
             graph = TransportGraph()
+            _graph_capture[graph] = _argument_capture.get()
 
             # Enter workflow context
             previous_graph = get_active_graph()

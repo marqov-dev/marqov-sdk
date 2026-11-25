@@ -98,6 +98,138 @@ class TaskConfig:
         self.timeout_seconds = _temporal_seconds(self.timeout_seconds)
 
 
+TEMPORAL_ARGUMENT_ENCODER = "marqov.temporal/1"
+_MAX_ERROR_MESSAGE = 8192
+_PLAIN_ARGUMENT_TYPES = (str, bytes, int, float, bool, type(None))
+
+
+def _plain_text(make: Any, fallback: str) -> str:
+    """Return ``make()`` as an exact built-in ``str``, truncated, or ``fallback``.
+
+    ``str()`` may return a ``str`` subclass, which could hold a reference to
+    the exception or misbehave when sliced. ``str.__str__`` gives an exact
+    copy without calling the subclass.
+    """
+    try:
+        text = make()
+        if not isinstance(text, str):
+            return fallback
+        return str.__str__(text)[:_MAX_ERROR_MESSAGE]
+    except Exception:
+        return fallback
+
+
+def _plain_arguments(exc: BaseException) -> tuple[Any, ...] | None:
+    """Return an exception's ``args`` if every one is an exact plain value and they are small."""
+    try:
+        args = exc.args
+        if type(args) is not tuple or any(type(arg) not in _PLAIN_ARGUMENT_TYPES for arg in args):
+            return None
+        size = sum(len(arg) if type(arg) in (str, bytes) else 8 for arg in args)
+        return args if size <= _MAX_ERROR_MESSAGE else None
+    except Exception:
+        return None
+
+
+@dataclass(frozen=True)
+class TaskCall:
+    """One task call, as handed to an argument encoder when the call is made.
+
+    Attributes:
+        node_id: ID the call's graph node will have.
+        func_name: Name of the task function.
+        args: Positional arguments, with other tasks' results replaced by
+            ``{"__proxy__": True, "node_id": ...}`` placeholders. Opaque
+            objects are the caller's own.
+        kwargs: Keyword arguments, in the same form.
+        dependencies: IDs of the nodes this call depends on.
+        graph: The graph the call is being recorded in, so an encoder can keep
+            its own state per graph (hold it weakly: a workflow built inside
+            another and discarded should be free to go).
+    """
+
+    node_id: str
+    func_name: str
+    args: list[Any]
+    kwargs: dict[str, Any]
+    dependencies: tuple[str, ...]
+    graph: TransportGraph | None = field(default=None, repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class ArgumentSnapshot:
+    """What an argument encoder recorded for one task call, at the call.
+
+    Attributes:
+        encoder: Name of the encoder that ran, or None if capture was
+            switched off for this call.
+        status: ``"ok"``, ``"failed"`` or ``"absent"`` (capture switched off).
+        value: What the encoder returned. The SDK never decodes it.
+        error_type: For a failure, the exception's type name: a bare name for
+            a built-in exception, ``module.qualname`` otherwise.
+        error_message: For a failure, the exception's message as plain text,
+            truncated to 8192 characters.
+        error_args: For a failure, the exception's ``args`` if they are all
+            plain values (str, bytes, int, float, bool, None) and small, else
+            None.
+        dependencies: The call's dependency IDs when it was made.
+
+    A failure keeps plain values only, never the exception object, so it holds
+    no traceback, frame or caller object.
+    """
+
+    encoder: str | None
+    status: str
+    value: Any = None
+    error_type: str | None = None
+    error_message: str | None = None
+    dependencies: tuple[str, ...] = ()
+    error_args: tuple[Any, ...] | None = None
+
+    @classmethod
+    def failure(
+        cls, encoder: str, exc: BaseException, dependencies: tuple[str, ...], value: Any = None
+    ) -> ArgumentSnapshot:
+        """Record an encoder failure as plain values."""
+        kind = type(exc)
+        module = _plain_text(lambda: kind.__module__, "")
+        qualname = _plain_text(lambda: kind.__qualname__, "Exception")
+        return cls(
+            encoder=encoder,
+            status="failed",
+            value=value,
+            error_type=qualname if module == "builtins" else f"{module}.{qualname}",
+            error_message=_plain_text(lambda: str(exc), "<message unavailable>"),
+            dependencies=dependencies,
+            error_args=_plain_arguments(exc),
+        )
+
+    def error(self) -> Exception:
+        """Build a new exception for a recorded failure.
+
+        A built-in exception type is rebuilt from its recorded plain ``args``
+        when it has them, else from its message. Attributes that are not part
+        of ``args`` (an ``OSError``'s ``filename``, for example) and the
+        original cause chain are not kept. Any other type, or a built-in that
+        cannot be rebuilt, becomes a ``TypeError`` whose message starts with
+        the original type's name.
+        """
+        import builtins
+
+        message = self.error_message or ""
+        name = self.error_type or "Exception"
+        kind = getattr(builtins, name, None) if "." not in name else None
+        if isinstance(kind, type) and issubclass(kind, Exception):
+            for args in (self.error_args, (message,)):
+                if args is None:
+                    continue
+                try:
+                    return kind(*args)
+                except Exception:
+                    continue
+        return TypeError(f"{name}: {message}")
+
+
 @dataclass
 class TaskNode:
     """Represents a task call in the transport graph.
@@ -110,6 +242,16 @@ class TaskNode:
         kwargs: Keyword arguments (may contain serialized proxies).
         config: Task configuration.
         dependencies: IDs of nodes this node depends on.
+        snapshot: What the argument encoder recorded when the task was called,
+            or None for a node built by hand.
+
+    ``args`` and ``kwargs`` hold the caller's own objects (the capture
+    contract). A ``@task`` call also records ``snapshot``, and a consumer that
+    promises call-time values reads that: a change to an argument object after
+    the call, an edit to ``args`` or ``kwargs``, or
+    ``dataclasses.replace(node, args=...)`` does not change the snapshot. To
+    have a node's ``args`` and ``kwargs`` encoded at dispatch instead, set its
+    ``snapshot`` to None. ``snapshot`` does not take part in equality.
     """
 
     id: str
@@ -119,6 +261,7 @@ class TaskNode:
     kwargs: dict[str, Any]
     config: TaskConfig
     dependencies: list[str] = field(default_factory=list)
+    snapshot: ArgumentSnapshot | None = field(default=None, repr=False, compare=False)
 
 
 class TaskProxy:
@@ -169,6 +312,9 @@ class TransportGraph:
         self.nodes: dict[str, TaskNode] = {}
         self.edges: list[tuple[str, str]] = []  # (from_id, to_id)
         self.output_nodes: list[str] = []
+        # Long encoded payload strings, so equal ones are held once (see
+        # decorators._own_encoding).
+        self.payloads: dict[str, str] = {}
 
     def add_node(self, node: TaskNode) -> None:
         """Add a node to the graph.
