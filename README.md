@@ -118,6 +118,9 @@ pip install "marqov[qutip]"
 # PennyLane interop and the Lightning CPU executor (lightning.qubit)
 pip install "marqov[pennylane]"
 
+# Clifft exact near-Clifford simulator (ClifftExecutor; also in [all])
+pip install "marqov[clifft]"
+
 # Combine selected frameworks
 pip install "marqov[qutip,qiskit]"
 
@@ -239,6 +242,14 @@ result = await executor.execute(circuit, shots=1000)
 ---
 
 For QiliSim sampling seeds and repeatability limits, see [QiliSDK seed support](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/qilisdk.md).
+
+`ClifftExecutor` (Unitary Foundation's exact near-Clifford simulator, local) is
+opt-in and used directly rather than through a provider name: install
+`marqov[clifft]` or `marqov[all]` (pinned `clifft==0.14.0`). It suits wide
+circuits whose non-Clifford gates keep the active state narrow, and is slower
+than a statevector simulator on small circuits or when the active state grows
+close to the full width. See the
+[Clifft guide](https://github.com/marqov-dev/marqov-sdk/blob/main/docs/clifft.md).
 
 ## Circuit Interop
 

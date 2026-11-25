@@ -14,6 +14,7 @@ Available executors:
 - RigettiExecutor: Rigetti QCS QPUs and the local QVM (via pyquil)
 - QiliSDKExecutor: Qilimanjaro qilisdk local simulators (QiliSim/QutipBackend)
 - LightningExecutor: Xanadu PennyLane Lightning CPU simulators (lightning.qubit/kokkos)
+- ClifftExecutor: Clifft exact near-Clifford simulator (opt-in, marqov[clifft])
 - AliceBobExecutor: Alice & Bob local logical-qubit emulator (isolated install)
 
 Example:
@@ -29,6 +30,7 @@ from marqov.executors.alice_bob import AliceBobExecutor, AliceBobExecutorConfig
 from marqov.executors.azure import AzureQuantumExecutor, AzureQuantumExecutorConfig
 from marqov.executors.base import BaseExecutor, DeviceStatus, ExecutionResult
 from marqov.executors.braket import BraketExecutor, BraketExecutorConfig
+from marqov.executors.clifft import ClifftExecutor, ClifftExecutorConfig
 from marqov.executors.cudaq import CudaqExecutor, CudaqExecutorConfig
 from marqov.executors.cunqa import CUNQAExecutor, CUNQAExecutorConfig
 from marqov.executors.factory import ExecutorFactory
@@ -57,6 +59,8 @@ __all__ = [
     "BraketExecutor",
     "BraketExecutorConfig",
     "CUNQAExecutor",
+    "ClifftExecutor",
+    "ClifftExecutorConfig",
     "CUNQAExecutorConfig",
     "CudaqExecutor",
     "CudaqExecutorConfig",

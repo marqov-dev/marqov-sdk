@@ -177,6 +177,21 @@ class TestLightningBitOrder:
         assert result.counts == {QUBIT0_EXCITED: 100}
 
 
+class TestClifftBitOrder:
+    """ClifftExecutor against a real Clifft run (no mocks)."""
+
+    def test_execute_places_qubit0_leftmost_and_conserves_shots(self) -> None:
+        """X(0) on a 2-qubit register must normalize to '10', summing to shots."""
+        pytest.importorskip("clifft")
+        from marqov.circuits import Circuit
+        from marqov.executors.clifft import ClifftExecutor
+
+        circuit = Circuit().x(0).cz(0, 1)
+        result = asyncio.run(ClifftExecutor().execute(circuit, shots=100, seed=0))
+
+        assert result.counts == {QUBIT0_EXCITED: 100}
+
+
 class TestBraketShotConservation:
     """BraketExecutor's probability fallback, used when a QPU (e.g. IonQ
     Forte-1) returns measurementProbabilities instead of raw counts."""

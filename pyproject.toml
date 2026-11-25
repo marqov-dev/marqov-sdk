@@ -63,6 +63,9 @@ dev = [
     "qiskit-aer>=0.14.0",
     # Test-only: tests/test_watch.py renders the `marqov watch` Rich table.
     "rich>=13.0.0,<16",
+    # tests/test_clifft_executor.py runs the ClifftExecutor for real; [all]
+    # carries it too, but dev must not depend on [all]. Same pin as the extra.
+    "clifft==0.14.0 ; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')) or (sys_platform == 'win32' and platform_machine == 'AMD64')",
 ]
 qutip = [
     "qutip>=5.3.0,<6.0.0",
@@ -104,6 +107,14 @@ lightning-kokkos = [
     "pennylane>=0.45.0",
     "pennylane-lightning>=0.45.0",
     "pennylane-lightning-kokkos>=0.45.0 ; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64'))",
+]
+clifft = [
+    # ClifftExecutor (exact near-Clifford simulation). Pinned exactly: Clifft's
+    # API and seeded sampling change between 0.x releases, and the executor is
+    # tested against 0.14.0 only. The marker limits the install to the platforms
+    # with wheels (macOS arm64, Linux x86_64/aarch64, Windows x86_64) so others
+    # never build the C++ sdist. Repeated in [all] and dev.
+    "clifft==0.14.0 ; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')) or (sys_platform == 'win32' and platform_machine == 'AMD64')",
 ]
 pytket = [
     "pytket>=2.0.0",
@@ -157,6 +168,7 @@ all = [
     "pytket-qiskit>=0.50.0",
     "pyquil>=4.0.0",
     "requests>=2.31.0",
+    "clifft==0.14.0 ; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')) or (sys_platform == 'win32' and platform_machine == 'AMD64')",
 ]
 
 [project.urls]
@@ -202,6 +214,7 @@ module = [
     "azure.quantum.*",
     "boto3",
     "braket.*",
+    "clifft",
     "cloudpickle",
     "cunqa.*",
     "pennylane",
@@ -230,6 +243,7 @@ module = [
     "marqov.executors._params",
     "marqov.executors.alice_bob",
     "marqov.executors.base",
+    "marqov.executors.clifft",
     "marqov.executors.local",
     "marqov.executors.qb_remote",
     "marqov.executors.qilisdk",
